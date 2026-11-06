@@ -43,9 +43,10 @@ grep -q "UDP 500 and UDP 4500" "$work/enable.txt"
 ghostlink-server ipsec status | tee "$work/status.txt"
 grep -q "running: true" "$work/status.txt"
 docker inspect ghostlink-ipsec --format 'readonly={{.HostConfig.ReadonlyRootfs}} drop={{.HostConfig.CapDrop}} add={{.HostConfig.CapAdd}} user={{.Config.User}} net={{.HostConfig.NetworkMode}} nnp={{.HostConfig.SecurityOpt}}' | tee "$work/container.txt"
-grep -Eq '^readonly=true drop=\[ALL\] add=\[NET_ADMIN NET_RAW NET_BIND_SERVICE\] user=0:[0-9]+ net=host nnp=\[no-new-privileges\]$' "$work/container.txt" ||
-    grep -Eq '^readonly=true drop=\[ALL\] add=\[CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE\] user=0:[0-9]+ net=host nnp=\[no-new-privileges\]$' "$work/container.txt" ||
+grep -Eq '^readonly=true drop=\[ALL\] add=\[[A-Z_ ]+\] user=0:[0-9]+ net=host nnp=\[no-new-privileges\]$' "$work/container.txt" ||
     fail "IPsec container is not hardened as expected"
+added=$(sed -n 's/.* add=\[\([^]]*\)\].*/\1/p' "$work/container.txt" | tr ' ' '\n' | sed 's/^CAP_//' | sort | tr '\n' ' ')
+test "$added" = "NET_ADMIN NET_BIND_SERVICE NET_RAW " || fail "unexpected capabilities: $added"
 test "$(stat -c %a "$state/ipsec")" = 770
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 && test -f /etc/sysctl.d/90-ghostlink-ipsec.conf
 
