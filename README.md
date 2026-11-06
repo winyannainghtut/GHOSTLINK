@@ -1,5 +1,7 @@
 # MyVPN
 
+AI development handover: [agent.md](agent.md). It covers the current implementation, build/test commands, verified results, limitations and next steps.
+
 A personal desktop VPN client with an Outline-style interface, standard Outline access keys, a local privileged service, a Rust CLI and an optional restricted MCP bridge.
 
 **Current status:** Windows development/release binaries build; key management, real local IPC, authorization and encrypted Shadowsocks proxy traffic have been tested. Full-device TUN routing, DNS/IPv6 leak behavior and installer execution still need an administrator-authorized Windows test. Linux runtime and mobile apps are not complete. See [the verification report](docs/development/verification.md).
