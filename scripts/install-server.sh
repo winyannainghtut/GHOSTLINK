@@ -31,6 +31,8 @@ Options:
                     (a firewall that is off is never turned on)
   --no-docker       do not install Docker; stop if it is missing
   --reinstall       install even if this version is already installed
+  --add-swap        on a server with under 1 GB of memory and swap, add a 1 GB swap file
+                    (/swapfile, kept across reboots) so installing is not killed
   -h, --help        show this help
 EOF
 }
@@ -43,7 +45,7 @@ cleanup() { [ -z "$work" ] || rm -rf -- "$work"; }
 trap cleanup EXIT
 
 main() {
-    local version="" package="" hostname="" ipsec=0 open_firewall=0 docker_install=1 reinstall=0
+    local version="" package="" hostname="" ipsec=0 open_firewall=0 docker_install=1 reinstall=0 add_swap=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
@@ -56,6 +58,7 @@ main() {
             --open-firewall) open_firewall=1; shift ;;
             --no-docker) docker_install=0; shift ;;
             --reinstall) reinstall=1; shift ;;
+            --add-swap) add_swap=1; shift ;;
             -h | --help) usage; exit 0 ;;
             *) die "unknown option $1 (see --help)" ;;
         esac
@@ -106,6 +109,17 @@ main() {
         pkg_install "$family" "${missing[@]}"
     fi
 
+    # --- memory: Docker, the server and apt together need about 1 GB, counting swap ---
+    local memory_mb
+    memory_mb=$(awk '/^(MemTotal|SwapTotal):/ { kb += $2 } END { print int(kb / 1024) }' /proc/meminfo)
+    if [ "$memory_mb" -lt 900 ]; then
+        if [ "$add_swap" = 1 ]; then
+            add_swap_file
+        else
+            die "this server has only $memory_mb MB of memory and swap, so the kernel may kill the installation (the output then says 'Killed'). Run this again with --add-swap to add a 1 GB swap file, or add swap yourself."
+        fi
+    fi
+
     # --- Docker ---
     if [ "$(command -v docker 2>/dev/null)" = /snap/bin/docker ]; then
         die "Docker from the Snap store cannot use /var/lib/ghostlink-server. Remove it (snap remove docker) and run this again; the distribution's Docker will be installed"
@@ -144,6 +158,11 @@ main() {
     if command -v ghostlink-server >/dev/null 2>&1; then
         installed=$(ghostlink-server version 2>/dev/null || true)
     fi
+    # Finish an installation that was interrupted (for example killed for lack of memory).
+    if [ "$family" = deb ] && dpkg-query -W -f='${Status}' ghostlink-server 2>/dev/null | grep -qv 'install ok installed'; then
+        say "Finishing an interrupted installation"
+        dpkg --configure -a
+    fi
 
     # --- install or upgrade ---
     # The package's post-install loads the bundled images, creates or upgrades the server and
@@ -166,9 +185,9 @@ main() {
             package="$work/$file"
         fi
         if [ "$family" = deb ]; then
-            apt-get install -y -o Dpkg::Options::=--force-confold "$package"
+            apt-get install -y -o Dpkg::Options::=--force-confold "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
         else
-            pkg_manager install -y "$package"
+            pkg_manager install -y "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
         fi
         command -v ghostlink-server >/dev/null 2>&1 || die "the package did not install ghostlink-server"
     fi
@@ -223,6 +242,18 @@ Next steps:
   - All commands:       sudo ghostlink-server help
   - Guide: https://github.com/$REPO/blob/main/docs/deployment/ghostlink-server.md
 EOF
+}
+
+add_swap_file() {
+    [ ! -e /swapfile ] || die "/swapfile already exists but is not enough; turn it on (swapon /swapfile) or make it larger, then run this again"
+    say "Adding a 1 GB swap file (/swapfile)"
+    if ! fallocate -l 1G /swapfile 2>/dev/null; then
+        dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    fi
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 }
 
 pkg_manager() {
