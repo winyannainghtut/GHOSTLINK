@@ -31,6 +31,16 @@ foreach ($file in $moduleFiles) {
     Copy-Item -LiteralPath $file.FullName -Destination $target
 }
 if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory 'internal\awg\endpoint.go'))) { throw 'internal packages are missing from the source bundle' }
+# The source of the embedded dashboard (internal/server/dashboard is its build): the web UI in
+# React/TypeScript, without installed packages (package-lock.json pins them).
+$uiRoot = [IO.Path]::GetFullPath((Join-Path $repository 'ui'))
+$uiFiles = Get-ChildItem -LiteralPath $uiRoot -Recurse -File | Where-Object { $_.FullName.Substring($uiRoot.Length + 1) -notmatch '^node_modules[\\/]' }
+foreach ($file in $uiFiles) {
+    $target = Join-Path (Join-Path $sourceDirectory 'web-ui') $file.FullName.Substring($uiRoot.Length + 1)
+    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+    Copy-Item -LiteralPath $file.FullName -Destination $target
+}
+if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory 'web-ui\package-lock.json'))) { throw 'the web UI source is missing from the source bundle' }
 Copy-Item -LiteralPath (Join-Path $repository 'LICENSES\GPL-3.0.txt') -Destination (Join-Path $sourceDirectory 'COPYING')
 Copy-Item -LiteralPath (Join-Path $repository 'NOTICE.md'),(Join-Path $repository 'LICENSES\sing-box.txt'),(Join-Path $repository 'LICENSES\Wintun-0.14.1.txt') -Destination $sourceDirectory
 Push-Location (Join-Path $repository 'core\outline-worker')
@@ -73,6 +83,12 @@ IPsec agent (Linux x64/arm64):
   their source is the separate Ghostlink-$Version-ipsec-component-source-<arch>.tar.gz.
 Mesh agent (Linux x64/arm64; the ghostlink-mesh .deb/.rpm):
   go build -mod=vendor -trimpath -buildvcs=false -ldflags "-s -w" -o ghostlink-mesh ./cmd/ghostlink-mesh
+Server dashboard: the web pages in internal/server/dashboard (embedded in ghostlink-server) are
+built from web-ui/ (React, TypeScript, Tailwind CSS) with Node.js 22:
+  cd web-ui
+  npm ci --ignore-scripts
+  npx tsc --noEmit -p tsconfig.json
+  npx vite build --config vite.dashboard.config.ts --outDir ../../internal/server/dashboard
 
 Set those variables using your shell's environment syntax. The vendor directory contains
 the actual engine/dependency source used by this worker and required embedded resources.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect actual dependency licenses from Cargo metadata and pinned Go modules."""
+"""Collect actual dependency licenses from Cargo metadata, pinned Go modules and the web UI's bundled npm packages."""
 import os
 import json
 from pathlib import Path
@@ -54,8 +54,23 @@ def main():
         key = "go-" + name.replace("/", "_") + "-" + version
         notices = copy_notices(Path(directory), DEST / key, recursive=True)
         entries[key] = {"ecosystem": "go", "name": name, "version": version, "notices": notices}
+    # The web UI (ui/): npm packages whose code or files are in the built dashboard. That is the
+    # runtime dependencies (types-only packages ship nothing), plus two build tools whose own code
+    # is copied into the output: Tailwind's base styles and the bundler's runtime helpers.
+    ui = ROOT / "ui"
+    lock = json.loads((ui / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+    bundled = {path.removeprefix("node_modules/") for path, meta in lock.items() if path.startswith("node_modules/") and not meta.get("dev")}
+    bundled = {name for name in bundled if not name.startswith("@types/") and name != "csstype"} | {"tailwindcss", "rolldown"}
+    for name in sorted(bundled):
+        meta = lock["node_modules/" + name]
+        directory = ui / "node_modules" / name
+        if not directory.is_dir():
+            raise SystemExit("ui/node_modules is missing; run: cd ui && npm ci --ignore-scripts")
+        key = "npm-" + name.replace("@", "").replace("/", "_") + "-" + meta["version"]
+        notices = copy_notices(directory, DEST / key)
+        entries[key] = {"ecosystem": "npm", "name": name, "version": meta["version"], "license": meta.get("license"), "notices": notices}
     (ROOT / "LICENSES" / "dependency-inventory.json").write_text(json.dumps(list(entries.values()), indent=2) + "\n", encoding="utf-8")
-    print(f"Collected notices for {len(entries)} locked Rust packages and used Go modules")
+    print(f"Collected notices for {len(entries)} locked Rust packages, used Go modules and bundled npm packages")
 
 
 if __name__ == "__main__":
