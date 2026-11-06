@@ -1,0 +1,57 @@
+# Ghostlink client package (.deb and .rpm), built by scripts/build-linux.sh with nfpm.
+# Template: scripts/build-linux.sh fills in @VERSION@, @GOARCH@ (amd64|arm64), @STAGE@ (staged
+# binaries and notices) and @PKG@ (package-only files), because nfpm does not expand paths.
+name: ghostlink
+arch: @GOARCH@
+platform: linux
+version: @VERSION@
+version_schema: semver
+release: "1"
+section: net
+priority: optional
+maintainer: Ghostlink contributors <ghostlink@users.noreply.github.com>
+vendor: Ghostlink
+homepage: https://github.com/winyannainghtut/GHOSTLINK
+license: MIT AND GPL-3.0-or-later
+description: |-
+  Personal VPN client for Outline (Shadowsocks), VLESS-REALITY, WireGuard and AmneziaWG.
+  Installs the ghostlink CLI, the ghostlinkd service, the ghostlink-mcp bridge for AI
+  agents and the ghostlink-tunnel worker.
+
+contents:
+  - src: @STAGE@/bin/ghostlink
+    dst: /usr/bin/ghostlink
+    file_info: {mode: 0755}
+  - src: @STAGE@/bin/ghostlinkd
+    dst: /usr/bin/ghostlinkd
+    file_info: {mode: 0755}
+  - src: @STAGE@/bin/ghostlink-mcp
+    dst: /usr/bin/ghostlink-mcp
+    file_info: {mode: 0755}
+  - src: @STAGE@/lib/ghostlink/ghostlink-tunnel
+    dst: /usr/lib/ghostlink/ghostlink-tunnel
+    file_info: {mode: 0755}
+  - src: @PKG@/ghostlinkd.service
+    dst: /usr/lib/systemd/system/ghostlinkd.service
+    file_info: {mode: 0644}
+  - src: @PKG@/ghostlinkd.env
+    dst: /etc/ghostlink/ghostlinkd.env
+    type: config|noreplace
+    file_info: {mode: 0644}
+  - src: @STAGE@/licenses/
+    dst: /usr/share/doc/ghostlink/
+    type: tree
+
+scripts:
+  postinstall: packages/linux/scripts/client-postinstall.sh
+  preremove: packages/linux/scripts/client-preremove.sh
+  postremove: packages/linux/scripts/client-postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libssl3 | libssl3t64
+  rpm:
+    depends:
+      - openssl-libs >= 3.0

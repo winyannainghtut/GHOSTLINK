@@ -5,10 +5,10 @@
 | Job | Runner | Files |
 |---|---|---|
 | Windows x64 | `windows-2022` | `Ghostlink-<v>-windows-x64.msi`, `Ghostlink-<v>-windows-x64-portable.zip`, `Ghostlink-<v>-worker-corresponding-source.zip` |
-| Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz` |
-| Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz` |
+| Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz`, `ghostlink_<v>-1_amd64.deb`, `ghostlink-<v>-1.x86_64.rpm` |
+| Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz`, `ghostlink_<v>-1_arm64.deb`, `ghostlink-<v>-1.aarch64.rpm` |
 
-The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the tunnel worker, the systemd unit, notices and `INSTALL.txt`). Building on Ubuntu 22.04 links against glibc 2.35 and OpenSSL 3, so the binaries also run on newer distributions. Both Linux archives come from the reusable `.github/workflows/linux-package.yml`. The arm64 job never gates the draft release: `publish` waits only for Windows and Linux x64, and `attach-linux-arm64` adds the arm64 archive and its checksum line when it finishes. If hosted arm64 runners are unavailable to the repository, that job stays queued; cancel it and the draft is unaffected.
+Each Linux job installs pinned nfpm 2.48.0, then smoke-tests the `.deb` as a real systemd service (install, `ghostlink status`/`doctor`, purge) and inspects the `.rpm` before uploading. The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the tunnel worker, the systemd unit, notices and `INSTALL.txt`). Building on Ubuntu 22.04 links against glibc 2.35 and OpenSSL 3, so the binaries also run on newer distributions. Both Linux archives come from the reusable `.github/workflows/linux-package.yml`. The arm64 job never gates the draft release: `publish` waits only for Windows and Linux x64, and `attach-linux-arm64` adds the arm64 archive and its checksum line when it finishes. If hosted arm64 runners are unavailable to the repository, that job stays queued; cancel it and the draft is unaffected.
 
 ## Cutting a release
 

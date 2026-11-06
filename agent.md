@@ -639,14 +639,14 @@ Administrator installation is a human step on an authorized test machine. No UAC
 | Job | Runner | Output |
 |---|---|---|
 | Windows x64 | `windows-2022` | `Ghostlink-<v>-windows-x64.msi`, `-portable.zip`, `Ghostlink-<v>-worker-corresponding-source.zip` |
-| Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz` (headless; `scripts/build-linux.sh`) |
-| Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz` |
+| Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz`, `ghostlink_<v>-1_amd64.deb`, `ghostlink-<v>-1.x86_64.rpm` (headless; `scripts/build-linux.sh` + nfpm 2.48.0; the `.deb` is smoke-tested as a systemd service) |
+| Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz`, `ghostlink_<v>-1_arm64.deb`, `ghostlink-<v>-1.aarch64.rpm` |
 
 Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, the UI version label, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
 Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md`. A maintainer must review and publish the draft. A manual `workflow_dispatch` run only produces workflow artifacts. Neither the workflow nor any agent has pushed a tag or created a release yet.
 
-Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), DEB/RPM packages (Linux runtime unverified), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
+Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
 
 ### Artifacts actually produced
 
@@ -726,7 +726,7 @@ The workflow has not been observed on hosted runners. It does not certify privil
 - Unit has network capability bounding, restrictive state paths/umask and filesystem hardening. Verify `/dev/net/tun` and that the unit's sandbox allows required network operations on the actual target.
 - **Full tunnel is disabled by default on Linux.** Preserve the SSH administrator route and explicitly authorize route changes before an override adds `--allow-full-tunnel`.
 - Client daemon service is distinct from the unprivileged server proxy service; do not use the wrong unit on a VPS.
-- Verify resolver integration per distro, IPC ownership, routes/IPv6 before/during/after, crashes and service lifecycle before DEB/RPM delivery.
+- Verify resolver integration per distro, IPC ownership, routes/IPv6 before/during/after, crashes and service lifecycle; the `.deb`/`.rpm` packages exist since v0.2.1, but a full VPN session on a real host is still unverified.
 - Resolve Linux GUI advisories and review root-private credential storage/vault policy. Current Linux Go artifact is a cross-build only.
 
 ### Android / iOS continuation

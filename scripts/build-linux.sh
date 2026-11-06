@@ -47,11 +47,57 @@ Install as root:
 
 Then, as YOUR_USER:  ghostlink status
 
-Outline full-tunnel routing is disabled by default on Linux. Protect your SSH route first,
-then add --allow-full-tunnel through a systemd override (see docs/development/linux.md).
+Full-tunnel routing is disabled by default on Linux. After protecting your SSH access, add
+GHOSTLINK_FLAGS=--allow-full-tunnel to /etc/ghostlink/ghostlinkd.env and restart ghostlinkd.
+
+Prefer a package? The release also has ghostlink_${version}-1_${goarch}.deb and an .rpm
+that install to /usr/bin and start the service for the user who ran sudo.
 
 The tunnel worker is GPL-3.0-or-later. Its corresponding source is published with this
 release as Ghostlink-$version-worker-corresponding-source.zip. Notices are in licenses/.
 EOF
 tar -C "$out" --owner=0 --group=0 -czf "$out/$name.tar.gz" "$name"
 echo "$out/$name.tar.gz"
+
+# .deb/.rpm: same binaries in standard locations (/usr/bin, /usr/lib/ghostlink).
+pkg="$out/package-files"
+rm -rf -- "$pkg"
+mkdir -p "$pkg"
+sed -e 's#/usr/local/bin/#/usr/bin/#' -e 's#/usr/local/lib/ghostlink/#/usr/lib/ghostlink/#' \
+  packages/linux/ghostlinkd.service > "$pkg/ghostlinkd.service"
+cat > "$pkg/ghostlinkd.env" <<'EOF'
+# Ghostlink service settings, read by ghostlinkd.service. Restart after editing:
+#   sudo systemctl restart ghostlinkd
+# GHOSTLINK_OWNER_UID: the one local user (numeric ID, see `id -u`) allowed to control Ghostlink.
+# The installer fills it in from sudo.
+GHOSTLINK_OWNER_UID=
+# GHOSTLINK_FLAGS: extra service flags. Full-tunnel routing is off on Linux until you add
+# --allow-full-tunnel here, after making sure your SSH access is protected.
+GHOSTLINK_FLAGS=
+EOF
+cat > "$stage/licenses/README.md" <<EOF
+# Ghostlink $version for Linux
+
+- \`ghostlink\`: CLI (run as your user). Try \`ghostlink status\`, \`ghostlink key add --name NAME --file KEY.txt\`,
+  \`ghostlink connect\`.
+- \`ghostlinkd\`: the service (\`systemctl status ghostlinkd\`). Settings: \`/etc/ghostlink/ghostlinkd.env\`.
+- \`ghostlink-mcp\`: optional bridge for AI agents.
+- \`/usr/lib/ghostlink/ghostlink-tunnel\`: the tunnel worker (GPL-3.0-or-later; source is published with each release).
+
+Full-tunnel routing is off until you add \`GHOSTLINK_FLAGS=--allow-full-tunnel\` to the settings file and
+restart the service. Protect your SSH access first if this machine is administered remotely.
+
+Removing the package stops the service. \`apt purge ghostlink\` also deletes saved servers and keys.
+Project: https://github.com/winyannainghtut/GHOSTLINK
+EOF
+# Package files must not inherit group-writable modes from the checkout.
+chmod -R u=rwX,go=rX "$stage/licenses" "$pkg"
+if command -v nfpm >/dev/null 2>&1; then
+  sed -e "s|@VERSION@|$version|" -e "s|@GOARCH@|$goarch|" -e "s|@STAGE@|$stage|g" -e "s|@PKG@|$pkg|g" \
+    packages/linux/ghostlink.nfpm.yaml > "$pkg/nfpm.yaml"
+  for packager in deb rpm; do
+    nfpm package --config "$pkg/nfpm.yaml" --packager "$packager" --target "$out/"
+  done
+else
+  echo "nfpm not found: skipped .deb/.rpm (install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0)" >&2
+fi

@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-06
+
+### Added
+
+- **Linux `.deb` and `.rpm` packages** (x64 and arm64), alongside the `.tar.gz`:
+  - they install to `/usr/bin` and `/usr/lib/ghostlink`, with the systemd unit in `/usr/lib/systemd/system`;
+  - the installer fills in `GHOSTLINK_OWNER_UID` from the user who ran `sudo` and starts the service;
+  - upgrades keep your settings;
+  - removing the package stops the service, and `apt purge` also deletes saved servers and keys.
+- **`GHOSTLINK_FLAGS`** in `/etc/ghostlink/ghostlinkd.env` passes extra service flags. Set `GHOSTLINK_FLAGS=--allow-full-tunnel` to enable full-tunnel routing on Linux without a systemd override.
+- **Release smoke test:** CI installs the `.deb` on Ubuntu (x64 and arm64), checks the service runs and answers `ghostlink status`/`doctor`, then purges it. It also inspects the `.rpm`.
+
 ### Fixed
 
 - **Linux:** the tunnel worker now ignores `SIGPIPE`. Previously, if the service's end of its status pipe had closed (for example after a service crash), the worker's next status write could kill it before its graceful shutdown finished, which could leave routes behind.
@@ -61,6 +73,7 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/winyannainghtut/GHOSTLINK/releases/tag/v0.1.0

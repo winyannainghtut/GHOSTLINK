@@ -2,6 +2,15 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.2.1 Linux packages (2026-11-06)
+
+| Check | Result actually observed |
+|---|---|
+| Linux SIGPIPE fix in CI | The full CI run after the fix (`596633b`) passed on Ubuntu 24.04 and Windows 2022, including all real-engine protocol and split-tunnel tests |
+| Package spec (local) | nfpm 2.48.0 built a `.deb` and an `.rpm` from the template with placeholder binaries. The `.deb` control has `Depends: libc6 (>= 2.35), libssl3 \| libssl3t64`, a conffile for `/etc/ghostlink/ghostlinkd.env`, postinst/prerm/postrm, root-owned `0755` binaries in `/usr/bin` and `/usr/lib/ghostlink`, and the unit with `/usr` paths and `$GHOSTLINK_FLAGS` |
+| Checksum refresh for arm64 files | The idempotent update was exercised locally twice: a stale line was replaced, with no duplicates |
+| Pending (release CI) | `.deb` install as a real systemd service on Ubuntu 22.04 x64/arm64 (`ghostlink status` and `doctor` as the installing user, then purge), and `rpm -qip/-qlp` checks |
+
 ## First hosted CI run of v0.2.0 (2026-11-06)
 
 - **What failed:** on GitHub's Ubuntu runner, two new real-engine tests failed; the Windows job was cancelled by the matrix.

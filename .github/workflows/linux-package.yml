@@ -44,12 +44,45 @@ jobs:
           echo "version=$(node scripts/release-version.mjs "$@")" >> "$GITHUB_OUTPUT"
       - name: Unit tests
         run: cargo test --locked --workspace
-      - name: Archive
+      - name: Install nfpm (pinned)
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Archive, .deb and .rpm
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: bash scripts/build-linux.sh "$VERSION"
+      - name: Smoke-test the .deb as a real systemd service
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -eu
+          deb=$(ls artifacts/linux-$ARCH/ghostlink_*.deb)
+          sudo apt-get install -y "./$deb"
+          grep -q "^GHOSTLINK_OWNER_UID=$(id -u)$" /etc/ghostlink/ghostlinkd.env
+          for i in $(seq 1 20); do systemctl is-active --quiet ghostlinkd && break; sleep 0.5; done
+          systemctl is-active ghostlinkd
+          ghostlink --json status | tee status.json
+          grep -q '"status":"disconnected"' status.json
+          ghostlink --json doctor | tee doctor.json
+          grep -q '"outline_engine_available":true' doctor.json
+          sudo apt-get purge -y ghostlink
+          if systemctl is-active --quiet ghostlinkd; then echo "service still running after purge" >&2; exit 1; fi
+          test ! -e /usr/bin/ghostlinkd && test ! -e /var/lib/ghostlink
+      - name: Inspect the .rpm
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          sudo apt-get install -y rpm
+          rpm -qip artifacts/linux-$ARCH/ghostlink-*.rpm
+          rpm -qlp artifacts/linux-$ARCH/ghostlink-*.rpm | tee files.txt
+          grep -qx /usr/bin/ghostlinkd files.txt && grep -qx /usr/lib/ghostlink/ghostlink-tunnel files.txt
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-*.rpm | grep -q ghostlinkd
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ inputs.arch }}
           if-no-files-found: error
-          path: artifacts/linux-${{ inputs.arch }}/*.tar.gz
+          path: |
+            artifacts/linux-${{ inputs.arch }}/*.tar.gz
+            artifacts/linux-${{ inputs.arch }}/*.deb
+            artifacts/linux-${{ inputs.arch }}/*.rpm
