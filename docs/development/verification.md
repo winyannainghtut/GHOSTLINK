@@ -2,6 +2,24 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.3.0 Ghostlink server and server management (2026-11-06)
+
+Observed on the Windows development host (unelevated, loopback only) unless noted. Release CI results for the server packages are recorded when the release runs.
+
+| Check | Result actually observed |
+|---|---|
+| Server, real traffic (Go `internal/server`) | Keys issued through the API were turned into **unmodified** sing-box clients, using only the key text, for all four protocols: AmneziaWG (our endpoint), WireGuard (sing-box native client), VLESS-REALITY (local TLS 1.3 handshake target) and Shadowsocks. Each carried HTTP through the server. In each, a per-user blocked site, a global blocked site (`*.Global-Blocked.test`, normalized and matched for `www.` by Host sniffing) and a loopback service on another port were refused. A second user was unaffected by the first user's rule; an exempt user skipped global rules but not the internal block. Usage was counted; a 1-byte limit cut the user off and resetting restored access; disabling a user and deleting a key cut them off; state persisted |
+| Server API | Unknown fields, missing or control-character names, bad IPs, ports and sites, unknown protocols, missing IDs, bad hostnames and IP REALITY sites were refused with the right status. A port clash was refused and changed nothing; a disabled protocol could not issue keys. Only the exact secret path worked, and 20 wrong guesses gave `429`. The real listener served TLS 1.3 only, with a certificate matching the printed pin. `init` creates once, keeps the secret, updates the hostname and fails without an address |
+| Keys format | Amnezia `vpn://` keys decode in the exporter format (length prefix, zlib, `last_config` with the `.conf` and AWG parameters, no `userName`/`password`). AWG 2.0 parameters drawn 200 times were valid (S1+56≠S2, disjoint header ranges) |
+| Daemon/CLI with a **real** `ghostlink-server` (Node suite) | `server add` with the printed key, no overwrite without `--replace`, and list output with neither the secret nor the pin (nor in Windows state). Then: user with a 5 GB limit; an AmneziaWG key created with `--import` became a working profile via the Rust parser; VLESS and WireGuard keys written to new private files (`.conf` imported as `wireguard`), with no overwrite; a printed `ss://` key imported. `keys list` hid key material unless `--show-keys`. Global and per-user rules, usage, disabling WireGuard (key creation then refused) and disabling a user worked. A wrong pin gave `server_identity_mismatch`; `http`, missing-pin and extra-field keys gave `invalid_request` without echoing the secret. Agent tokens were refused for all server actions; the audit log never contained the secret; a stopped server gave `server_unreachable` |
+| Pinned client (Rust unit) | With a wrong pin, the TLS server received **zero** application bytes (the secret path was never sent). Outline servers were recognized and refused as unsupported; server error text came back without the key; operations map to fixed paths, with path-traversal IDs and unknown protocols refused |
+| Desktop GUI | Debug app against an isolated dev daemon and a real local server, driven over the WebView2 DevTools protocol. Inspected: server list; server page (users with status chips, limit meter, rules summary, ports); keys dialog; per-user rules; server settings; creating a WireGuard key with "Also use it on this device", which then appeared under My servers as "Alice @ Home lab" with its badge; dark and light themes |
+| AmneziaWG close race (Linux CI of v0.2.1, `596633b`→`5ea1347`) | Hosted CI crashed an AWG 2.0 client worker during graceful stop: nil dereference in sing-box's stack `Write`, called from amneziawg-go's receive goroutine after the TUN closed. Fixed in the TUN adapter; a regression test passes with the fix and panics ("write after close") without it |
+| Corresponding source | The v0.2.1 zip was rebuilt from the `v0.2.1` tag with the fixed script: it built every command on Windows inside the script and `ghostlink-tunnel` for linux/amd64 from the unzipped copy, reporting `0.2.1`, with 0 backslash paths. It replaced the incomplete zip in the v0.2.1 draft, and `SHA256SUMS.txt` was refreshed |
+| Static checks | Rust fmt and clippy (`-D warnings`) clean; 33 Rust unit tests (29 engine, 4 contracts) and 19 Node process tests passed; Go vet clean; Go tests passed; `govulncheck` **No vulnerabilities found**; server cross-builds for linux/amd64 and arm64 |
+| Package spec (local) | nfpm built placeholder server `.deb`/`.rpm`; the `.deb` control has `Depends: docker.io \| docker-ce \| moby-engine \| docker-engine \| podman-docker, passwd`, the three maintainer scripts and a `0755` `/usr/sbin/ghostlink-server` |
+| Not verified | The server on an internet-facing VPS; Amnezia's own apps importing our `vpn://` keys; RPM install on Fedora/RHEL; podman; IPv6 inside tunnels; management through a connected full TUN (the bypass rule is unit-tested, not routed) |
+
 ## v0.2.1 Linux packages (2026-11-06)
 
 | Check | Result actually observed |
@@ -9,7 +27,8 @@ Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic tes
 | Linux SIGPIPE fix in CI | The full CI run after the fix (`596633b`) passed on Ubuntu 24.04 and Windows 2022, including all real-engine protocol and split-tunnel tests |
 | Package spec (local) | nfpm 2.48.0 built a `.deb` and an `.rpm` from the template with placeholder binaries. The `.deb` control has `Depends: libc6 (>= 2.35), libssl3 \| libssl3t64`, a conffile for `/etc/ghostlink/ghostlinkd.env`, postinst/prerm/postrm, root-owned `0755` binaries in `/usr/bin` and `/usr/lib/ghostlink`, and the unit with `/usr` paths and `$GHOSTLINK_FLAGS` |
 | Checksum refresh for arm64 files | The idempotent update was exercised locally twice: a stale line was replaced, with no duplicates |
-| Pending (release CI) | `.deb` install as a real systemd service on Ubuntu 22.04 x64/arm64 (`ghostlink status` and `doctor` as the installing user, then purge), and `rpm -qip/-qlp` checks |
+| Release CI (run 42175275443) | On Ubuntu 22.04 x64 and arm64 the `.deb` installed as a real systemd service: the installer set owner UID 1001 from `sudo`, `ghostlinkd` was `active`, and `ghostlink status`/`doctor` answered as that user. Purge removed it. The `.rpm` passed `rpm -qip/-qlp/--scripts`. The draft had all 10 files. A cosmetic dpkg warning about `/usr/lib/systemd/system` was fixed in v0.3.0 |
+| Same commit, CI workflow | Failed on Ubuntu: the AmneziaWG close race recorded under v0.3.0 (the release workflow does not run that test) |
 
 ## First hosted CI run of v0.2.0 (2026-11-06)
 

@@ -8,6 +8,27 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.3.0 — Ghostlink server and management from the app
+
+- **v0.2.1 released as a draft:** client `.deb`/`.rpm` with a real systemd install test in CI, and the worker SIGPIPE fix.
+  - **CI failure:** the CI workflow on the same commit failed on Linux with an AmneziaWG close race (a late packet write after the TUN closed). It is fixed in `internal/awg/tun.go`, with a regression test.
+  - **Incomplete source zip:** the corresponding-source zip lacked `internal/awg`. The script now copies the whole module and build-checks it, and v0.2.1's zip was replaced in the draft.
+- **Phase 3 (server):** `cmd/ghostlink-server` + `internal/server`:
+  - users, keys, global and per-user rules, usage and limits, all over an HTTPS API;
+  - the image is shipped inside `ghostlink-server` `.deb`/`.rpm` packages;
+  - the admin shell command `ghostlink-server`.
+- **Phase 4 (client):**
+  - pinned management client (rustls);
+  - daemon `ManagedServer*`/`ServerCall`, with calls outside the lock;
+  - CLI `ghostlink server ...`;
+  - GUI **Servers I run**;
+  - management APIs bypass the tunnel while connected.
+- **Shared version:** the worker and server share `internal/version`, and the release check reads it.
+- **Tooling notes:**
+  - shell heredocs mangle backslashes and some quote sequences, so write scripts with the file-writing tool;
+  - drive the GUI over WebView2 DevTools, never with mouse clicks; one stray click landed on the user's browser before this was changed;
+  - Docker Desktop stays off, and container tests run in release CI.
+
 ### Later on November 6: first hosted CI of v0.2.0 and documentation pass
 
 - **CI failure on Linux:** the new real-engine tests failed because Go raises SIGPIPE when writing to a closed stderr. The tests had dropped the pipe, but a crashed daemon could do the same to a real worker, so the worker now ignores SIGPIPE on Unix. The tests drain events, warm up the tunnel and run serially in CI.

@@ -22,7 +22,7 @@ use tokio::{
 };
 
 pub const WORKER_VERSION: &str =
-    "Ghostlink tunnel worker 0.2.1; sing-box 1.14.4; amneziawg-go 3.1.20260828";
+    "Ghostlink tunnel worker 0.3.0; sing-box 1.14.4; amneziawg-go 3.1.20260828";
 
 /// Tag of the tunnel outbound or endpoint in every generated configuration.
 pub const PROXY_TAG: &str = "proxy";
@@ -105,6 +105,22 @@ pub fn config(
     tunnel: bool,
     policy: &RoutingPolicy,
 ) -> Value {
+    config_with_direct(outbound, proxy_port, api_port, secret, tunnel, policy, &[])
+}
+
+/// `always_direct` lists (host, port) destinations that must never enter the tunnel: the
+/// management APIs of servers this device administers. A Ghostlink server refuses its own API
+/// port from VPN users, so while connected through it, management must go around the tunnel.
+#[allow(clippy::too_many_arguments)]
+pub fn config_with_direct(
+    outbound: &Outbound,
+    proxy_port: u16,
+    api_port: u16,
+    secret: &str,
+    tunnel: bool,
+    policy: &RoutingPolicy,
+    always_direct: &[(String, u16)],
+) -> Value {
     let mut inbounds = vec![
         json!({"type":"mixed","tag":"health-proxy","listen":"127.0.0.1","listen_port":proxy_port,"users":[{"username":"ghostlink","password":secret}]}),
     ];
@@ -129,8 +145,26 @@ pub fn config(
     };
     let (outbound_json, endpoint_json) = proxy(outbound);
     let split = split::render(policy, PROXY_TAG);
+    let mut direct_rules = vec![];
+    let mut dns_rules = vec![];
+    for (host, port) in always_direct {
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        match bare.parse::<std::net::IpAddr>() {
+            Ok(ip) => {
+                let bits = if ip.is_ipv4() { 32 } else { 128 };
+                direct_rules.push(
+                    json!({"ip_cidr":[format!("{ip}/{bits}")],"port":[port],"outbound":"direct"}),
+                );
+            }
+            Err(_) => {
+                direct_rules.push(json!({"domain":[bare],"port":[port],"outbound":"direct"}));
+                dns_rules.push(json!({"domain":[bare],"server":"bootstrap"}));
+            }
+        }
+    }
+    dns_rules.extend(split.dns_rules);
     let mut outbounds: Vec<Value> = outbound_json.into_iter().collect();
-    if split.needs_direct {
+    if split.needs_direct || !direct_rules.is_empty() {
         // Bound to the physical interface by auto_detect_interface, like the tunnel's own sockets.
         outbounds.push(json!({"type":"direct","tag":"direct"}));
     }
@@ -140,13 +174,16 @@ pub fn config(
         // The health probe must always test the tunnel, even when "only" mode sends the
         // rest of the traffic direct; otherwise a dead tunnel could be reported as connected.
         json!({"inbound":"health-proxy","outbound":PROXY_TAG}),
+    ];
+    rules.extend(direct_rules);
+    rules.extend([
         json!({"inbound":"ghostlink-tun","ip_version":6,"action":"reject"}),
         json!({"protocol":"dns","action":"hijack-dns"}),
-    ];
+    ]);
     rules.extend(split.route_rules);
     let mut document = json!({
         "log":{"level":"info","timestamp":false,"disabled":false},
-        "dns":{"servers":[vpn_dns,{"type":"local","tag":"bootstrap"}],"rules":split.dns_rules,"final":split.dns_final,"strategy":"ipv4_only"},
+        "dns":{"servers":[vpn_dns,{"type":"local","tag":"bootstrap"}],"rules":dns_rules,"final":split.dns_final,"strategy":"ipv4_only"},
         "inbounds":inbounds,
         "outbounds":outbounds,
         "route":{"auto_detect_interface":tunnel,"default_domain_resolver":{"server":"bootstrap","strategy":"ipv4_only"},"rules":rules,"final":split.route_final,"find_process":split.find_process},
@@ -165,6 +202,7 @@ pub async fn start(
     name: String,
     outbound: Outbound,
     policy: RoutingPolicy,
+    always_direct: Vec<(String, u16)>,
     shared: Shared,
     events: mpsc::Sender<&'static str>,
     timeout: Duration,
@@ -184,8 +222,14 @@ pub async fn start(
     let path = run_dir.join("outline.json");
     let config_guard = storage::PrivateConfig::write(
         &path,
-        &serde_json::to_vec(&config(
-            &outbound, proxy_port, api_port, &secret, true, &policy,
+        &serde_json::to_vec(&config_with_direct(
+            &outbound,
+            proxy_port,
+            api_port,
+            &secret,
+            true,
+            &policy,
+            &always_direct,
         ))?,
     )?;
     let mut check = Command::new(executable);
@@ -355,4 +399,65 @@ pub async fn start(
         let _ = events.try_send(reason.unwrap_or("outline_disconnected"));
     });
     Ok(Session { stop, task })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outline::AccessKey;
+
+    #[test]
+    fn managed_server_apis_bypass_the_tunnel() {
+        let key = AccessKey::parse("ss://aes-256-gcm:test-only@192.0.2.10:8388").unwrap();
+        let direct = vec![
+            ("203.0.113.5".to_string(), 23456),
+            ("vpn.example.com".to_string(), 34567),
+        ];
+        let config = config_with_direct(
+            &Outbound::Shadowsocks(key),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+            &direct,
+        );
+        let rules = config["route"]["rules"].as_array().unwrap();
+        // After sniffing and the health rule, before the IPv6 reject and DNS hijack.
+        assert_eq!(
+            rules[2],
+            json!({"ip_cidr":["203.0.113.5/32"],"port":[23456],"outbound":"direct"})
+        );
+        assert_eq!(
+            rules[3],
+            json!({"domain":["vpn.example.com"],"port":[34567],"outbound":"direct"})
+        );
+        assert_eq!(rules[4]["action"], "reject");
+        assert_eq!(
+            config["dns"]["rules"][0],
+            json!({"domain":["vpn.example.com"],"server":"bootstrap"})
+        );
+        assert!(config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["tag"] == "direct"));
+        // Without managed servers nothing changes and no direct outbound appears.
+        let plain = config_with_direct(
+            &Outbound::Shadowsocks(
+                AccessKey::parse("ss://aes-256-gcm:test-only@192.0.2.10:8388").unwrap(),
+            ),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+            &[],
+        );
+        assert!(!plain["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["tag"] == "direct"));
+    }
 }

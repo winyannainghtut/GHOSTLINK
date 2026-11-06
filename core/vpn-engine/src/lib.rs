@@ -4,6 +4,7 @@ pub mod management;
 pub mod outline;
 pub mod process;
 pub mod profile;
+pub mod server_admin;
 pub mod split;
 pub mod storage;
 pub mod vless;

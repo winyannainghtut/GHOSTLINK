@@ -31,11 +31,24 @@ Nothing executes shell commands. See [protocol design](../../docs/architecture/p
 
 ```text
 go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -o ghostlink-tunnel.exe .
+go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -o ghostlink-server.exe ./cmd/ghostlink-server
 go vet  -tags with_gvisor,with_utls,with_wireguard ./...
 go test -tags with_gvisor,with_utls,with_wireguard ./...
 ```
 
-`go.mod` pins the Go toolchain and engines, and `go.sum` records checksums. The tests include interop runs against upstream amneziawg-go, a stock WireGuard client and a sing-box REALITY server.
+`go.mod` pins the Go toolchain and engines, and `go.sum` records checksums. The tests include interop runs against upstream amneziawg-go, a stock WireGuard client and a sing-box REALITY server. The server tests issue keys through the API and connect unmodified clients for every protocol, checking per-user and global rules, internal blocks, usage, data limits, disabling and key removal.
+
+## Ghostlink server
+
+The same module builds `ghostlink-server` (`cmd/ghostlink-server`, logic in `internal/server`):
+
+```text
+ghostlink-server init --state DIR [--hostname HOST] [--name NAME]   # create once, print the management key
+ghostlink-server serve --state DIR [--log-level warn]               # engine + HTTPS management API
+ghostlink-server show-key|check|version --state DIR
+```
+
+It normally runs inside the container shipped by the `ghostlink-server` packages; see the [server guide](../../docs/deployment/ghostlink-server.md). `internal/version` holds the version both programs report.
 
 ## Licensing
 

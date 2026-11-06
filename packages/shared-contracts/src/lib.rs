@@ -78,6 +78,125 @@ pub enum Action {
         #[serde(default)]
         policy: Option<RoutingPolicy>,
     },
+    /// Saves a Ghostlink server's management key (sealed; never returned) after checking that
+    /// the server answers with the pinned certificate.
+    ManagedServerAdd {
+        name: String,
+        management_key: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    ManagedServerList,
+    ManagedServerRemove {
+        name: String,
+    },
+    /// One typed administration call to a managed server. The service makes the pinned HTTPS
+    /// request itself, so the management key never leaves it.
+    ServerCall {
+        server: String,
+        op: ServerOp,
+    },
+}
+
+/// Administration operations on a managed Ghostlink server. IDs are the server's numeric IDs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServerOp {
+    Info,
+    Update {
+        patch: ServerPatch,
+    },
+    UsersList,
+    UserCreate {
+        change: UserChange,
+    },
+    UserUpdate {
+        user: String,
+        change: UserChange,
+    },
+    UserDelete {
+        user: String,
+    },
+    KeysList {
+        user: String,
+    },
+    /// With `import_as`, the new key is also saved on this device under that server ID.
+    KeyCreate {
+        user: String,
+        protocol: String,
+        #[serde(default)]
+        import_as: Option<String>,
+    },
+    KeyDelete {
+        user: String,
+        key: String,
+    },
+    RulesGet,
+    RulesSet {
+        rules: TrafficRules,
+    },
+    Metrics,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The public IP or DNS name written into new keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vless_handshake: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocols: Option<std::collections::BTreeMap<String, ProtocolPatch>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// 0 removes the limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_limit_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exempt_from_global_rules: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<TrafficRules>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset_usage: bool,
+}
+
+/// Traffic a server blocks, for everyone or for one user.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrafficRules {
+    /// Sites, matched with their subdomains.
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
+    /// IP addresses or CIDR ranges.
+    #[serde(default)]
+    pub blocked_ips: Vec<String>,
+    /// Ports ("25") or ranges ("6881-6889").
+    #[serde(default)]
+    pub blocked_ports: Vec<String>,
+    #[serde(default)]
+    pub block_bittorrent: bool,
+    /// Outgoing mail on port 25.
+    #[serde(default)]
+    pub block_smtp: bool,
 }
 
 /// Client split tunneling. Applied by the managed worker at the next connection; OpenVPN
@@ -135,6 +254,10 @@ impl Action {
             Self::AgentRevoke { .. } => "agent_revoke",
             Self::RoutingPolicyGet { .. } => "routing_policy_get",
             Self::RoutingPolicySet { .. } => "routing_policy_set",
+            Self::ManagedServerAdd { .. } => "managed_server_add",
+            Self::ManagedServerList => "managed_server_list",
+            Self::ManagedServerRemove { .. } => "managed_server_remove",
+            Self::ServerCall { op, .. } => op.name(),
         }
     }
     pub fn agent_allowed(&self, control: bool) -> bool {
@@ -146,6 +269,25 @@ impl Action {
                 self,
                 Self::Connect { .. } | Self::Disconnect | Self::Switch { .. }
             ))
+    }
+}
+
+impl ServerOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Info => "server_info",
+            Self::Update { .. } => "server_update",
+            Self::UsersList => "server_users_list",
+            Self::UserCreate { .. } => "server_user_create",
+            Self::UserUpdate { .. } => "server_user_update",
+            Self::UserDelete { .. } => "server_user_delete",
+            Self::KeysList { .. } => "server_keys_list",
+            Self::KeyCreate { .. } => "server_key_create",
+            Self::KeyDelete { .. } => "server_key_delete",
+            Self::RulesGet => "server_rules_get",
+            Self::RulesSet { .. } => "server_rules_set",
+            Self::Metrics => "server_metrics",
+        }
     }
 }
 
@@ -425,5 +567,46 @@ mod tests {
         .agent_allowed(true));
         assert!(!Action::Disconnect.agent_allowed(false));
         assert!(Action::Status.agent_allowed(false));
+    }
+    #[test]
+    fn agents_cannot_manage_servers() {
+        let actions = [
+            Action::ManagedServerAdd {
+                name: "x".into(),
+                management_key: "{}".into(),
+                replace: false,
+            },
+            Action::ManagedServerList,
+            Action::ManagedServerRemove { name: "x".into() },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::Info,
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::Metrics,
+            },
+        ];
+        for action in actions {
+            assert!(!action.agent_allowed(true), "{}", action.name());
+        }
+    }
+    #[test]
+    fn server_ops_round_trip_and_refuse_unknown_fields() {
+        let op: ServerOp = serde_json::from_str(
+            r#"{"op":"user_update","user":"3","change":{"enabled":false,"rules":{"blocked_domains":["example.com"]}}}"#,
+        )
+        .unwrap();
+        let text = serde_json::to_string(&op).unwrap();
+        assert!(
+            text.contains(r#""enabled":false"#)
+                && !text.contains("reset_usage")
+                && !text.contains("name")
+        );
+        assert!(
+            serde_json::from_str::<ServerOp>(r#"{"op":"user_delete","user":"1","path":"/x"}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<ServerOp>(r#"{"op":"raw","method":"GET"}"#).is_err());
     }
 }

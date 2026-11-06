@@ -1,4 +1,4 @@
-# Protocols and split tunneling (v0.2.0)
+# Protocols, split tunneling and the server (v0.3.0)
 
 How Ghostlink supports Shadowsocks, VLESS-REALITY, WireGuard and AmneziaWG, and how split tunneling is applied. The Outline key decision is in [outline-access-keys.md](outline-access-keys.md); the original OpenVPN-era record is in [decision-record.md](decision-record.md).
 
@@ -72,7 +72,43 @@ It is owner-only and validated by `core/vpn-engine/src/split.rs`. The generated 
 
 Limits: OpenVPN profiles ignore the policy, and site rules cannot see names that are hidden (ECH, hard-coded IPs). The real-engine test `split_tunnel_rules_route_by_ip_and_site` checks full, bypass-by-IP, bypass-by-site (via Host sniffing) and "only" routing, and that the health probe stays in the tunnel.
 
+## Ghostlink server
+
+`cmd/ghostlink-server` and `internal/server` build on the same engines. They render the server state into one sing-box configuration (`render.go`):
+
+| Protocol | Served as | User attribution |
+|---|---|---|
+| Shadowsocks | multi-user `shadowsocks` inbound (`chacha20-ietf-poly1305`, Outline-compatible) | sing-box user name |
+| VLESS-REALITY | `vless` inbound with REALITY, `xtls-rprx-vision` | sing-box user name |
+| WireGuard | `amneziawg` endpoint with zero obfuscation | peer `user` → `metadata.User` |
+| AmneziaWG | `amneziawg` endpoint with AWG 2.0 parameters | peer `user` → `metadata.User` |
+
+- **User names:** every user's sing-box name is `u<id>`, so rules never contain user-supplied text.
+- **Inactive users:** disabled and over-limit users are left out of the inbound user lists and peer lists, so they cannot connect at all.
+- **Tunnel addresses:** WireGuard and AmneziaWG clients get a /32 from `10.77.0.0/20` and `10.78.0.0/20`. The endpoint maps traffic to its own tunnel address onto loopback, which the always-on block then refuses (port 53 is hijacked to the server resolver first).
+- **Route rules, in order:**
+  1. sniff;
+  2. hijack DNS (protocol DNS or port 53);
+  3. `resolve`;
+  4. always-on internal blocks;
+  5. API port and own-IP blocks;
+  6. per-user blocks (`auth_user`);
+  7. exempt users routed `direct`;
+  8. global blocks;
+  9. `final: direct`.
+- **DNS rules:** per-user, then exempt, then global block rules answer `NXDOMAIN`.
+- **Usage:** `usage.go` is a router `ConnectionTracker`. It counts each user's bytes for connections, packet connections and pre-matched flows, and outlives engine reloads.
+- **Changes:** `service.go` applies each change to a copy of the state. It restarts the engine only if the rendered configuration differs, and saves only after the engine started. `engine.go` validates a new configuration fully before closing the running instance, because the ports must be free; if the new one fails, it restarts the last good one.
+- **Keys:** `keys.go` renders them. `ss://` uses SIP002 userinfo plus `outline=1`. `vless://` carries `pbk`, `sid`, `sni` and `fp=chrome`. `vpn://` uses Amnezia's qCompress layout, with no SSH fields.
+
+The client service manages servers through `core/vpn-engine/src/server_admin.rs`:
+- **TLS:** rustls, TLS 1.3, with a verifier that compares the SHA-256 of the end-entity certificate with the pin and still verifies handshake signatures.
+- **Requests:** typed operations mapped to fixed paths.
+- **Bypass while connected:** while a tunnel is up, `worker_session::config_with_direct` routes each managed server's API `host:port` to `direct` (by IP, or by domain plus local DNS) right after the health rule.
+
 ## Process notes
+
+- **Close race in the TUN adapter:** the adapter (`internal/awg/tun.go`) makes `Close` wait for writes in flight and refuses later writes. amneziawg-go closes the TUN before stopping peers, and sing-box's stack dereferences a detached dispatcher on a late write. This crashed an AmneziaWG client on Linux CI and would have crashed the server on reloads.
 
 - The worker ignores `SIGPIPE` on Unix (`sigpipe_unix.go`). A broken status pipe returns an error instead of killing the worker before its graceful engine shutdown.
 - Status events are fixed JSON codes; upstream logs stay disabled so no credential or address reaches the daemon.

@@ -4,6 +4,46 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+### Added
+
+- **Ghostlink server**, Outline-style.
+  - **What it runs:** AmneziaWG (2.0), WireGuard, VLESS-REALITY and Outline-compatible Shadowsocks in one hardened Docker container.
+  - **Packages:** `ghostlink-server` `.deb` and `.rpm` for x64 and arm64, with the image inside, so no registry is needed.
+  - **First install:** prints a management key.
+  - **Upgrades:** keep users, keys and rules.
+  - **Admin command:** `ghostlink-server` on the host (`setup`, `show-key`, `status`, `logs`, `restart`, `stop`, `remove`).
+- **Users and keys:**
+  - users with data limits and usage counters;
+  - keys per protocol: `ss://`, `vless://`, `.conf`, and Amnezia-format `vpn://` for WireGuard and AmneziaWG;
+  - disable a user, reset usage.
+- **Server traffic rules:**
+  - block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or per user;
+  - exempt a user from the rules for everyone;
+  - always-on blocks for loopback, private, link-local, CGNAT, multicast and cloud-metadata destinations, the API port and the server's own IP;
+  - all DNS is answered by the server, so site blocks hold.
+- **Manage servers from Ghostlink:**
+  - **App:** a new **Servers I run** view with users, keys (copy, copy `.conf`, use on this device), rules, usage and server settings;
+  - **CLI:** `ghostlink server add|list|remove|info|set|users|keys|rules|usage|install-help`;
+  - **Security:** the management key is sealed in the service, and the certificate is pinned inside the TLS handshake (TLS 1.3, rustls);
+  - **While connected:** management calls go around the tunnel and never block the service.
+- Process test with a real local `ghostlink-server` covering every management action, plus server tests with unmodified clients for all four protocols.
+- Release CI builds the server image natively on x64 and arm64. It installs the server `.deb` with Docker, then checks the certificate pin, the API, key creation, container hardening, upgrade and purge.
+
+### Fixed
+
+- **AmneziaWG crash on disconnect (Linux CI, any OS):**
+  - **What happened:** a peer could write one last packet into the userspace network stack after it was closed, crashing the worker during a graceful stop.
+  - **Server impact:** the server would have hit the same race on every configuration change.
+  - **Fix:** the TUN adapter now refuses writes once closing starts, and waits for writes already in flight.
+- **Corresponding source:** the zip now contains the whole Go module (it lacked `internal/awg` in v0.2.0 and v0.2.1, so it could not build). The packaging script builds from the staged copy before zipping, and uses `/` in zip paths.
+- **Debian unit path:** the client `.deb` installs its systemd unit under `/lib/systemd/system`, so `apt purge` no longer warns about `/usr/lib/systemd/system`.
+
+### Changed
+
+- The worker and server share one version constant (`core/outline-worker/internal/version`), which the release check reads.
+
 ## [0.2.1] - 2026-11-06
 
 ### Added
@@ -73,7 +113,8 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/winyannainghtut/GHOSTLINK/releases/tag/v0.1.0
