@@ -10,4 +10,8 @@ Unsigned pre-release of Ghostlink @VERSION@.
 
 Verify downloads against `SHA256SUMS.txt`.
 
+## What's new
+
+@CHANGES@
+
 **Status.** Binaries are not code-signed, so Windows SmartScreen will warn. Full-device routing, DNS/IPv6 leak behavior, installer execution and the Linux runtime have not yet been verified on real hosts. The Linux desktop app, macOS, Android and iOS are not available yet.

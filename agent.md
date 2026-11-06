@@ -1,6 +1,6 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-06, Asia/Singapore**. Source baseline: **`7c875ad`** (`feat: implement Outline-key desktop client and managed VPN service`). This document was prepared after that implementation commit. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.2.0** (`6f07d89`); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -70,9 +70,9 @@ This handover is named `agent.md` as requested. It is an explicit handover file;
 | Area | Implemented / produced | Evidence and remaining gate |
 |---|---|---|
 | Windows CLI/service | Rust binaries, typed local IPC, authorization, profile/key management, optional OpenVPN and Outline worker integration | Root builds, unit tests, clippy and actual subprocess/IPC tests pass; full successful privileged TUN session remains unverified |
-| Windows desktop | Tauri GUI using the real daemon, server cards and key import, settings and tray code | Debug/release apps launched; import confirmed through CLI; light/dark, settings, details and menu fixes inspected |
+| Windows desktop | Tauri GUI using the real daemon: server cards with protocol badges, key paste and `.conf` file import, split-tunnel settings (global and per server), settings and tray | Debug/release apps launched; imports, badges, split dialog save and per-server override inspected via screenshots and confirmed through CLI |
 | Windows packaging | Optimized executables, MSI and portable ZIP | WiX compiled/linked/validated; installation, elevated service lifecycle and uninstall have not been run |
-| Outline transport | Standard key parser and managed upstream engine worker | Real encrypted local HTTP traffic, wrong-key rejection, stop/EOF cleanup and failure cleanup tests pass |
+| Client protocols (v0.2.0) | Shadowsocks (Outline), VLESS-REALITY, WireGuard and AmneziaWG in the managed worker; `ss://`/`ssconf://`/`vless://`/`vpn://`/`.conf` import; split tunneling | Real encrypted traffic for every protocol through the worker; AmneziaWG interop against upstream amneziawg-go; REALITY against sing-box; split routing in the real engine. Full-TUN sessions still need an administrator |
 | OpenVPN transport | External Community engine adapter, strict inline profile validation | Real executable unavailable-server test and management parsing pass; no successful routed OpenVPN server session verified |
 | Linux | Unix IPC/policy code, systemd units, deployment sources, worker binary | Go worker cross-compiled to linux/amd64; Rust/GUI/Linux runtime, resolver behavior and native packaging unverified |
 | Self-hosted server | Outline offline identity/config generator, separate OpenVPN PKI, Ansible/systemd, Terraform draft | Two local Python tests pass; Terraform init/validate pass; no Linux VPS deployment or cloud changes |
@@ -179,6 +179,8 @@ Decisions already investigated and implemented:
 
 ## 5. Outline-compatible transport
 
+> v0.2.0 added VLESS-REALITY, WireGuard and AmneziaWG to the same worker, plus split tunneling. The design, import formats and pitfalls are in [docs/architecture/protocols.md](docs/architecture/protocols.md); this section keeps the Shadowsocks specifics.
+
 ### Supported inputs
 
 - `ss://` SIP002 base64 credentials, legacy whole-key base64, percent-encoded plain credentials, IPv4/IPv6 endpoint syntax, human-readable fragments and supported Outline query syntax.
@@ -234,7 +236,7 @@ These are implementation values, not proven leak-prevention guarantees:
 - Health target is `https://www.gstatic.com/generate_204`, checked periodically (5-second interval), expecting status 204. It is an external request after an actual native session starts; document its availability/privacy implications if changing the product.
 - Traffic totals/rates come from the authenticated upstream controller, not invented counters.
 - Health loss clears connected state/IP and reports reconnecting; health recovery can restore connected state. A terminal worker exit ends the session as failed. Do not describe the reconnecting label as proof of completed crash restart or network-change recovery.
-- Outline is currently a full-tunnel client path, with no delivered GUI per-app/split-route or custom-DNS editor.
+- Split tunneling (bypass/"only" by site, IP range or app, LAN direct) applies to every worker protocol since v0.2.0; see §8. There is still no custom-DNS editor.
 
 Actual route/DNS/IPv6/egress behavior, shutdown recovery and collisions must still be measured in a privileged test environment.
 
@@ -379,15 +381,16 @@ For control, the grant needs `--control`, and MCP launch additionally needs `--a
 - Optional confirmation may be provided by the calling tool host. There is **no daemon approval queue** yet.
 - No custom Hermes/OpenClaw mobile shell integration has been validated. Generic CLI/stdio MCP is the current integration surface.
 
-Known small cleanup candidate: the `vpn_status` tool description still mentions OpenVPN, although status is shared across both engines. Reconcile that wording when next editing MCP; it does not indicate an OpenVPN-only implementation.
+The `vpn_status` tool description now covers every protocol (reworded after v0.2.0).
 
 ## 10. Desktop UI
 
 - Original Ghostlink branding: teal/neutral, sidebar, server cards, empty state, light/dark themes. Outline informed the experience; no Outline logos or official affiliation.
 - Add access key dialog masks input, imports through native private IPC, clears the key on completion/close, and stores credentials in the service.
-- Saved server cards: endpoint, default star, actual status, connect/disconnect, options for details/rename/default/remove, search.
+- Saved server cards: endpoint, protocol badge (Outline/WireGuard/AmneziaWG/VLESS/OpenVPN), default star, actual status, connect/disconnect, options for details/rename/default/split tunneling/remove, search.
+- The key dialog accepts `ss://`, `ssconf://`, `vless://` and `vpn://`; **Import a file…** reads a WireGuard/AmneziaWG `.conf` locally and sends it to the service (the desktop bridge allows `profile_import` only for WireGuard content; OpenVPN stays CLI-only).
 - Connection overview: actual duration and byte totals; no invented servers or connected state.
-- Settings: startup autoconnect; diagnostics and About/help flows. Theme uses local frontend preference storage.
+- Settings: startup autoconnect, **Split tunneling** card with a dialog shared by the global and per-server scopes (per server adds "Use the settings for all servers"), diagnostics and About/help. `notice(message, ok)` shows success messages in the calm `.notice.ok` style. Theme uses local frontend preference storage.
 - Tauri invoke bridge calls shared typed service operations. CSP restricts content to local app resources and IPC; UI is not a network-facing web management service.
 - Window close hides to tray. Tray/open/quit/disconnect code exists; quitting GUI is intended to leave the independent daemon running. Tray/uninstall behavior still needs native verification.
 - Configured initial window: 1060 × 760, minimum 620 × 560. Narrow layout is implemented in CSS but has not been fully checked in the native window.
@@ -395,7 +398,7 @@ Known small cleanup candidate: the `vpn_status` tool description still mentions 
 Two defects were fixed and verified during native QA:
 
 1. Polling every 1.5 seconds rebuilt unchanged cards and dismissed menus/focus. `appState.renderedServers` now compares profile/active-state/busy/availability/search signatures before rebuilding cards.
-2. Card `overflow:hidden` clipped lower menu actions. Overflow was corrected and footer corner styling preserved; rebuilt native app showed all four actions.
+2. Card `overflow:hidden` clipped lower menu actions. Overflow was corrected and footer corner styling preserved; rebuilt native app showed all actions.
 
 Do not reintroduce unconditional card replacement or clipped menus. Preserve accessibility labels, keyboard focus, masking and honest unavailable/error states. Unavailable-notice clearing on service recovery was implemented; a complete native outage/recovery interaction remains pending.
 
@@ -737,6 +740,13 @@ No application implementation exists yet. The original requirements are:
 
 ## 17. Known limits and continuation plan
 
+### Approved plan in progress
+
+The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in `devjourney.md`). Phases 1–2 shipped as **v0.2.0**. Next:
+
+- **Phase 3:** `core/outline-worker/cmd/ghostlink-server` + `internal/server`. One process runs sing-box with Shadowsocks (multi-user, legacy AEAD), VLESS-REALITY, WireGuard and AmneziaWG (`internal/awg` in server mode), plus an HTTPS management API behind a secret path, pinned by `certSha256`. It renders global and per-user rules (`auth_user`), always blocks loopback/private/metadata destinations and the API port, counts usage per user via a router `ConnectionTracker`, and enforces data limits. It ships as `.deb`/`.rpm` (nfpm) with the image (`docker save`) included; `postinst` loads it and prints the management key. Upgrades keep state.
+- **Phase 4:** the daemon stores management keys sealed and makes typed, pinned HTTPS calls (`ManagedServerAdd`/`List`/`Remove`, `ServerCall`), with the CLI `ghostlink server ...` and a GUI "Servers I manage" area. Owner-only; never exposed to MCP.
+
 ### First actions for an incoming agent
 
 1. Read this file, current verification/security reports and the November `devjourney.md` section.
@@ -764,13 +774,13 @@ Requires an authorized Windows test machine and human administrator installation
 |---|---|
 | Successful native VPN and user traffic | Privileged successful Outline/OpenVPN routed tests |
 | Route/DNS restoration and leak protection | Real before/during/after network measurements, crash recovery, IPv6 tests |
-| Split tunnel / custom DNS | Complete product controls and per-platform verification; Outline currently generates full tunnel/fixed DNS policy |
+| Split tunnel / custom DNS | Split tunneling done (v0.2.0); still needs elevated verification of app matching and full-device routing. No custom-DNS editor |
 | Network-change reconnect | Measured behavior and reliable terminal-worker recovery design; health label alone is insufficient |
 | Configurable persistent kill switch | Not implemented; needs OS-specific enforcement/recovery design and tests |
 | GUI completeness | Native narrow-window, service outage/recovery, tray actions, install/uninstall interaction checks |
 | Linux client/packages | Actual Rust/GUI build/runtime, GTK advisory resolution, resolver/SSH safety, DEB/RPM |
 | Android and iOS | Native implementations, projects/toolchains, signing/entitlements, device tests |
-| Real self-hosted server deployment | Authorized target, deployed firewall/service health, backup/restore/revocation procedures tested on host |
+| Real self-hosted server deployment | In progress (v0.3.0): Ghostlink server packaged as `.deb`/`.rpm` with its Docker image, Outline-style management key, users/keys per protocol, global and per-user traffic rules, management from the app. Then: authorized target, firewall/service health, backup/restore/revocation tested on a host |
 | Agent end-to-end VPN workflow | Authorized control through real installed service and measured routing; optional daemon approval queue if required |
 | Public release | Licensing/source review, signing, target packages, verified update/rollback/troubleshooting and release workflow |
 

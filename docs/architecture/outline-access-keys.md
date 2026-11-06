@@ -1,5 +1,7 @@
 # Outline access-key update
 
+> Since v0.2.0 the same worker also carries VLESS-REALITY, WireGuard and AmneziaWG; see [protocols.md](protocols.md). This note records the original Outline decision.
+
 The user's 2026-10-30 clarification makes Outline-compatible access keys and an Outline-style client UI the primary experience. `ss://` keys contain Shadowsocks credentials; they cannot authenticate an OpenVPN connection. Existing OpenVPN support remains an optional backend.
 
 Inspected Outline Apps `ce518e8c058d4db9100ec27d15bc071a246a2274`, Outline SDK `45e87213a473ff573378eb5f42081f71aff76664`, their Apache-2.0 licenses, access-key/config parsers, desktop VPN/routing services, and UI tokens. Their code confirms static SIP002/legacy keys, dynamic `ssconf://` HTTPS retrieval, server cards, rename/remove/details, and platform-specific routing. No Outline logos or product names are reused as Ghostlink branding.

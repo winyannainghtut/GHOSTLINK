@@ -148,6 +148,7 @@ func closeEngine(instance *box.Box) string {
 }
 
 func main() {
+	ignoreBrokenPipe()
 	if len(os.Args) == 2 && os.Args[1] == "version" {
 		fmt.Println(version)
 		return

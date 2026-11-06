@@ -51,23 +51,52 @@ fn command(args: &[&str], path: &std::path::Path) -> Command {
     command
 }
 
-/// Starts `worker run` and waits for its credential-free "started" event.
-async fn run_worker(path: &std::path::Path) -> Child {
+/// A running worker plus every credential-free event it has written to stderr. The pipe is
+/// drained for the worker's whole life, as the daemon does; dropping it early would make the
+/// worker's final event a broken-pipe write.
+struct Worker {
+    child: Child,
+    events: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Worker {
+    /// Closes the control pipe and requires a clean exit, reporting the worker's own events.
+    async fn stop(mut self, name: &str) {
+        drop(self.child.stdin.take());
+        let status = tokio::time::timeout(Duration::from_secs(12), self.child.wait()).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events = self.events.lock().unwrap().join(" | ");
+        match status {
+            Ok(Ok(status)) if status.success() => {}
+            other => panic!("{name} worker did not stop cleanly ({other:?}); events: {events}"),
+        }
+    }
+}
+
+/// Starts `worker run` and waits for its "started" event.
+async fn run_worker(path: &std::path::Path) -> Worker {
     let mut child = command(&["run", "-c"], path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut stderr = BufReader::new(child.stderr.take().unwrap());
-    let mut line = String::new();
-    tokio::time::timeout(Duration::from_secs(15), stderr.read_line(&mut line))
+    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+    let first = tokio::time::timeout(Duration::from_secs(15), lines.next_line())
         .await
         .unwrap()
-        .unwrap();
-    let event: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
-    assert_eq!(event["event"], "started", "worker did not start: {line}");
-    child
+        .unwrap()
+        .unwrap_or_default();
+    let event: serde_json::Value = serde_json::from_str(&first).unwrap_or_default();
+    assert_eq!(event["event"], "started", "worker did not start: {first}");
+    let events = std::sync::Arc::new(std::sync::Mutex::new(vec![first]));
+    let sink = events.clone();
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = lines.next_line().await {
+            sink.lock().unwrap().push(line);
+        }
+    });
+    Worker { child, events }
 }
 
 /// Minimal HTTP server on loopback answering every request with `reply`.
@@ -170,7 +199,7 @@ async fn wireguard_and_amneziawg_profiles_carry_real_traffic() {
         }
         let server_path = dir.path().join("server.json");
         storage::atomic_write(&server_path, &serde_json::to_vec(&json!({"endpoints":[server_endpoint],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}})).unwrap()).unwrap();
-        let mut server = run_worker(&server_path).await;
+        let server = run_worker(&server_path).await;
 
         let proxy_port = free_port().await;
         let api_port = free_port().await;
@@ -188,7 +217,7 @@ async fn wireguard_and_amneziawg_profiles_carry_real_traffic() {
             .unwrap(),
         )
         .unwrap();
-        let mut client = run_worker(&client_path).await;
+        let client = run_worker(&client_path).await;
 
         let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))
             .unwrap()
@@ -213,17 +242,8 @@ async fn wireguard_and_amneziawg_profiles_carry_real_traffic() {
             body, "hello through the ghostlink worker",
             "{name} carried no traffic"
         );
-        for child in [&mut client, &mut server] {
-            drop(child.stdin.take());
-            assert!(
-                tokio::time::timeout(Duration::from_secs(12), child.wait())
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .success(),
-                "{name} worker did not stop cleanly"
-            );
-        }
+        client.stop(&format!("{name} client")).await;
+        server.stop(&format!("{name} server")).await;
     }
 }
 
@@ -232,7 +252,8 @@ async fn wireguard_and_amneziawg_profiles_carry_real_traffic() {
 async fn split_pair(
     dir: &std::path::Path,
     policy: ghostlink_contracts::RoutingPolicy,
-) -> (Child, Child, u16, u16) {
+    web: u16,
+) -> (Worker, Worker, u16, u16) {
     let server_port = free_udp_port();
     let server_path = dir.join("split-server.json");
     storage::atomic_write(&server_path, &serde_json::to_vec(&json!({
@@ -254,6 +275,21 @@ async fn split_pair(
     let client_path = dir.join("split-client.json");
     storage::atomic_write(&client_path, &serde_json::to_vec(&config).unwrap()).unwrap();
     let client = run_worker(&client_path).await;
+    // Wait for the WireGuard handshake through the health proxy, which is always tunneled,
+    // so that routing assertions never race the tunnel coming up.
+    let warm = format!("http://10.99.0.1:{web}/");
+    let mut ready = false;
+    for _ in 0..10 {
+        if probe(proxy_port, true, &warm, None).await {
+            ready = true;
+            break;
+        }
+    }
+    assert!(
+        ready,
+        "split-test tunnel never came up; client events: {:?}",
+        client.events.lock().unwrap()
+    );
     (server, client, probe_port, proxy_port)
 }
 
@@ -265,10 +301,10 @@ async fn probe(proxy_port: u16, auth: bool, url: &str, host: Option<&str>) -> bo
     }
     let http = reqwest::Client::builder()
         .proxy(proxy)
-        .timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
-    for _ in 0..2 {
+    for _ in 0..3 {
         let mut request = http.get(url);
         if let Some(host) = host {
             request = request.header(reqwest::header::HOST, host);
@@ -334,8 +370,7 @@ async fn split_tunnel_rules_route_by_ip_and_site() {
         ),
     ];
     for (name, policy, expectations) in cases {
-        let (mut server, mut client, probe_port, health_port) =
-            split_pair(dir.path(), policy).await;
+        let (server, client, probe_port, health_port) = split_pair(dir.path(), policy, web).await;
         for (via_health, url, host, reachable) in expectations {
             let port = if via_health { health_port } else { probe_port };
             assert_eq!(
@@ -350,9 +385,7 @@ async fn split_tunnel_rules_route_by_ip_and_site() {
                 }
             );
         }
-        for child in [&mut client, &mut server] {
-            drop(child.stdin.take());
-            let _ = tokio::time::timeout(Duration::from_secs(12), child.wait()).await;
-        }
+        client.stop(&format!("{name} client")).await;
+        server.stop(&format!("{name} server")).await;
     }
 }

@@ -13,9 +13,10 @@ The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the
 ## Cutting a release
 
 1. Set the new version in every declaration: `[workspace.package]` in `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, the version label in `apps/desktop/ui/index.html`, `version` in `core/outline-worker/main.go`, and `WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`. Update the lockfiles with a normal build, and update the CLI version assertion in `tests/integration/control-plane.test.mjs`.
-2. Run `node scripts/release-version.mjs`. It prints the version, or names every declaration that disagrees.
-3. Regenerate notices if dependencies changed: `python scripts/collect-licenses.py`.
-4. Commit, then push a matching tag: `git tag v<version> && git push origin v<version>`.
+2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a new `## [<version>] - <date>` heading; the release notes include that section (`scripts/changelog-section.mjs`).
+3. Run `node scripts/release-version.mjs`. It prints the version, or names every declaration that disagrees.
+4. Regenerate notices if dependencies changed: `python scripts/collect-licenses.py`.
+5. Update the README and docs for anything user-visible, commit, then push a matching tag: `git tag v<version> && git push origin v<version>`.
 
 Every job runs the version check first and fails if the tag is not `v<version>`. After all builds pass, the `publish` job writes `SHA256SUMS.txt` and creates a **draft** pre-release from `.github/release-notes.md`; re-running it uploads replacement files to the same draft. Review the draft, then publish it. Nothing is public before that.
 

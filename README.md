@@ -1,115 +1,199 @@
-# Ghostlink
+<p align="center"><img src="apps/desktop/ui/mark.svg" alt="" width="72" height="72"></p>
 
-AI development handover: [agent.md](agent.md). It covers the current implementation, build/test commands, verified results, limitations and next steps.
+<h1 align="center">Ghostlink</h1>
 
-A personal desktop VPN client with an Outline-style interface, standard Outline access keys, a local privileged service, a Rust CLI and an optional restricted MCP bridge.
+<p align="center">A personal, self-hosted VPN client for Windows and Linux.<br>Outline, WireGuard, AmneziaWG and VLESS-REALITY in one app, with split tunneling and a scriptable CLI.</p>
 
-**Current status:** Windows development/release binaries build; key management, real local IPC, authorization and encrypted Shadowsocks proxy traffic have been tested. Full-device TUN routing, DNS/IPv6 leak behavior and installer execution still need an administrator-authorized Windows test. Linux runtime and mobile apps are not complete. See [the verification report](docs/development/verification.md).
+<p align="center"><a href="https://github.com/winyannainghtut/GHOSTLINK/actions/workflows/desktop.yml"><img src="https://github.com/winyannainghtut/GHOSTLINK/actions/workflows/desktop.yml/badge.svg" alt="CI"></a> <a href="CHANGELOG.md">Changelog</a> · <a href="docs/development/verification.md">What is verified</a> · <a href="docs/security/model.md">Security model</a></p>
 
-## Downloads
+> **Pre-release.** Builds are unsigned and intended for personal use and testing. Key handling, the local service, every protocol's encrypted traffic and split-tunnel routing are tested automatically. A full-device VPN session (routes, DNS and IPv6 leak checks) still needs an administrator test machine. See [what is verified](docs/development/verification.md).
 
-Pre-release builds are attached to [GitHub Releases](https://github.com/winyannainghtut/GHOSTLINK/releases) once a maintainer publishes them:
+## Contents
 
-| Platform | File |
-|---|---|
-| Windows 10/11 x64 | `Ghostlink-<version>-windows-x64.msi` (installer) or `-portable.zip` |
-| Linux x64 / arm64 | `ghostlink-<version>-linux-x64.tar.gz` / `-linux-arm64.tar.gz` (headless CLI and service; see `INSTALL.txt` inside) |
-| Tunnel worker source | `Ghostlink-<version>-worker-corresponding-source.zip` (GPL-3.0-or-later) |
+- [Features](#features)
+- [Download and install](#download-and-install)
+- [Quick start](#quick-start)
+- [Supported keys](#supported-keys)
+- [Split tunneling](#split-tunneling)
+- [Command line](#command-line)
+- [AI agents and MCP](#ai-agents-and-mcp)
+- [How it works](#how-it-works)
+- [Security and privacy](#security-and-privacy)
+- [Running your own server](#running-your-own-server)
+- [Building from source](#building-from-source)
+- [Status and roadmap](#status-and-roadmap)
+- [Documentation](#documentation)
+- [License and acknowledgements](#license-and-acknowledgements)
 
-Check downloads against `SHA256SUMS.txt`. Builds are unsigned. The Linux desktop app, macOS, Android and iOS are not available yet. Maintainers: see [releases](docs/development/releases.md).
+## Features
 
-## Install on Windows
+- **Five ways to connect:** Outline-compatible Shadowsocks, WireGuard, AmneziaWG (obfuscated WireGuard, legacy and 2.0), VLESS with REALITY, and optional OpenVPN.
+- **Paste or import any key:** `ss://`, `ssconf://`, `vless://`, Amnezia `vpn://`, and WireGuard/AmneziaWG `.conf` files.
+- **Split tunneling:** send listed sites, IP ranges or apps around the VPN (bypass), or only those through it, and keep LAN devices direct. Set it globally or per server.
+- **One service, three front ends:** the desktop app, the `ghostlink` CLI and an optional restricted MCP bridge for AI agents all control the same local service.
+- **Honest status:** "Connected" means the tunnel was observed up and an HTTPS request through it succeeded. Nothing is reported that was not measured.
+- **Safe imports:** script hooks, plaintext VLESS, insecure TLS, obsolete ciphers and Amnezia "full access" keys that carry an SSH login are refused.
 
-Local build output: `artifacts/windows-x64/Ghostlink-<version>-windows-x64.msi`. This unsigned development installer installs the GUI, CLI, MCP bridge, managed tunnel worker, notices and a LocalSystem service. It authorizes one Windows user over a private local named pipe. The service owns encrypted state under `%ProgramData%\Ghostlink`; the GUI runs as your normal user. Installing requires Windows administrator consent. Microsoft WebView2 Runtime must already be installed for the GUI.
+## Download and install
 
-Open **Ghostlink** from the Start menu, choose **Add access key**, paste an `ss://` or supported `ssconf://` key supplied by your server administrator, then choose **Connect**. You can rename servers, inspect their metadata, choose a default and disconnect from the app or CLI. Window close hides to the tray; quitting the GUI leaves the independent VPN service running.
+Pre-release builds are attached to [GitHub Releases](https://github.com/winyannainghtut/GHOSTLINK/releases) once published. Check every download against `SHA256SUMS.txt`.
 
-Installation has not been exercised in this development environment. Before installing, disconnect other VPNs and use a machine where a temporary route change is authorized. Do not treat an unsigned development build as a verified public release.
+| Platform | File | Contents |
+|---|---|---|
+| Windows 10/11 x64 | `Ghostlink-<version>-windows-x64.msi` | Desktop app, CLI, MCP bridge, tunnel worker and the `Ghostlink` service |
+| Windows 10/11 x64 | `Ghostlink-<version>-windows-x64-portable.zip` | The same programs, without installing the service |
+| Linux x64 / arm64 | `ghostlink-<version>-linux-<arch>.tar.gz` | CLI, service, MCP bridge, tunnel worker and systemd unit (no desktop app yet) |
+| Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker |
 
-For unattended installation, explicitly authorize the intended user's SID with the MSI property `GHOSTLINK_OWNER_SID`. Never use a broad group SID to authorize every local user. An existing installation's owner is retained during upgrades. See [Windows setup](docs/development/windows.md) for the exact workflow and development commands.
+**Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Windows SmartScreen warns about unsigned builds.
 
-## CLI
+**Linux.** Unpack the archive and follow its `INSTALL.txt`. You will copy the binaries, install the systemd unit and set `GHOSTLINK_OWNER_UID` to your user ID. Full-tunnel routing is off by default on Linux until you protect your SSH route and enable it ([details](docs/development/linux.md)).
 
-```powershell
-ghostlink --help
-ghostlink key add --name singapore --file C:\private\singapore-access.txt
-ghostlink profile list --json
-ghostlink profile default singapore
-ghostlink connect --profile singapore --json
-ghostlink status --json
-ghostlink switch --profile japan --json
-ghostlink disconnect --json
-ghostlink doctor --json
-ghostlink logs --tail 100
-```
+## Quick start
 
-Adding a key or profile under an ID that already exists fails unless you pass `--replace`. The key file contains only the access key. Use `ghostlink key add --name singapore --stdin` with redirected input if preferred; the key itself is never a process argument. Routine commands do not prompt for passwords. `connect` waits for an observed connection result; `--no-wait` returns the accepted state. A timeout or interrupted CLI does not cancel an already accepted daemon operation: inspect `status` or explicitly `disconnect`.
+1. Open **Ghostlink** and choose **Add access key**.
+2. Paste the key your server owner gave you, or choose **Import a file…** for a WireGuard/AmneziaWG `.conf`.
+3. Choose **Connect**. The card shows the protocol, and the panel shows time connected and traffic.
 
-`--json`, `--timeout`, `--endpoint` and `--agent-token-file` are global flags. JSON uses a versioned success/error envelope, documented in [the CLI contract](docs/development/cli-contract.md). No access key is returned by list, status, details or logs.
+Closing the window keeps Ghostlink in the tray, and the VPN service keeps running. Use **Disconnect** to stop the VPN.
 
-## Supported access keys and engines
+## Supported keys
 
-- Standard modern-AEAD Shadowsocks `ss://` keys compatible with Outline: SIP002 credentials, legacy base64 keys, percent-encoded plain credentials, named fragments and IPv4/IPv6 endpoints.
-- `ssconf://` dynamic HTTPS sources containing a static key or legacy JSON. Private/loopback metadata destinations and redirects are blocked. Advanced YAML transports, prefixes and plugins are explicitly unsupported.
-- **WireGuard** and **AmneziaWG** (obfuscated WireGuard, legacy and 2.0 parameters) `.conf` files: `ghostlink profile import home.conf --name home`, or **Import a file…** in the app. One peer per file. Script hooks (`PostUp` and friends), `Table`, `FwMark` and unknown settings are rejected. A limited `AllowedIPs` list becomes a split tunnel.
-- **VLESS** `vless://` links over REALITY (or TLS), including XTLS Vision. Plaintext VLESS, insecure TLS and the `xhttp`/`mKCP` transports are refused.
-- **Amnezia** `vpn://` connection keys for the AmneziaWG, WireGuard and XRay protocols. "Full access" keys that contain the server's SSH login are refused; ask the server owner for a connection key.
-- Optional inline-certificate OpenVPN profiles via `ghostlink profile import file.ovpn`. OpenVPN Community is separately installed. Scripts, plugins, external file references, weak options, password-auth profiles and encrypted-key profiles without a supported vault workflow are rejected.
+| Protocol | Import | Notes |
+|---|---|---|
+| Shadowsocks (Outline) | `ss://`, `ssconf://` | Modern AEAD ciphers only. Dynamic `ssconf://` keys are fetched over verified HTTPS from public hosts, with no redirects. |
+| VLESS | `vless://`, Amnezia XRay `vpn://` | REALITY (or TLS) over TCP, with XTLS Vision. Plaintext, insecure TLS, `xhttp` and mKCP are refused. |
+| WireGuard | `.conf`, Amnezia `vpn://` | One peer per file. Limited `AllowedIPs` become a split tunnel. |
+| AmneziaWG | `.conf`, Amnezia `vpn://` | Legacy and 2.0 parameters (junk packets, header ranges, I1–I5 signature packets, header protection). |
+| OpenVPN | `.ovpn` via CLI | Optional, using a separately installed OpenVPN Community. Inline certificates only, strict allowlist. |
 
-The managed worker links pinned, unmodified sing-box 1.14.4 and amneziawg-go libraries and implements no new encryption protocol. The worker receives a stop over a private inherited pipe and calls the engine's graceful close. Parent-pipe EOF also closes it. Native interface observation and a successful proxied HTTPS health request are required before the daemon reports `connected`. This does not independently certify all application routes or leak prevention.
+`PostUp`/`PreUp` hooks, `Table`, `FwMark` and unknown settings in `.conf` files are rejected. Keys are encrypted by the service (Windows DPAPI) and never shown again in lists, status or logs.
 
 ## Split tunneling
 
-Choose what uses the VPN in **Settings → Split tunneling**, or per server from its **⋮** menu.
+Open **Settings → Split tunneling** for all servers, or choose **Split tunneling** in a server's **⋮** menu to override it for that server.
 
-- **Everything uses the VPN** (default).
+- **Everything uses the VPN** is the default.
 - **Bypass**: listed sites (with their subdomains), IP ranges and apps go direct; everything else uses the VPN.
 - **Only listed items use the VPN**: the reverse.
-- **Keep local network devices off the VPN** for printers, NAS boxes and the like.
+- **Keep local network devices off the VPN**: printers, NAS boxes and the like stay reachable.
+
+Changes apply the next time you connect. Sites are matched by name (TLS SNI, HTTP Host, QUIC and DNS), so an app that hides the name, for example with ECH or hard-coded IPs, can still use the VPN. Bypassed traffic deliberately leaves the tunnel. The connection health check always goes through the VPN, so a broken tunnel can never be reported as connected. OpenVPN profiles ignore split tunneling.
+
+## Command line
+
+The CLI talks to the same service as the app. Keys are read from a file or stdin, never from a command argument.
+
+| Task | Command |
+|---|---|
+| Add a key | `ghostlink key add --name tokyo --file tokyo.txt` (or `--stdin`; `--replace` to overwrite) |
+| Import a `.conf` / `.ovpn` | `ghostlink profile import home.conf --name home` |
+| List, set default, remove | `ghostlink profile list` · `profile default tokyo` · `profile remove tokyo` |
+| Connect, switch, disconnect | `ghostlink connect --profile tokyo` · `switch --profile home` · `disconnect` |
+| Status and diagnostics | `ghostlink status` · `info` · `doctor` · `logs --tail 100` |
+| Split tunneling | `ghostlink split set --mode bypass --site netflix.com --ip 192.168.1.0/24 --app steam.exe --lan-direct` · `split show` · `split clear` (add `--profile NAME` for one server) |
+| Start-up connection | `ghostlink autoconnect enable` / `disable` |
+
+Add `--json` for a versioned machine-readable envelope ([CLI contract](docs/development/cli-contract.md)). `connect` waits until the tunnel is verified; `--no-wait` returns immediately. Exit codes: 0 ok, 1 connection/internal failure, 2 invalid input, 3 permission denied, 4 service or engine unavailable, 5 timeout, 6 busy, 130 interrupted.
+
+## AI agents and MCP
 
 ```powershell
-ghostlink split set --mode bypass --site netflix.com --ip 192.168.1.0/24 --app steam.exe --lan-direct
-ghostlink split set --profile office --mode only --site intranet.example
-ghostlink split show [--profile office]
-ghostlink split clear [--profile office]
+ghostlink agent grant --name assistant --token-file C:\private\assistant.token
+ghostlink-mcp --token-file C:\private\assistant.token
 ```
 
-Changes apply at the next connection. Sites are matched by name (TLS/HTTP/QUIC sniffing and DNS), so an app that hides the name, for example with ECH or hardcoded IPs, can still use the VPN. Bypassed traffic deliberately leaves the tunnel. OpenVPN profiles ignore split tunneling.
+A grant is read-only: profiles, status and diagnostics. Add `--control` to the grant **and** `--allow-control` to the bridge to allow connect, disconnect and switch. Agents can never import keys, change split tunneling or issue grants. Revoke with `ghostlink agent revoke --name assistant`. Tokens are written to a new private file and never printed. A token limits what an agent can ask the service to do; it is not a sandbox against other programs running as your user.
 
-## Build and test
+## How it works
 
-Windows requirements: Rust 1.92+, MSVC C++ Build Tools and Windows SDK, Go (the pinned Go 1.26.10 toolchain downloads through Go), Node.js and WebView2 Runtime. Install test-only JS dependencies with `npm ci --ignore-scripts`.
+```mermaid
+flowchart LR
+  GUI[Desktop app] --> IPC[Private local IPC]
+  CLI[ghostlink CLI] --> IPC
+  MCP[MCP bridge] --> IPC
+  IPC --> D[ghostlinkd service<br/>keys, policy, audit]
+  D --> W[ghostlink-tunnel worker<br/>sing-box + amneziawg-go]
+  D -. optional .-> O[OpenVPN 2]
+  W --> S[(Your server)]
+```
+
+- **Unprivileged front ends.** The app, CLI and MCP bridge run as you; only the service holds network privileges.
+- **One tunnel engine.** The managed worker links unmodified [sing-box](https://github.com/SagerNet/sing-box) 1.14.4 for the TUN adapter, routing, DNS, Shadowsocks, VLESS and WireGuard, and unmodified [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go) for AmneziaWG. Ghostlink implements no encryption of its own.
+- **Lifecycle.** The service generates each tunnel's configuration privately, verifies it, starts the worker and stops it gracefully. If the service dies, the worker shuts down on its own.
+
+More: [protocol design](docs/architecture/protocols.md) · [architecture record](docs/architecture/decision-record.md).
+
+## Security and privacy
+
+- **Local control:** a named pipe (Windows) or Unix socket restricted to SYSTEM/root and the one authorized user. Clients verify the service's identity.
+- **Credentials:** encrypted at rest. Keys never appear in process arguments, lists, status or audit logs, and agent fingerprints are salted.
+- **Imports:** strict allowlist parsing everywhere; no imported setting can run a command.
+- **Network health:** "connected" requires an observed tunnel interface and a successful HTTPS check through it. A cleanup failure blocks the next connection until it is investigated.
+- **Not yet provided:** a persistent kill switch, an approval queue for agent actions, and signed builds.
+
+Details: [security model](docs/security/model.md) · [dependency scans](docs/security/dependencies.md) · [licensing](docs/security/licensing.md).
+
+## Running your own server
+
+- **Now:** [an Outline-compatible Shadowsocks server](docs/deployment/outline-server.md) generated offline and deployed with systemd/Ansible, plus an optional OpenVPN PKI tool.
+- **Coming in v0.3.0:** a Ghostlink server packaged as `.deb`/`.rpm` with its Docker image included. It runs AmneziaWG, WireGuard, VLESS-REALITY and Shadowsocks, prints a management key like Outline's, and lets the app create users and keys and set per-user or global traffic rules (block sites, IPs, ports or BitTorrent; data limits).
+
+## Building from source
+
+**Windows** needs Rust 1.92+, MSVC Build Tools with the Windows SDK, Go (the pinned 1.26.10 toolchain downloads automatically), Node.js and WebView2 Runtime.
 
 ```powershell
-./scripts/bootstrap-windows.ps1 -IncludeSdk
+./scripts/bootstrap-windows.ps1 -IncludeSdk          # pinned WiX (+ SDK); installs nothing system-wide
 ./scripts/cargo.ps1 build --locked --workspace
 Push-Location core/outline-worker
 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ..\..\target\debug\ghostlink-tunnel.exe .
 Pop-Location
-./scripts/cargo.ps1 test --locked --workspace
-npm test
 ./scripts/cargo.ps1 build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+./scripts/build-windows.ps1                           # optimized MSI + portable ZIP
 ```
 
-The bootstrap extracts pinned, checksummed build tools into `.tools`; it does not install drivers or services. With a complete system SDK you can omit `-IncludeSdk`. Build packaging with `scripts/build-windows.ps1` after collecting notices using `python scripts/collect-licenses.py`. Produce the worker corresponding-source bundle with `scripts/package-worker-source.ps1`; keep it with any distributed worker binaries.
+**Linux** needs Rust, Go, `pkg-config` and `libssl-dev`. Run `bash scripts/build-linux.sh` to produce `artifacts/linux-<arch>/ghostlink-<version>-linux-<arch>.tar.gz`.
 
-The optional real-engine tests are explicitly enabled with the executable paths described in [the verification report](docs/development/verification.md). They use isolated local servers and do not replace full-device tunnel testing.
-
-## Agents and MCP
+**Tests.**
 
 ```powershell
-ghostlink agent grant --name assistant --token-file C:\private\ghostlink-assistant.token
-ghostlink-mcp --token-file C:\private\ghostlink-assistant.token
+./scripts/cargo.ps1 test --locked --workspace         # Rust unit tests
+npm ci --ignore-scripts; npm test                      # service/CLI/MCP process tests
+cd core/outline-worker; go test -tags with_gvisor,with_utls,with_wireguard ./...   # engine + interop
 ```
 
-This grants read access. Add `--control` when issuing the grant and `--allow-control` when starting the MCP bridge to expose connect/disconnect/switch. The daemon still enforces token scope. Revocation: `ghostlink agent revoke --name assistant`. The token is written into a new private file and omitted from command output. Never paste it into a chat or put it in a process argument.
+Real-engine traffic tests are opt-in and need the built worker; see the [verification ledger](docs/development/verification.md). Releases are built by GitHub Actions from a `v<version>` tag ([release process](docs/development/releases.md)).
 
-The tool host can ask for confirmation before state changes. Ghostlink does not yet implement a daemon approval queue. Trusted-user processes share the OS user's authority; this is not a sandbox against a hostile process running as the same user. See [the security model](docs/security/model.md).
+## Status and roadmap
 
-## Hosting and other platforms
+| Area | Status |
+|---|---|
+| Windows app, service, CLI, MCP | Built and packaged (MSI); installer and full-device routing need an administrator test |
+| Protocols | Shadowsocks, VLESS-REALITY, WireGuard, AmneziaWG: encrypted traffic tested against upstream implementations. OpenVPN: optional |
+| Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
+| Linux | CLI/service/worker build and tests pass in CI; runtime not yet verified on a real host; no desktop app yet |
+| Ghostlink server + management from the app | In progress (v0.3.0) |
+| macOS, Android, iOS | Not started |
 
-The [Outline-compatible server path](docs/deployment/outline-server.md) generates separate private access keys and a standard Shadowsocks server configuration, with an unprivileged Linux systemd/Ansible deployment. The optional OpenVPN path has a separately tested offline CA/issuance/revocation tool. These deployments are distinct. No cloud instance or production server has been created.
+The [changelog](CHANGELOG.md) lists what each release changed.
 
-Linux source includes Unix IPC and privilege policy, but runtime/package verification is pending. Android and iOS implementations are pending; no APK, AAB or Xcode project is claimed complete. The [development journey](devjourney.md) records decisions, tested results and continuation steps.
+## Documentation
 
-Original Ghostlink Rust/UI code is MIT; the separate Go tunnel worker is GPL-3.0-or-later. Dependencies and embedded signed drivers retain their terms. Read [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md) before redistribution.
+| Topic | Document |
+|---|---|
+| What changed | [CHANGELOG.md](CHANGELOG.md) |
+| What is verified | [docs/development/verification.md](docs/development/verification.md) |
+| CLI / IPC contract | [docs/development/cli-contract.md](docs/development/cli-contract.md) |
+| Windows and Linux setup | [windows.md](docs/development/windows.md) · [linux.md](docs/development/linux.md) |
+| Releases | [docs/development/releases.md](docs/development/releases.md) |
+| Protocol design | [docs/architecture/protocols.md](docs/architecture/protocols.md) |
+| Security, dependencies, licensing | [model.md](docs/security/model.md) · [dependencies.md](docs/security/dependencies.md) · [licensing.md](docs/security/licensing.md) |
+| Server deployment | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
+| Developer / AI-agent handover | [agent.md](agent.md) · [devjourney.md](devjourney.md) |
+
+## License and acknowledgements
+
+Ghostlink's Rust service, CLI, MCP bridge and desktop UI are [MIT](LICENSE). The separate tunnel worker (`core/outline-worker`) links GPL-3.0-or-later sing-box and is GPL-3.0-or-later; its corresponding source is published with every release. Dependencies and embedded drivers keep their own terms; see [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md).
+
+Ghostlink builds on [sing-box](https://github.com/SagerNet/sing-box), [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go), [Wintun](https://www.wintun.net/), [Tauri](https://tauri.app/) and others, and is compatible with keys from [Outline](https://getoutline.org/) and [Amnezia](https://amnezia.org/). It is an independent project, not affiliated with or endorsed by any of them. "WireGuard" is a registered trademark of Jason A. Donenfeld.
