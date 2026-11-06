@@ -60,6 +60,24 @@ These mechanisms reduce specific failures; they do not certify the platform defi
 - **Weak option:** IPsec with a shared group key uses IKEv1 Aggressive Mode. Every holder of the group key can impersonate the server to other PSK users, and a passive observer can attempt offline guessing of the group key. It is off unless a PSK key exists, and the API returns a warning with every such key.
 - **Not inspected:** IKEv2/IPsec traffic is forwarded by the kernel. Only the rules for everyone (addresses, ports, SMTP, DNS-based site blocks), the always-blocked ranges and data limits apply. Per-user rules, BitTorrent blocking and traffic classification do not. IPv6 is not tunnelled.
 
+**Mesh of Linux servers (v0.6.0).**
+- **Who controls what:** the Ghostlink server coordinates the mesh. It decides each node's address, peers, paths and firewall rules, so whoever holds its management key controls the mesh. It does this from its unprivileged container: it never touches a node's network itself.
+- **Coordinator API:** the mesh API has its own TCP port, never reachable by VPN users (refused like the management API). It is TLS 1.3 with the same certificate, which agents pin from the invite, so no CA is trusted. Failed authentication is rate-limited per address, and request bodies are bounded and strictly validated.
+- **Credentials:**
+  - an invite carries a 128-bit token, single-use and 24-hour by default, stored only as a SHA-256 hash and shown once;
+  - joining gives a node a 256-bit secret, also stored as a hash, sent as a bearer token over the pinned connection and compared in constant time;
+  - a node's WireGuard private key is generated on the node, kept in `/var/lib/ghostlink-mesh/node.json` (0600, root) and never sent.
+  - The CLI writes invites only to new private files (`invite --output`); AI agent tokens cannot use any mesh operation.
+- **The agent (`ghostlink-mesh`)** runs as a systemd service limited to `CAP_NET_ADMIN` and `CAP_NET_RAW`, with `ProtectSystem=strict`; it can write only its state directory, `/etc/hosts` and `/run`. It re-validates every configuration before applying any of it:
+  - keys, addresses inside the mesh network, routes outside it, endpoints, names and protocols;
+  - no two peers may claim overlapping addresses, and no peer may claim the node's own address;
+  - nothing reaches a shell.
+  - It changes only `glmesh0`, its own `GHOSTLINK-MESH-*` chains (matching only `glmesh0`), routes it tags with its own protocol number, and a marked block in `/etc/hosts`. Stopping or leaving removes all of them.
+- **Forwarding needs local consent:** a node forwards traffic, as a relay or for shared subnets, only if its own operator allowed it (`--relay`, `--advertise-routes` or `allow-forwarding`). The coordinator cannot turn a node into a router by itself. Shared subnets need both the node's offer and the administrator's approval.
+- **Relays read relayed traffic:** a relay decrypts and re-encrypts traffic between two nodes that cannot connect directly. Use only your own servers as relays. Direct pairs are encrypted end to end between the two nodes.
+- **Access rules** are enforced by each receiving node's firewall. Replies to allowed connections always pass, and ping does unless turned off. A compromised node can send anything, but its peers accept only what the rules allow from its mesh address.
+- **Not provided:** IPv6 in the mesh, Windows nodes, and NAT hole punching (two nodes behind NAT use the relay). The `/etc/hosts` names are a convenience, not authentication.
+
 **Monitoring data.** The server keeps per-user usage, traffic-type and protocol totals, and the last 20 connecting addresses per user (30 days) on the server only.
 - **Top sites/services:** off by default. They are totals per service per day (never URLs or times), kept 30 days, and deleted at once when turned off.
 - **Rotation:** age limits, a hard size cap with a documented trimming order, and a low-disk guard that pauses detail recording below 500 MB or 5 % free.

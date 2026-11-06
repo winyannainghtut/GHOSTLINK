@@ -31,6 +31,45 @@ const PROTOCOLS: [&str; 4] = ["amneziawg", "wireguard", "vless", "shadowsocks"];
 /// Apple's built-in VPN types, installed with a configuration profile.
 const APPLE_PROTOCOLS: [&str; 2] = ["ikev2", "ipsec"];
 
+/// Mesh tags, node names and rule selectors: lower-case letters, digits and hyphens.
+fn mesh_word(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn check_mesh_rules(rules: &[ghostlink_contracts::MeshRule]) -> Result<(), AdminError> {
+    for rule in rules {
+        for selector in [&rule.from, &rule.to] {
+            let ok = selector == "*"
+                || selector.strip_prefix("tag:").is_some_and(mesh_word)
+                || selector.strip_prefix("node:").is_some_and(mesh_word);
+            if !ok {
+                return Err(AdminError::Invalid(format!(
+                    "{selector:?}: use *, tag:NAME or node:NAME"
+                )));
+            }
+        }
+        if !["tcp", "udp", "icmp", "any"].contains(&rule.protocol.as_str()) {
+            return Err(AdminError::Invalid(
+                "Protocol is tcp, udp, icmp or any".into(),
+            ));
+        }
+        if rule
+            .ports
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
+        {
+            return Err(AdminError::Invalid(
+                "Ports look like 5432 or 8000-8100".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Identifiers and addresses for IKEv2/IPsec keys; the server validates them precisely.
 fn identifier(value: &Option<String>, what: &str) -> Result<(), AdminError> {
     match value {
@@ -401,6 +440,61 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             ),
             None,
         ),
+        ServerOp::MeshInfo => (Method::GET, "/mesh".into(), None),
+        ServerOp::MeshUpdate { patch } => (Method::PATCH, "/mesh".into(), body(patch)?),
+        ServerOp::MeshInviteCreate { invite } => {
+            if invite.tags.iter().any(|t| !mesh_word(t)) {
+                return Err(AdminError::Invalid(
+                    "Tags use lower-case letters, digits and hyphens".into(),
+                ));
+            }
+            (Method::POST, "/mesh/invites".into(), body(invite)?)
+        }
+        ServerOp::MeshInviteList => (Method::GET, "/mesh/invites".into(), None),
+        ServerOp::MeshInviteDelete { invite } => (
+            Method::DELETE,
+            format!("/mesh/invites/{}", numeric_id(invite)?),
+            None,
+        ),
+        ServerOp::MeshNodeUpdate { node, change } => {
+            if change
+                .status
+                .as_deref()
+                .is_some_and(|s| s != "active" && s != "disabled")
+            {
+                return Err(AdminError::Invalid("Status is active or disabled".into()));
+            }
+            if change
+                .tags
+                .as_ref()
+                .is_some_and(|tags| tags.iter().any(|t| !mesh_word(t)))
+                || change.name.as_deref().is_some_and(|n| !mesh_word(n))
+            {
+                return Err(AdminError::Invalid(
+                    "Names and tags use lower-case letters, digits and hyphens".into(),
+                ));
+            }
+            (
+                Method::PATCH,
+                format!("/mesh/nodes/{}", numeric_id(node)?),
+                body(change)?,
+            )
+        }
+        ServerOp::MeshNodeDelete { node } => (
+            Method::DELETE,
+            format!("/mesh/nodes/{}", numeric_id(node)?),
+            None,
+        ),
+        ServerOp::MeshRulesGet => (Method::GET, "/mesh/rules".into(), None),
+        ServerOp::MeshRulesSet { rules } => {
+            check_mesh_rules(rules)?;
+            (
+                Method::PUT,
+                "/mesh/rules".into(),
+                Some(json!({ "rules": rules })),
+            )
+        }
+        ServerOp::MeshTopology => (Method::GET, "/mesh/topology".into(), None),
     })
 }
 
@@ -775,6 +869,43 @@ mod tests {
                 "/users/3/keys/4/profile?prompt_password=1&on_demand=0"
             )
         );
+        // Mesh: fixed paths, numeric IDs, allowlisted rules.
+        assert_eq!(
+            request(&ServerOp::MeshNodeDelete { node: "7".into() })
+                .unwrap()
+                .1,
+            "/mesh/nodes/7"
+        );
+        assert!(request(&ServerOp::MeshNodeDelete {
+            node: "7/../../x".into()
+        })
+        .is_err());
+        let rule = |from: &str, protocol: &str| ghostlink_contracts::MeshRule {
+            from: from.into(),
+            to: "tag:db".into(),
+            protocol: protocol.into(),
+            ports: vec!["5432".into()],
+        };
+        assert!(request(&ServerOp::MeshRulesSet {
+            rules: vec![rule("tag:web", "tcp")]
+        })
+        .is_ok());
+        assert!(request(&ServerOp::MeshRulesSet {
+            rules: vec![rule("web", "tcp")]
+        })
+        .is_err());
+        assert!(request(&ServerOp::MeshRulesSet {
+            rules: vec![rule("*", "gre")]
+        })
+        .is_err());
+        assert!(request(&ServerOp::MeshNodeUpdate {
+            node: "2".into(),
+            change: ghostlink_contracts::MeshNodeChange {
+                status: Some("pending".into()),
+                ..Default::default()
+            }
+        })
+        .is_err());
         assert!(request(&ServerOp::KeyProfile {
             user: "3".into(),
             key: "../x".into(),

@@ -1,0 +1,48 @@
+# Ghostlink mesh agent package (.deb and .rpm), built by scripts/build-linux-mesh.sh with nfpm.
+# Template placeholders: @VERSION@, @GOARCH@, @PKG@ (staged package files).
+name: ghostlink-mesh
+arch: @GOARCH@
+platform: linux
+version: @VERSION@
+version_schema: semver
+release: "1"
+section: net
+priority: optional
+maintainer: Ghostlink contributors <ghostlink@users.noreply.github.com>
+vendor: Ghostlink
+homepage: https://github.com/winyannainghtut/GHOSTLINK
+license: GPL-3.0-or-later
+description: |-
+  Joins this Linux server to a Ghostlink mesh: a private network between your servers
+  over kernel WireGuard, coordinated by a Ghostlink server, with access rules, shared
+  subnets and a relay for servers behind NAT. Join with the command from the Ghostlink
+  app or `ghostlink-server mesh invite`.
+
+contents:
+  - src: @PKG@/ghostlink-mesh
+    dst: /usr/bin/ghostlink-mesh
+    file_info: {mode: 0755}
+  - src: packages/linux/mesh/ghostlink-mesh.service
+    dst: /lib/systemd/system/ghostlink-mesh.service
+    packager: deb
+    file_info: {mode: 0644}
+  - src: packages/linux/mesh/ghostlink-mesh.service
+    dst: /usr/lib/systemd/system/ghostlink-mesh.service
+    packager: rpm
+    file_info: {mode: 0644}
+  - src: @PKG@/doc/
+    dst: /usr/share/doc/ghostlink-mesh/
+    type: tree
+
+scripts:
+  postinstall: packages/linux/mesh/postinstall.sh
+  preremove: packages/linux/mesh/preremove.sh
+  postremove: packages/linux/mesh/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - iptables
+  rpm:
+    depends:
+      - iptables

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"ghostlink.local/outline-worker/internal/mesh"
 )
 
 // Service ties stored state, the running engine and monitoring together. Every change is
@@ -27,11 +29,29 @@ type Service struct {
 	report       func(string, error)
 	// ipsecSeen holds the agent's last byte counters per SA child (touched by Run only).
 	ipsecSeen map[string][2]uint64
+	// meshLive is what mesh agents last reported, and which pairs are relayed.
+	meshLive *mesh.Live
 }
 
 func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
 	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
-		report: func(string, error) {}, ipsecSeen: map[string][2]uint64{}}
+		report: func(string, error) {}, ipsecSeen: map[string][2]uint64{}, meshLive: mesh.NewLive()}
+	// Mesh agents waiting for a new configuration wake on every change to the mesh.
+	service.OnChange(func(previous, next *State) {
+		before, _ := json.Marshal(previous.Mesh)
+		after, _ := json.Marshal(next.Mesh)
+		if bytes.Equal(before, after) {
+			return
+		}
+		if previous.Mesh != nil {
+			for _, node := range previous.Mesh.Nodes {
+				if next.Mesh == nil || next.Mesh.Node(node.ID) == nil {
+					service.meshLive.Forget(node.ID)
+				}
+			}
+		}
+		service.meshLive.Notify()
+	})
 	// The IPsec agent follows every saved change.
 	service.OnChange(func(previous, next *State) {
 		if previous.appleEnabled() || next.appleEnabled() {
@@ -275,6 +295,11 @@ func (s *Service) Run(ctx context.Context) {
 			if ticks%5 == 0 {
 				s.health.Sample(now)
 				s.recordIPsec(now)
+				s.Read(func(state *State) {
+					if state.meshEnabled() {
+						s.meshLive.Tick(state.Mesh, now)
+					}
+				})
 			}
 			if ticks%86400 == 0 {
 				s.RenewIPsec(now)

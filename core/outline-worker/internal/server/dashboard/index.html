@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ghostlink server</title>
-<link rel="icon" href="mark.svg"><link rel="stylesheet" href="app.css"><script src="app.js" defer></script>
+<link rel="icon" href="mark.svg"><link rel="stylesheet" href="app.css"><script src="app.js" defer></script><script src="mesh-map.js" defer></script><script src="mesh.js" defer></script>
 </head>
 <body>
 <section id="signin" class="signin" hidden>
@@ -19,6 +19,7 @@
       <button class="nav active" data-view="overview">Overview</button>
       <button class="nav" data-view="users">Users</button>
       <button class="nav" data-view="rules">Rules for everyone</button>
+      <button class="nav" data-view="mesh">Mesh</button>
       <button class="nav" data-view="settings">Settings</button>
     </nav>
     <button class="text" id="signout">Sign out</button>
@@ -54,6 +55,13 @@
     <section id="view-rules" hidden>
       <header><div><h1>Rules for everyone</h1><p>Blocked traffic is refused on the server. Changes apply at once.</p></div></header>
       <form id="global-rules" class="card"></form>
+    </section>
+
+    <section id="view-mesh" hidden>
+      <header><div><div class="eyebrow" id="mesh-address"></div><h1>Mesh</h1><p id="mesh-stats">A private network between your Linux servers.</p></div><div class="actions" id="mesh-tools"><button class="primary" id="mesh-add" type="button">Add node</button><button class="secondary" id="mesh-rules" type="button">Access rules</button></div></header>
+      <div class="card" id="mesh-off" hidden><h2>Connect your servers privately</h2><p class="hint">Every Linux server you add gets a private address (100.96.x.x by default) and reaches the others directly over WireGuard, or through a relay when it is behind NAT. This server coordinates the mesh; you see it here as a live map. Windows servers and the Ghostlink app as a node will follow in a later version.</p><div class="actions"><button class="primary" id="mesh-enable" type="button">Turn on mesh</button></div></div>
+      <div id="mesh-on" class="mesh-body" hidden><svg id="mesh-svg" role="img" aria-label="Mesh map: nodes and the links between them"></svg><aside id="mesh-side" class="card mesh-side" aria-label="Mesh details"></aside></div>
+      <div class="mesh-legend" id="mesh-legend" hidden><span class="legend direct">Direct</span><span class="legend relay">Through the relay</span><span class="legend down">Down</span><span class="legend-shape ring">Relay in use</span><span class="legend-shape square">Shares subnets</span><span>Drag nodes to arrange the map.</span></div>
     </section>
 
     <section id="view-settings" hidden>
@@ -128,6 +136,32 @@
 </dialog>
 
 <dialog id="rules-dialog"><form id="user-rules"></form></dialog>
+
+<dialog id="mesh-invite-dialog">
+  <h2>Add a node</h2>
+  <p class="hint">Creates an invite and one command to run on the Linux server you want to add (Ubuntu, Debian, Fedora, RHEL and similar, with kernel WireGuard).</p>
+  <form id="mesh-invite-form">
+    <label>Tags <small>for access rules, comma-separated; for example web or db</small><input id="mesh-invite-tags" spellcheck="false" autocomplete="off"></label>
+    <div class="row3"><label>Uses<input id="mesh-invite-uses" type="number" min="1" max="1000" value="1"></label><label>Valid for (hours)<input id="mesh-invite-hours" type="number" min="1" max="2160" value="24"></label></div>
+    <label class="check"><input type="checkbox" id="mesh-invite-relay"> Relay for nodes behind NAT (needs a public address)</label>
+    <label class="check"><input type="checkbox" id="mesh-invite-approval"> Wait for my approval before it joins</label>
+    <p class="error" id="mesh-invite-error" hidden></p>
+    <div class="actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Create invite</button></div>
+  </form>
+  <div id="mesh-invite-result" hidden>
+    <label>Run this on the server<textarea id="mesh-invite-command" rows="5" readonly spellcheck="false"></textarea></label>
+    <p class="hint" id="mesh-invite-expiry"></p>
+    <div class="actions"><button type="button" class="secondary" id="mesh-invite-copy">Copy command</button><button type="button" class="primary" data-close>Done</button></div>
+  </div>
+</dialog>
+
+<dialog id="mesh-rules-dialog"><form id="mesh-rules-form">
+  <h2>Access rules</h2>
+  <p class="hint">One rule per line: <code>FROM TO PROTOCOL [PORTS]</code>, where FROM and TO are <code>*</code>, <code>tag:NAME</code> or <code>node:NAME</code>, the protocol is tcp, udp, icmp or any, and ports look like 5432 or 8000-8100. With no rules, every node reaches every node; with rules, only matching traffic passes (replies always do).</p>
+  <textarea id="mesh-rules-text" rows="8" spellcheck="false" placeholder="tag:web tag:db tcp 5432"></textarea>
+  <p class="error" id="mesh-rules-error" hidden></p>
+  <div class="actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Save rules</button></div>
+</form></dialog>
 
 <dialog id="confirm-dialog" class="narrow"><h2 id="confirm-title"></h2><p id="confirm-text"></p><div class="actions"><button type="button" class="secondary" data-close>Cancel</button><button type="button" class="danger" id="confirm-yes"></button></div></dialog>
 </body>

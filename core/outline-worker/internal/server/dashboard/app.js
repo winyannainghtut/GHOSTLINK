@@ -302,11 +302,12 @@ document.querySelectorAll('dialog [data-close]').forEach(b => b.addEventListener
 async function show(view) {
   state.view = view; notice('');
   document.querySelectorAll('.nav').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-  for (const v of ['overview', 'users', 'rules', 'settings']) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ['overview', 'users', 'rules', 'mesh', 'settings']) $(`#view-${v}`).hidden = v !== view;
   try {
     if (view === 'overview') await loadOverview();
     if (view === 'users') await loadUsers();
     if (view === 'rules') await loadGlobalRules();
+    if (view === 'mesh') await loadMesh();
     if (view === 'settings') await loadSettings();
   } catch (error) { notice(error.message, true); }
 }

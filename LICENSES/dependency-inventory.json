@@ -5296,234 +5296,8 @@
   },
   {
     "ecosystem": "go",
-    "name": "software.sslmate.com/src/go-pkcs12",
-    "version": "v0.7.4",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/sys",
-    "version": "v0.49.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/crypto",
-    "version": "v0.58.1-0.20261009181718-2f1f834330b2",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/gobwas/pool",
-    "version": "v0.2.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/mdlayher/netlink",
-    "version": "v1.11.2",
-    "notices": [
-      "LICENSE.md"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/strongswan/govici",
-    "version": "v0.8.2",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/miekg/dns",
-    "version": "v1.1.72",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "go.uber.org/zap",
-    "version": "v1.27.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/vishvananda/netns",
-    "version": "v0.0.5",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/sing-box",
-    "version": "v1.14.4",
-    "notices": [
-      "LICENSE",
-      "common/ja3/LICENSE",
-      "common/windivert/assets/LICENSE.txt"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "rsc.io/qr",
-    "version": "v0.2.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.zx2c4.com/wintun",
-    "version": "v0.0.0-20230126152724-0fa3db229ce2",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/time",
-    "version": "v0.15.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/gofrs/uuid/v5",
-    "version": "v5.5.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/gobwas/httphead",
-    "version": "v0.1.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/google/btree",
-    "version": "v1.1.3",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/cors",
-    "version": "v1.2.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/sing-shadowsocks2",
-    "version": "v0.2.2-0.20260929152114-a69d1086332b",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/text",
-    "version": "v0.43.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/nftables",
-    "version": "v0.3.0-mod.4",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/amnezia-vpn/amneziawg-go/v3",
-    "version": "v3.1.20260828",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/fsnotify/fsnotify",
-    "version": "v1.9.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/florianl/go-nfqueue/v2",
-    "version": "v2.1.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/database64128/netx-go",
-    "version": "v0.1.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/exp",
-    "version": "v0.0.0-20260410095643-746e56fc9e2f",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/ws",
-    "version": "v0.0.0-20231204124109-acfe8907c854",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "go.uber.org/multierr",
-    "version": "v1.11.0",
-    "notices": [
-      "LICENSE.txt"
-    ]
-  },
-  {
-    "ecosystem": "go",
     "name": "github.com/sagernet/sing-mux",
     "version": "v0.3.10-0.20260929204512-caf09fe32475",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/sync",
-    "version": "v0.24.0",
     "notices": [
       "LICENSE"
     ]
@@ -5538,8 +5312,147 @@
   },
   {
     "ecosystem": "go",
+    "name": "github.com/andybalholm/brotli",
+    "version": "v1.2.7",
+    "notices": [
+      "LICENSE",
+      "flate/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/gofrs/uuid/v5",
+    "version": "v5.5.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
     "name": "github.com/sagernet/sing-tun",
     "version": "v0.9.7-0.20261023115432-040db71fcd33",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/cors",
+    "version": "v1.2.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "go.uber.org/multierr",
+    "version": "v1.11.0",
+    "notices": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/net",
+    "version": "v0.62.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing",
+    "version": "v0.9.7-0.20261023115459-5dc452e537bf",
+    "notices": [
+      "LICENSE",
+      "contrab/freelru/LICENSE",
+      "contrab/freelru/NOTICE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/vishvananda/netns",
+    "version": "v0.0.5",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/nftables",
+    "version": "v0.3.0-mod.4",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/crypto",
+    "version": "v0.58.1-0.20261009181718-2f1f834330b2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/netlink",
+    "version": "v0.0.0-20260814022025-64455d367bbf",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/mod",
+    "version": "v0.41.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/godbus/dbus/v5",
+    "version": "v5.2.2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "software.sslmate.com/src/go-pkcs12",
+    "version": "v0.7.4",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/time",
+    "version": "v0.15.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/mdlayher/socket",
+    "version": "v0.6.0",
+    "notices": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/bbolt",
+    "version": "v0.0.0-20260915102804-500ee1e84832",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "lukechampine.com/blake3",
+    "version": "v1.3.0",
     "notices": [
       "LICENSE"
     ]
@@ -5554,6 +5467,30 @@
   },
   {
     "ecosystem": "go",
+    "name": "github.com/gobwas/pool",
+    "version": "v0.2.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-vmess",
+    "version": "v0.2.9-0.20261019223527-a0c58542bd9d",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/klauspost/cpuid/v2",
+    "version": "v2.3.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
     "name": "github.com/database64128/tfo-go/v2",
     "version": "v2.3.2",
     "notices": [
@@ -5562,8 +5499,64 @@
   },
   {
     "ecosystem": "go",
-    "name": "golang.org/x/net",
-    "version": "v0.62.0",
+    "name": "github.com/sagernet/fswatch",
+    "version": "v0.1.2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-snell",
+    "version": "v0.0.0-20260904135315-bc5a12ac736f",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-shadowsocks2",
+    "version": "v0.2.2-0.20260929152114-a69d1086332b",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "go.uber.org/zap",
+    "version": "v1.27.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/amnezia-vpn/amneziawg-go/v3",
+    "version": "v3.1.20260828",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/go-chi/render",
+    "version": "v1.0.3",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/florianl/go-nfqueue/v2",
+    "version": "v2.1.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/gobwas/httphead",
+    "version": "v0.1.0",
     "notices": [
       "LICENSE"
     ]
@@ -5587,8 +5580,154 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-snell",
-    "version": "v0.0.0-20260904135315-bc5a12ac736f",
+    "name": "github.com/go-chi/chi/v5",
+    "version": "v5.3.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/sys",
+    "version": "v0.49.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/google/btree",
+    "version": "v1.1.3",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/fsnotify/fsnotify",
+    "version": "v1.9.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/gvisor",
+    "version": "v0.0.0-20260727.0-sing-box-mod.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.zx2c4.com/wireguard/wgctrl",
+    "version": "v0.0.0-20241231184526-a9ab2273dd10",
+    "notices": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/text",
+    "version": "v0.43.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/database64128/netx-go",
+    "version": "v0.1.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/mdlayher/genetlink",
+    "version": "v1.3.2",
+    "notices": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/strongswan/govici",
+    "version": "v0.8.2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-box",
+    "version": "v1.14.4",
+    "notices": [
+      "LICENSE",
+      "common/ja3/LICENSE",
+      "common/windivert/assets/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/mdlayher/netlink",
+    "version": "v1.11.2",
+    "notices": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/wireguard-go",
+    "version": "v0.0.8-0.20261022215841-e4d85ef2ed38",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/miekg/dns",
+    "version": "v1.1.72",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.zx2c4.com/wintun",
+    "version": "v0.0.0-20230126152724-0fa3db229ce2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/exp",
+    "version": "v0.0.0-20260410095643-746e56fc9e2f",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "rsc.io/qr",
+    "version": "v0.2.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/smux",
+    "version": "v1.5.50-sing-box-mod.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/sync",
+    "version": "v0.24.0",
     "notices": [
       "LICENSE"
     ]
@@ -5603,59 +5742,11 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/go-chi/render",
-    "version": "v1.0.3",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/mod",
-    "version": "v0.41.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/wireguard-go",
-    "version": "v0.0.8-0.20261022215841-e4d85ef2ed38",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/godbus/dbus/v5",
-    "version": "v5.2.2",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "lukechampine.com/blake3",
-    "version": "v1.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
     "name": "github.com/metacubex/utls",
     "version": "v1.8.7",
     "notices": [
       "LICENSE",
       "dicttls/LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/sing-vmess",
-    "version": "v0.2.9-0.20261019223527-a0c58542bd9d",
-    "notices": [
-      "LICENSE"
     ]
   },
   {
@@ -5676,49 +5767,8 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/andybalholm/brotli",
-    "version": "v1.2.7",
-    "notices": [
-      "LICENSE",
-      "flate/LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/mdlayher/socket",
-    "version": "v0.6.0",
-    "notices": [
-      "LICENSE.md"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/gvisor",
-    "version": "v0.0.0-20260727.0-sing-box-mod.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/fswatch",
-    "version": "v0.1.2",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/go-chi/chi/v5",
-    "version": "v5.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/netlink",
-    "version": "v0.0.0-20260814022025-64455d367bbf",
+    "name": "github.com/sagernet/ws",
+    "version": "v0.0.0-20231204124109-acfe8907c854",
     "notices": [
       "LICENSE"
     ]
@@ -5733,42 +5783,8 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/klauspost/cpuid/v2",
-    "version": "v2.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/smux",
-    "version": "v1.5.50-sing-box-mod.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
     "name": "github.com/go-ole/go-ole",
     "version": "v1.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/sing",
-    "version": "v0.9.7-0.20261023115459-5dc452e537bf",
-    "notices": [
-      "LICENSE",
-      "contrab/freelru/LICENSE",
-      "contrab/freelru/NOTICE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/bbolt",
-    "version": "v0.0.0-20260915102804-500ee1e84832",
     "notices": [
       "LICENSE"
     ]

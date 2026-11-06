@@ -1,0 +1,36 @@
+name: Mesh end-to-end
+# Builds ghostlink-server and ghostlink-mesh and runs tests/mesh/e2e.sh: a coordinator and mesh
+# nodes in network namespaces with kernel WireGuard, two of them behind NAT (relayed), access
+# rules, subnet sharing, names, disable/remove and a clean host afterwards.
+on:
+  push:
+    paths:
+      - 'core/outline-worker/**'
+      - 'packages/linux/mesh/**'
+      - 'tests/mesh/**'
+      - 'scripts/build-linux-mesh.sh'
+      - 'scripts/install-mesh.sh'
+      - '.github/workflows/mesh.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Mesh with kernel WireGuard in network namespaces
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: core/outline-worker/go.sum
+      - name: Build the coordinator and the agent
+        working-directory: core/outline-worker
+        run: |
+          mkdir -p ../../artifacts/mesh-bin
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ../../artifacts/mesh-bin/ghostlink-server ./cmd/ghostlink-server
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -o ../../artifacts/mesh-bin/ghostlink-mesh ./cmd/ghostlink-mesh
+      - name: End-to-end
+        run: sudo bash tests/mesh/e2e.sh artifacts/mesh-bin

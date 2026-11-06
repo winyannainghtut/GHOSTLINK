@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use ghostlink_contracts::{
-    Action, ConnectionState, ProtocolPatch, Request, Response, RoutingPolicy, ServerOp,
-    ServerPatch, SplitMode, TrafficRules, UserChange, SCHEMA_VERSION,
+    Action, ConnectionState, MeshInvite, MeshNodeChange, MeshPatch, MeshRule, ProtocolPatch,
+    Request, Response, RoutingPolicy, ServerOp, ServerPatch, SplitMode, TrafficRules, UserChange,
+    SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::{
@@ -250,6 +251,11 @@ enum ServerCommand {
         #[command(subcommand)]
         command: ServerRulesCommand,
     },
+    /// The mesh: a private network between your Linux servers, coordinated by this server.
+    Mesh {
+        #[command(subcommand)]
+        command: ServerMeshCommand,
+    },
     /// Data used by each user.
     Usage {
         #[arg(long)]
@@ -386,6 +392,97 @@ enum ServerKeysCommand {
         user: String,
         #[arg(long)]
         output: PathBuf,
+    },
+}
+#[derive(Subcommand)]
+enum ServerMeshCommand {
+    /// Mesh settings, node count and open invites.
+    Show {
+        #[arg(long)]
+        server: String,
+    },
+    /// Turn the mesh on (optionally choosing its network before nodes join).
+    Enable {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        cidr: Option<String>,
+    },
+    /// Turn the mesh off; nodes disconnect, nothing is deleted.
+    Disable {
+        #[arg(long)]
+        server: String,
+    },
+    /// Create an invite and print the one-line join command (or write it to a NEW private file).
+    Invite {
+        #[arg(long)]
+        server: String,
+        /// Tags for access rules, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        #[arg(long)]
+        uses: Option<u32>,
+        #[arg(long)]
+        hours: Option<u32>,
+        #[arg(long)]
+        relay: bool,
+        #[arg(long)]
+        approval: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Open invites.
+    Invites {
+        #[arg(long)]
+        server: String,
+    },
+    Revoke {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        invite: String,
+    },
+    /// Nodes and links (the data the app's map draws).
+    Nodes {
+        #[arg(long)]
+        server: String,
+    },
+    /// Change a node: approve it, share its subnets, tags, relay, or disable it.
+    Node {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        node: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// active (approve or enable) or disabled.
+        #[arg(long, value_parser = ["active", "disabled"])]
+        status: Option<String>,
+        #[arg(long, value_parser = ["on", "off"])]
+        relay: Option<String>,
+        /// Subnets to share (from those the node offers), comma-separated, or "none".
+        #[arg(long)]
+        routes: Option<String>,
+        #[arg(long, value_parser = ["on", "off"])]
+        masquerade: Option<String>,
+    },
+    Remove {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        node: String,
+    },
+    /// Show the access rules, or replace them with --rule "FROM TO PROTOCOL [PORTS]" (repeatable)
+    /// or --clear. Without rules every node reaches every node.
+    Rules {
+        #[arg(long)]
+        server: String,
+        #[arg(long = "rule")]
+        rules: Vec<String>,
+        #[arg(long)]
+        clear: bool,
     },
 }
 #[derive(Subcommand)]
@@ -1107,6 +1204,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                 }
             }
         },
+        ServerCommand::Mesh { command } => mesh_action(command)?,
         ServerCommand::Usage { server } => call(server, ServerOp::Metrics),
         ServerCommand::Live { server } => call(server, ServerOp::Live),
         ServerCommand::Stats {
@@ -1143,6 +1241,143 @@ fn write_private(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
+fn on_off(value: &Option<String>) -> Option<bool> {
+    value.as_deref().map(|v| v == "on")
+}
+
+fn mesh_action(command: &ServerMeshCommand) -> Result<Action, Response> {
+    let call = |server: &String, op| Action::ServerCall {
+        server: server.clone(),
+        op,
+    };
+    Ok(match command {
+        ServerMeshCommand::Show { server } => call(server, ServerOp::MeshInfo),
+        ServerMeshCommand::Enable { server, cidr } => call(
+            server,
+            ServerOp::MeshUpdate {
+                patch: MeshPatch {
+                    enabled: Some(true),
+                    cidr: cidr.clone(),
+                    ..Default::default()
+                },
+            },
+        ),
+        ServerMeshCommand::Disable { server } => call(
+            server,
+            ServerOp::MeshUpdate {
+                patch: MeshPatch {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+            },
+        ),
+        ServerMeshCommand::Invite {
+            server,
+            tags,
+            uses,
+            hours,
+            relay,
+            approval,
+            output,
+        } => {
+            if output.as_ref().is_some_and(|p| p.exists()) {
+                return Err(Response::err(
+                    "invalid_request",
+                    "--output must name a new file; it will not overwrite an existing one",
+                ));
+            }
+            call(
+                server,
+                ServerOp::MeshInviteCreate {
+                    invite: MeshInvite {
+                        tags: tags.clone(),
+                        uses: *uses,
+                        expires_hours: *hours,
+                        relay: *relay,
+                        approval: *approval,
+                        note: None,
+                    },
+                },
+            )
+        }
+        ServerMeshCommand::Invites { server } => call(server, ServerOp::MeshInviteList),
+        ServerMeshCommand::Revoke { server, invite } => call(
+            server,
+            ServerOp::MeshInviteDelete {
+                invite: invite.clone(),
+            },
+        ),
+        ServerMeshCommand::Nodes { server } => call(server, ServerOp::MeshTopology),
+        ServerMeshCommand::Node {
+            server,
+            node,
+            name,
+            tags,
+            status,
+            relay,
+            routes,
+            masquerade,
+        } => {
+            let approved_routes = routes.as_deref().map(|r| {
+                if r == "none" {
+                    Vec::new()
+                } else {
+                    r.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                }
+            });
+            call(
+                server,
+                ServerOp::MeshNodeUpdate {
+                    node: node.clone(),
+                    change: MeshNodeChange {
+                        name: name.clone(),
+                        tags: tags.clone(),
+                        status: status.clone(),
+                        relay: on_off(relay),
+                        approved_routes,
+                        masquerade: on_off(masquerade),
+                    },
+                },
+            )
+        }
+        ServerMeshCommand::Remove { server, node } => {
+            call(server, ServerOp::MeshNodeDelete { node: node.clone() })
+        }
+        ServerMeshCommand::Rules {
+            server,
+            rules,
+            clear,
+        } => {
+            if rules.is_empty() && !clear {
+                return Ok(call(server, ServerOp::MeshRulesGet));
+            }
+            let mut parsed = Vec::new();
+            for rule in rules {
+                let parts: Vec<&str> = rule.split_whitespace().collect();
+                if !(3..=4).contains(&parts.len()) {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "Use --rule \"FROM TO PROTOCOL [PORTS]\", e.g. --rule \"tag:web tag:db tcp 5432\"",
+                    ));
+                }
+                parsed.push(MeshRule {
+                    from: parts[0].into(),
+                    to: parts[1].into(),
+                    protocol: parts[2].into(),
+                    ports: parts
+                        .get(3)
+                        .map(|p| p.split(',').map(str::to_string).collect())
+                        .unwrap_or_default(),
+                });
+            }
+            call(server, ServerOp::MeshRulesSet { rules: parsed })
+        }
+    })
+}
+
 fn finish_server_response(
     command: &ServerCommand,
     response: &mut Response,
@@ -1151,6 +1386,25 @@ fn finish_server_response(
         return Ok(());
     };
     match command {
+        ServerCommand::Mesh {
+            command:
+                ServerMeshCommand::Invite {
+                    output: Some(path), ..
+                },
+        } => {
+            let command = data["command"].as_str().unwrap_or_default().to_string();
+            if write_private(path, &format!("{command}\n")).is_err() {
+                return Err(Response::err(
+                    "permission_denied",
+                    "The invite was created, but the NEW private --output file could not be written",
+                ));
+            }
+            if let Some(invite) = data.as_object_mut() {
+                invite.remove("invite");
+                invite.remove("command");
+            }
+            data["saved_to"] = json!(path.display().to_string());
+        }
         ServerCommand::Keys {
             command: ServerKeysCommand::List {
                 show_keys: false, ..

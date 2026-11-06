@@ -27,6 +27,9 @@ Options:
   --hostname HOST   public IP or DNS name VPN clients use (default: keep the current one, or
                     detect this server's public IP on first install)
   --ipsec           also start the IKEv2/IPsec component (iPhone, iPad, Mac) and turn on IKEv2
+  --mesh            also turn on the mesh (a private network between your Linux servers),
+                    install the ghostlink-mesh agent and join this server as the relay
+  --mesh-package F  with --mesh: install this ghostlink-mesh .deb/.rpm (no download)
   --open-firewall   allow the server's ports in ufw or firewalld when one is active
                     (a firewall that is off is never turned on)
   --no-docker       do not install Docker; stop if it is missing
@@ -46,6 +49,7 @@ trap cleanup EXIT
 
 main() {
     local version="" package="" hostname="" ipsec=0 open_firewall=0 docker_install=1 reinstall=0 add_swap=0
+    local mesh=0 mesh_package=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
@@ -55,6 +59,8 @@ main() {
             --hostname) [ $# -ge 2 ] || die "--hostname needs a value"; hostname=$2; shift 2 ;;
             --hostname=*) hostname=${1#--hostname=}; shift ;;
             --ipsec) ipsec=1; shift ;;
+            --mesh) mesh=1; shift ;;
+            --mesh-package) [ $# -ge 2 ] || die "--mesh-package needs a file"; mesh=1; mesh_package=$2; shift 2 ;;
             --open-firewall) open_firewall=1; shift ;;
             --no-docker) docker_install=0; shift ;;
             --reinstall) reinstall=1; shift ;;
@@ -69,7 +75,7 @@ main() {
     [ "$(id -u)" = 0 ] || die "run as root, for example: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh | sudo bash"
     [ "$(uname -s)" = Linux ] || die "the Ghostlink server runs on Linux only"
     if [ -n "$version" ] && ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-        die "--version must look like 0.5.0"
+        die "--version must look like 0.6.0"
     fi
     if [ -n "$hostname" ] && ! [[ "$hostname" =~ ^[A-Za-z0-9.:-]{1,253}$ ]]; then
         die "--hostname must be an IP address or a DNS name"
@@ -77,6 +83,10 @@ main() {
     if [ -n "$package" ]; then
         [ -f "$package" ] || die "$package does not exist"
         package=$(cd "$(dirname "$package")" && pwd)/$(basename "$package")
+    fi
+    if [ -n "$mesh_package" ]; then
+        [ -f "$mesh_package" ] || die "$mesh_package does not exist"
+        mesh_package=$(cd "$(dirname "$mesh_package")" && pwd)/$(basename "$mesh_package")
     fi
 
     # --- this machine ---
@@ -173,15 +183,7 @@ main() {
     else
         if [ -n "$installed" ]; then say "Upgrading Ghostlink server $installed to $version"; else say "Installing Ghostlink server $version"; fi
         if [ -z "$package" ]; then
-            work=$(mktemp -d)
-            local base="https://github.com/$REPO/releases/download/v$version"
-            curl -fL --retry 3 --progress-bar -o "$work/$file" "$base/$file" ||
-                die "could not download $base/$file (is v$version published, with a package for this system?)"
-            curl -fsSL --retry 3 -o "$work/SHA256SUMS.txt" "$base/SHA256SUMS.txt" || die "could not download the release checksums"
-            awk -v f="$file" '$2 == f || $2 == "*" f' "$work/SHA256SUMS.txt" > "$work/expected.txt"
-            [ -s "$work/expected.txt" ] || die "SHA256SUMS.txt does not list $file"
-            (cd "$work" && sha256sum --check --status expected.txt) || die "checksum mismatch for $file; not installing it"
-            say "Checksum verified"
+            download_verified "$version" "$file"
             package="$work/$file"
         fi
         if [ "$family" = deb ]; then
@@ -213,9 +215,50 @@ main() {
         fi
     fi
 
+    # --- optional mesh: this server coordinates it and joins it as the relay ---
+    local mesh_node=0
+    if [ "$mesh" = 1 ]; then
+        say "Turning on the mesh"
+        ghostlink-server mesh enable >/dev/null || die "could not turn on the mesh; see: sudo ghostlink-server logs"
+        modprobe wireguard >/dev/null 2>&1 || true
+        if ! ip link add glmeshtest0 type wireguard >/dev/null 2>&1; then
+            warn "this kernel has no WireGuard (Linux 5.6 or newer is needed), so this server cannot be a mesh node. It still coordinates the mesh; add other servers with: sudo ghostlink-server mesh invite"
+        else
+            ip link del glmeshtest0 >/dev/null 2>&1 || true
+            local mesh_file
+            if [ -n "$mesh_package" ]; then
+                mesh_file=$(basename "$mesh_package")
+                case "$family:$mesh_file" in
+                    deb:ghostlink-mesh_*_"$deb_arch".deb | rpm:ghostlink-mesh-*."$rpm_arch".rpm) ;;
+                    *) die "$mesh_file is not a ghostlink-mesh package for this system" ;;
+                esac
+            else
+                if [ "$family" = deb ]; then mesh_file="ghostlink-mesh_${version}-1_${deb_arch}.deb"; else mesh_file="ghostlink-mesh-${version}-1.${rpm_arch}.rpm"; fi
+                download_verified "$version" "$mesh_file"
+                mesh_package="$work/$mesh_file"
+            fi
+            say "Installing the mesh agent"
+            if [ "$family" = deb ]; then
+                apt-get install -y -o Dpkg::Options::=--force-confold "$mesh_package" >/dev/null || die "installing the mesh agent failed"
+            else
+                pkg_manager install -y "$mesh_package" >/dev/null || die "installing the mesh agent failed"
+            fi
+            if [ -f /var/lib/ghostlink-mesh/node.json ]; then
+                say "This server is already a mesh node; its agent is up to date"
+            else
+                say "Joining this server to the mesh as the relay"
+                ghostlink-server mesh join-here >/dev/null || die "joining the mesh failed; see: sudo ghostlink-mesh status"
+            fi
+            mesh_node=1
+        fi
+    fi
+
     # --- ports ---
     local ports=()
     mapfile -t ports < <(server_ports || true)
+    if [ "$mesh_node" = 1 ] || [ -f /var/lib/ghostlink-mesh/node.json ]; then
+        ports+=("$(jq -r '"\(.listen_port // 51820)/udp  mesh (this server as a node)"' /var/lib/ghostlink-mesh/node.json 2>/dev/null || echo '51820/udp  mesh (this server as a node)')")
+    fi
     [ ${#ports[@]} -gt 0 ] || warn "could not read the server's ports; run: sudo ghostlink-server status"
     if [ "$open_firewall" = 1 ] && [ ${#ports[@]} -gt 0 ]; then
         open_ports "${ports[@]}"
@@ -239,6 +282,7 @@ Next steps:
   - Or on this server:  sudo ghostlink-server user add Alice
                         sudo ghostlink-server key add Alice amneziawg
   - iPhone/iPad/Mac:    run this installer again with --ipsec, then: sudo ghostlink-server key add Alice ikev2
+  - Mesh of servers:    run this installer again with --mesh, then: sudo ghostlink-server mesh invite --tags web
   - All commands:       sudo ghostlink-server help
   - Guide: https://github.com/$REPO/blob/main/docs/deployment/ghostlink-server.md
 EOF
@@ -254,6 +298,18 @@ add_swap_file() {
     mkswap /swapfile >/dev/null
     swapon /swapfile
     grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+}
+
+download_verified() { # VERSION FILE: download a release file into $work and check it against SHA256SUMS.txt
+    local base="https://github.com/$REPO/releases/download/v$1" file=$2
+    [ -n "$work" ] || work=$(mktemp -d)
+    curl -fL --retry 3 --progress-bar -o "$work/$file" "$base/$file" ||
+        die "could not download $base/$file (is v$1 published, with a package for this system?)"
+    [ -s "$work/SHA256SUMS.txt" ] || curl -fsSL --retry 3 -o "$work/SHA256SUMS.txt" "$base/SHA256SUMS.txt" || die "could not download the release checksums"
+    awk -v f="$file" '$2 == f || $2 == "*" f' "$work/SHA256SUMS.txt" > "$work/expected.txt"
+    [ -s "$work/expected.txt" ] || die "SHA256SUMS.txt does not list $file"
+    (cd "$work" && sha256sum --check --status expected.txt) || die "checksum mismatch for $file; not installing it"
+    say "Checksum of $file verified"
 }
 
 pkg_manager() {
@@ -303,6 +359,7 @@ server_ports() { # "PORT/PROTO  service" for everything clients connect to
         + (if .amneziawg.enabled then ["\(.amneziawg.port)/udp  AmneziaWG"] else [] end)
         + (if (.dashboard.public // false) and ((.dashboard.port // 0) > 0) then ["\(.dashboard.port)/tcp  web dashboard (public)"] else [] end)
         + (if (.ipsec.ikev2_enabled // false) or (.ipsec.ipsec_enabled // false) then ["500/udp  IKEv2/IPsec", "4500/udp  IKEv2/IPsec"] else [] end)
+        + (if (.mesh.enabled // false) and ((.mesh.port // 0) > 0) then ["\(.mesh.port)/tcp  mesh coordinator (for mesh agents)"] else [] end)
         | .[]' "$STATE/state.json"
 }
 

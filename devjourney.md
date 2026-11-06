@@ -8,6 +8,39 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.6.0 — mesh of Linux servers
+
+The user asked to use Ghostlink as a "service mesh": an internal overlay between servers, easy to set up, and visible as a graphical map in the app. They chose:
+- **Linux servers first.** Windows servers and Windows clients come later; the docs say so.
+- **Direct links with a relay fallback.**
+- **Tag-based access rules.**
+- **Opt-in shared subnets per node.**
+
+They pointed to ZeroTier One as a reference. It was used for design ideas only; no code was taken (agent MPL-2.0, controller non-commercial).
+
+Delivered:
+- **the coordinator** in the Ghostlink server: its own pinned TLS port, invites, long-poll sync, path state machine, rules compiled per node;
+- **the `ghostlink-mesh` agent and packages:** kernel WireGuard, firewall chains, `.mesh` names, ping latency;
+- **the installers:** `install-mesh.sh --join` and `install-server.sh --mesh`;
+- **the live map** in the app and the dashboard (shared `mesh-map.js`);
+- **CLI and server commands**;
+- **CI coverage:** an end-to-end test with NAT namespaces, and a package smoke test against the installed server.
+
+Iterations fixed:
+- the agent not cancelling its long-poll on stop;
+- a cleanup check racing the teardown;
+- a Bash variable clash;
+- a deadlock risk between topology and config;
+- a slice pointer taken before appends;
+- 64-bit generations that JavaScript cannot hold;
+- a force-directed map layout that crowded full meshes (now a ring).
+
+An old flaky Rust test (it picked a PID that was one of its own threads) was fixed.
+
+Not verified: real cloud servers and NAT routers; RPM installs; kernels without WireGuard.
+
+**Next (decided with the user):** after v0.6.0, a frosted-glass redesign of **both** the server dashboard and the desktop app, in React + Vite + TypeScript + Tailwind + Lucide with a shared component library, dashboard first. The spec covers glass cards, slow SVG glass waves with Subtle/Calm/Still, the Obsidian/Titanium/Daylight finishes, sentence-case labels and tabular numbers. Keep the strict CSPs and bundle fonts locally.
+
 ### Later on November 6: v0.5.0 — IKEv2/IPsec for iPhone, iPad and Mac
 
 The user asked for native iOS VPN protocols:

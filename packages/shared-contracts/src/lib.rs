@@ -183,6 +183,98 @@ pub enum ServerOp {
         #[serde(default)]
         on_demand: bool,
     },
+    /// The mesh (private network between Linux servers) this server coordinates.
+    MeshInfo,
+    MeshUpdate {
+        patch: MeshPatch,
+    },
+    /// A one-time invite; the answer carries the join command (a secret until used).
+    MeshInviteCreate {
+        invite: MeshInvite,
+    },
+    MeshInviteList,
+    MeshInviteDelete {
+        invite: String,
+    },
+    MeshNodeUpdate {
+        node: String,
+        change: MeshNodeChange,
+    },
+    MeshNodeDelete {
+        node: String,
+    },
+    MeshRulesGet,
+    MeshRulesSet {
+        rules: Vec<MeshRule>,
+    },
+    /// Nodes and links for the map: online state, direct or relayed paths, latency, traffic.
+    MeshTopology,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The mesh network, e.g. 100.96.0.0/16 (only before nodes join).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cidr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Let nodes ping each other even when rules restrict traffic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshInvite {
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uses: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_hours: Option<u32>,
+    /// Nodes joining with it relay for nodes behind NAT.
+    #[serde(default)]
+    pub relay: bool,
+    /// Nodes joining with it wait for approval.
+    #[serde(default)]
+    pub approval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshNodeChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// active or disabled
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<bool>,
+    /// Subnets the node offers that are shared with the mesh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_routes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masquerade: Option<bool>,
+}
+
+/// Allows traffic From nodes To nodes ("*", "tag:NAME" or "node:NAME").
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshRule {
+    pub from: String,
+    pub to: String,
+    /// tcp, udp, icmp or any
+    pub protocol: String,
+    /// For tcp/udp: "5432" or "8000-8100"; empty means every port.
+    #[serde(default)]
+    pub ports: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -352,6 +444,16 @@ impl ServerOp {
             Self::KeyQr { .. } => "server_key_qr",
             Self::Kit { .. } => "server_kit",
             Self::KeyProfile { .. } => "server_key_profile",
+            Self::MeshInfo => "server_mesh_info",
+            Self::MeshUpdate { .. } => "server_mesh_update",
+            Self::MeshInviteCreate { .. } => "server_mesh_invite_create",
+            Self::MeshInviteList => "server_mesh_invite_list",
+            Self::MeshInviteDelete { .. } => "server_mesh_invite_delete",
+            Self::MeshNodeUpdate { .. } => "server_mesh_node_update",
+            Self::MeshNodeDelete { .. } => "server_mesh_node_delete",
+            Self::MeshRulesGet => "server_mesh_rules_get",
+            Self::MeshRulesSet { .. } => "server_mesh_rules_set",
+            Self::MeshTopology => "server_mesh_topology",
         }
     }
 }
@@ -663,6 +765,16 @@ mod tests {
             Action::ServerCall {
                 server: "x".into(),
                 op: ServerOp::Kit { user: "1".into() },
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::MeshTopology,
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::MeshInviteCreate {
+                    invite: Default::default(),
+                },
             },
             Action::ServerCall {
                 server: "x".into(),
