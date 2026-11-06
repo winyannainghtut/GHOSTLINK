@@ -1,0 +1,35 @@
+name: Web UI
+# Typechecks and builds the web UI (ui/) and checks that the builds committed in
+# core/outline-worker/internal/server/dashboard (embedded in ghostlink-server) and apps/desktop/ui
+# (bundled by the Tauri desktop app) are exactly what the sources produce.
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  dashboard:
+    name: Dashboard and desktop builds are reproducible
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install (lockfile, no install scripts)
+        working-directory: ui
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck and build
+        working-directory: ui
+        run: npm run build
+      - name: Desktop request mapping matches the Rust contract
+        working-directory: ui
+        run: npm test
+      - name: The committed builds match
+        run: |
+          git status --porcelain -- core/outline-worker/internal/server/dashboard apps/desktop/ui | tee changes.txt
+          if [ -s changes.txt ]; then
+            echo "Rebuild the web UI (cd ui && npm ci && npm run build) and commit the result." >&2
+            git diff --stat -- core/outline-worker/internal/server/dashboard apps/desktop/ui >&2
+            exit 1
+          fi

@@ -75,7 +75,7 @@ main() {
     [ "$(id -u)" = 0 ] || die "run as root, for example: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh | sudo bash"
     [ "$(uname -s)" = Linux ] || die "the Ghostlink server runs on Linux only"
     if [ -n "$version" ] && ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-        die "--version must look like 0.6.0"
+        die "--version must look like 0.7.0"
     fi
     if [ -n "$hostname" ] && ! [[ "$hostname" =~ ^[A-Za-z0-9.:-]{1,253}$ ]]; then
         die "--hostname must be an IP address or a DNS name"

@@ -12,7 +12,7 @@ Each Linux job installs pinned nfpm 2.48.0, then smoke-tests the client `.deb` a
 
 ## Cutting a release
 
-1. Set the new version in every declaration: `[workspace.package]` in `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, the version label in `apps/desktop/ui/index.html`, `Ghostlink` in `core/outline-worker/internal/version/version.go` (shared by the worker and the server), and `WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`. Update the lockfiles with a normal build, and update the CLI version assertion in `tests/integration/control-plane.test.mjs`.
+1. Set the new version in every declaration: `[workspace.package]` in `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, `VERSION` in `ui/desktop/src/version.ts` (then rebuild the web UI: `cd ui && npm run build`, and commit `apps/desktop/ui`), `Ghostlink` in `core/outline-worker/internal/version/version.go` (shared by the worker and the server), and `WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`. Update the lockfiles with a normal build, and update the CLI version assertion in `tests/integration/control-plane.test.mjs`.
 2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a new `## [<version>] - <date>` heading; the release notes include that section (`scripts/changelog-section.mjs`).
 3. Run `node scripts/release-version.mjs`. It prints the version, or names every declaration that disagrees.
 4. Regenerate notices if dependencies changed: `python scripts/collect-licenses.py`.

@@ -37,10 +37,10 @@ async fn vpn_request(action: Action) -> Response {
     .await
 }
 
-/// Saves a connection kit page or an Apple VPN profile in the user's Downloads folder. WebView2
-/// cannot download blob: links from the app's custom scheme, so the shell writes the file
-/// itself: a name built from safe characters with an allowlisted extension (html or
-/// mobileconfig), never overwriting an existing file, at most 4 MiB.
+/// Saves a connection kit page, an Apple VPN profile or a WireGuard/AmneziaWG .conf in the user's
+/// Downloads folder. WebView2 cannot download blob: links from the app's custom scheme, so the
+/// shell writes the file itself: a name built from safe characters with an allowlisted extension
+/// (html, mobileconfig or conf), never overwriting an existing file, at most 4 MiB.
 #[tauri::command]
 fn save_download(
     app: tauri::AppHandle,
@@ -51,6 +51,7 @@ fn save_download(
     let extension = match extension.as_deref() {
         None | Some("html") => "html",
         Some("mobileconfig") => "mobileconfig",
+        Some("conf") => "conf",
         Some(_) => return Err("This kind of file cannot be saved".into()),
     };
     use std::io::Write;

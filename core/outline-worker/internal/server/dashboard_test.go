@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +186,60 @@ func TestDashboardLoginThrottling(t *testing.T) {
 	}
 	if _, status := h.login(t, h.token); status != http.StatusTooManyRequests {
 		t.Fatalf("after 20 wrong tokens even the right one must wait: %d", status)
+	}
+}
+
+// The dashboard is built from ui/ (npm run build:dashboard) into the embedded directory. The
+// build must be complete, flat (the server serves only top-level names) and CSP-safe: no inline
+// scripts or styles, nothing loaded from elsewhere.
+func TestDashboardBuildIsCompleteAndCSPSafe(t *testing.T) {
+	index, err := dashboardFiles.ReadFile("dashboard/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := regexp.MustCompile(`(?:src|href)="\./([^"]+)"`).FindAllStringSubmatch(string(index), -1)
+	var scripts, styles int
+	for _, ref := range refs {
+		name := ref[1]
+		if strings.Contains(name, "/") {
+			t.Fatalf("%s is not a top-level file", name)
+		}
+		data, err := dashboardFiles.ReadFile("dashboard/" + name)
+		if err != nil {
+			t.Fatalf("index.html refers to %s, which is not embedded", name)
+		}
+		switch {
+		case strings.HasSuffix(name, ".js"):
+			scripts++
+			if bytes.Contains(data, []byte("eval(")) {
+				t.Fatalf("%s uses eval, which the CSP refuses", name)
+			}
+		case strings.HasSuffix(name, ".css"):
+			styles++
+			for _, u := range regexp.MustCompile(`url\(([^)]*)\)`).FindAllStringSubmatch(string(data), -1) {
+				target := strings.Trim(u[1], `"'`)
+				if strings.HasPrefix(target, "#") {
+					continue
+				}
+				if !strings.HasPrefix(target, "./") {
+					t.Fatalf("%s loads %s from outside the dashboard", name, target)
+				}
+				if _, err := dashboardFiles.ReadFile("dashboard/" + strings.TrimPrefix(target, "./")); err != nil {
+					t.Fatalf("%s refers to %s, which is not embedded", name, target)
+				}
+			}
+		}
+	}
+	if scripts != 1 || styles != 1 {
+		t.Fatalf("index.html should load one script and one stylesheet, found %d and %d", scripts, styles)
+	}
+	if regexp.MustCompile(`<script(?:\s+[^>]*)?>[^<]+</script>|\sstyle=|<style`).Match(index) {
+		t.Fatal("index.html has inline script or style")
+	}
+	entries, _ := dashboardFiles.ReadDir("dashboard")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Fatalf("dashboard/%s is a directory; the server serves only top-level files", entry.Name())
+		}
 	}
 }

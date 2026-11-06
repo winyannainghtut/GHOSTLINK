@@ -15,6 +15,8 @@ The server packages also carry the optional **IPsec component** image: `ghostlin
 
 The image lists them with exact versions in `/usr/share/doc/ghostlink-ipsec/packages.txt`. Each release publishes their complete corresponding source, the Alpine recipes plus the checksum-verified upstream sources, as `Ghostlink-<version>-ipsec-component-source-<arch>.tar.gz`. strongSwan is a trademark of the strongSwan project. Ghostlink is not affiliated with it, or with Apple, whose built-in VPN it configures through standard configuration profiles.
 
+The **web UI** (the desktop app's interface and the server dashboard, MIT) bundles React and ReactDOM (MIT), Lucide icons (ISC), Tailwind CSS base styles (MIT), and the Plus Jakarta Sans and JetBrains Mono fonts (SIL Open Font License 1.1); their notices are in `LICENSES/dependencies/npm-*`. San Francisco is Apple's font and is not distributed; Apple devices use their own copy.
+
 The **ghostlink-mesh** agent (same Go module, GPL-3.0-or-later) is shipped as its own `.deb`/`.rpm`. It configures the Linux kernel's WireGuard through `golang.zx2c4.com/wireguard/wgctrl` (MIT) and `github.com/mdlayher/genetlink` (MIT), with their notices included. The mesh design took ideas from ZeroTier One's controller model; no ZeroTier code is used, and Ghostlink is not affiliated with ZeroTier, Inc.
 
 OpenVPN 2 is an optional separately installed engine; Ghostlink does not bundle its executable or OpenVPN 3 Core. OpenVPN's COPYING and other applicable notices remain relevant if a future package bundles those components. The Outline Apps and SDK repositories informed compatibility/design; their source is not embedded in the original Ghostlink UI or key parser.

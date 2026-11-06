@@ -8,6 +8,23 @@
 
 > **Pre-release.** Builds are unsigned and intended for personal use and testing. Key handling, the local service, every protocol's encrypted traffic and split-tunnel routing are tested automatically. A full-device VPN session (routes, DNS and IPv6 leak checks) still needs an administrator test machine. See [what is verified](docs/development/verification.md).
 
+<p align="center"><img src="docs/images/dashboard-overview.png" alt="The Ghostlink server dashboard: active tunnels, live throughput, server uptime and the address pool, with a live throughput chart, on frosted glass" width="900"></p>
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/dashboard-clients.png" alt="Clients as cards: access switch, tunnel IP, endpoint, last handshake, live speed, data used and quick key actions"></td>
+    <td width="33%"><img src="docs/images/dashboard-mesh.png" alt="The mesh map: Linux servers linked directly, two behind NAT through the relay, a shared subnet and the node list"></td>
+    <td width="33%"><img src="docs/images/desktop-my-servers.png" alt="The desktop app: connection hero with a power control and the servers saved on this device"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Clients</sub></td>
+    <td align="center"><sub>Mesh of Linux servers</sub></td>
+    <td align="center"><sub>Desktop app</sub></td>
+  </tr>
+</table>
+
+<p align="center"><sub>The server dashboard and the desktop app share one frosted-glass interface (Obsidian finish shown; Titanium and Daylight are built in). Example data from a local test server.</sub></p>
+
 ## Contents
 
 - [Features](#features)
@@ -39,6 +56,7 @@
 - **Mesh of your Linux servers:** a private network between your servers over WireGuard: direct links with a relay for servers behind NAT, tag-based access rules, shared subnets, and a live map in the app and the dashboard. One command adds a server.
 - **Three ways to manage your server:** the app, `sudo ghostlink-server …` commands on the server (with QR codes in the terminal and a live `top`), or a web dashboard on its own port (private behind an SSH tunnel by default).
 - **Easy sharing:** QR codes for every key and a one-page connection kit per person, for the Outline, WireGuard, AmneziaVPN and v2ray-family apps on any phone.
+- **Frosted-glass design:** the desktop app and the server dashboard share one interface: translucent surfaces over slow glass waves (Subtle, Calm or Still), in three finishes (Obsidian, Titanium, Daylight), with live numbers that never jitter.
 - **Honest status:** "Connected" means the tunnel was observed up and an HTTPS request through it succeeded. Nothing is reported that was not measured.
 - **Safe imports:** script hooks, plaintext VLESS, insecure TLS, obsolete ciphers and Amnezia "full access" keys that carry an SSH login are refused.
 
@@ -218,6 +236,14 @@ Pop-Location
 
 **Linux** needs Rust, Go, `pkg-config` and `libssl-dev`, plus [nfpm](https://nfpm.goreleaser.com/) 2.48 for packages (`go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0`). Run `bash scripts/build-linux.sh` to produce the client `.tar.gz`, `.deb` and `.rpm`, `bash scripts/build-linux-server.sh` (also needs Docker) for the server image and its `.deb`/`.rpm`, and `bash scripts/build-linux-mesh.sh` for the mesh agent's `.deb`/`.rpm`, all under `artifacts/linux-<arch>/`. `sudo bash tests/mesh/e2e.sh DIR` runs the mesh end-to-end test (see `.github/workflows/mesh.yml`).
 
+**Web UI.** The desktop app's interface and the server dashboard are built from `ui/` (React, TypeScript, Tailwind CSS, Lucide) with Node.js 22. The builds are committed, so the steps above need no Node. After changing `ui/`:
+
+```sh
+cd ui && npm ci --ignore-scripts && npm run build && npm test
+```
+
+See [ui/README.md](ui/README.md).
+
 **Tests.**
 
 ```powershell
@@ -257,10 +283,11 @@ The [changelog](CHANGELOG.md) lists what each release changed.
 | Ghostlink server | [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) |
 | Mesh of Linux servers | [docs/deployment/mesh.md](docs/deployment/mesh.md) |
 | Offline Outline-compatible server | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
+| Web UI (dashboard and desktop) | [ui/README.md](ui/README.md) |
 | Developer / AI-agent handover | [agent.md](agent.md) · [devjourney.md](devjourney.md) |
 
 ## License and acknowledgements
 
-Ghostlink's Rust service, CLI, MCP bridge and desktop UI are [MIT](LICENSE). The separate tunnel worker, the Ghostlink server and the mesh agent (`core/outline-worker`) are GPL-3.0-or-later (the worker and server link GPL-3.0-or-later sing-box); their corresponding source is published with every release. Dependencies and embedded drivers keep their own terms; see [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md).
+Ghostlink's Rust service, CLI, MCP bridge and web UI (`ui/`, the desktop app's interface and the dashboard's source) are [MIT](LICENSE). The separate tunnel worker, the Ghostlink server and the mesh agent (`core/outline-worker`) are GPL-3.0-or-later (the worker and server link GPL-3.0-or-later sing-box); their corresponding source is published with every release. Dependencies and embedded drivers keep their own terms; see [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md).
 
 Ghostlink builds on [sing-box](https://github.com/SagerNet/sing-box), [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go), [Wintun](https://www.wintun.net/), [Tauri](https://tauri.app/) and others, and is compatible with keys from [Outline](https://getoutline.org/) and [Amnezia](https://amnezia.org/). It is an independent project, not affiliated with or endorsed by any of them. "WireGuard" is a registered trademark of Jason A. Donenfeld.

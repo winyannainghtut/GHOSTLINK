@@ -1,0 +1,32 @@
+{
+  "name": "ghostlink-ui",
+  "private": true,
+  "type": "module",
+  "description": "Ghostlink's web front ends: the server dashboard and the desktop app, sharing one glass component library.",
+  "license": "MIT",
+  "scripts": {
+    "dev:dashboard": "vite --config vite.dashboard.config.ts",
+    "dev:desktop": "vite --config vite.desktop.config.ts",
+    "build:dashboard": "vite build --config vite.dashboard.config.ts",
+    "build:desktop": "vite build --config vite.desktop.config.ts",
+    "build": "npm run typecheck && npm run build:dashboard && npm run build:desktop",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --no-warnings --test \"tests/*.test.mjs\""
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/plus-jakarta-sans": "5.3.0",
+    "lucide-react": "1.70.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "tailwindcss": "4.3.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.6"
+  }
+}

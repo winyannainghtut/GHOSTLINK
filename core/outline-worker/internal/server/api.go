@@ -192,6 +192,17 @@ type serverInfo struct {
 	DashboardPort     uint16                  `json:"dashboard_port"`
 	DashboardPublic   bool                    `json:"dashboard_public"`
 	IPsecComponent    ipsecComponent          `json:"ipsec_component"`
+	// AddressPools are the WireGuard and AmneziaWG tunnel subnets: how full each is and the
+	// address the next key gets.
+	AddressPools []addressPool `json:"address_pools"`
+}
+
+type addressPool struct {
+	Protocol string `json:"protocol"`
+	CIDR     string `json:"cidr"`
+	Used     int    `json:"used"`
+	Capacity int    `json:"capacity"`
+	Next     string `json:"next,omitempty"`
 }
 
 // rawBody is a non-JSON answer (SVG, terminal text, HTML).
@@ -208,7 +219,7 @@ func (a *API) serverInfo(s *State) serverInfo {
 			IKEv2:       {s.IPsec.IKEv2Enabled, 500},
 			IPsec:       {s.IPsec.IPsecEnabled, 500},
 		},
-		IPsecComponent: a.service.ipsecComponent(time.Now()),
+		IPsecComponent: a.service.ipsecComponent(time.Now()), AddressPools: s.addressPools(),
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
 		SiteStats: s.Monitor.SiteStats, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
 		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
@@ -382,6 +393,8 @@ type keySummary struct {
 	CreatedUnix int64  `json:"created_unix"`
 	// Auth is the IKEv2/IPsec method (eap, certificate or psk).
 	Auth string `json:"auth,omitempty"`
+	// Address is a WireGuard/AmneziaWG key's tunnel address.
+	Address string `json:"address,omitempty"`
 }
 
 type userView struct {
@@ -400,7 +413,7 @@ type userView struct {
 func viewUser(u *User) userView {
 	keys := []keySummary{}
 	for _, k := range u.Keys {
-		keys = append(keys, keySummary{k.ID, k.Protocol, k.CreatedUnix, k.Auth})
+		keys = append(keys, keySummary{k.ID, k.Protocol, k.CreatedUnix, k.Auth, k.Address})
 	}
 	return userView{u.ID, u.Name, u.CreatedUnix, u.Enabled, u.DataLimitBytes, u.UsageBytes, u.OverLimit,
 		u.ExemptFromGlobalRules, u.Rules, keys}
@@ -727,9 +740,11 @@ func (a *API) live(*http.Request) (int, any, error) {
 		Active  int64        `json:"active"`
 		Online  int          `json:"online_users"`
 		Series  []rateSample `json:"series"`
+		// Minutes are per-minute average rates for the last hour.
+		Minutes []rateSample `json:"minutes"`
 		Users   []liveUser   `json:"users"`
 		Health  Health       `json:"health"`
-	}{Time: now, Series: series, Users: []liveUser{}, Health: a.service.Health()}
+	}{Time: now, Series: series, Minutes: a.service.monitor.Minutes(), Users: []liveUser{}, Health: a.service.Health()}
 	if n := len(series); n > 0 {
 		result.UpBps, result.DownBps = series[n-1].Up, series[n-1].Down
 	}

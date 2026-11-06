@@ -1,0 +1,453 @@
+/* Ghostlink glass: frosted surfaces over slow glass waves, in three finishes. All colour comes
+   from the variables below, so a finish is one attribute on <html>. */
+@import 'tailwindcss';
+@import './fonts.css';
+
+@source '../shared';
+@source '../admin';
+@source '../dashboard/src';
+@source '../desktop/src';
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Plus Jakarta Sans Variable', 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono Variable', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  --color-canvas: var(--bg);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
+  --color-field: var(--field);
+  --color-line: var(--line);
+  --color-cta: var(--cta-bg);
+  --color-cta-fg: var(--cta-fg);
+  --color-down: var(--down);
+  --color-up: var(--up);
+  --color-ok: var(--ok);
+  --color-idle: var(--idle);
+  --color-bad: var(--bad);
+  --color-relay: var(--relay);
+}
+
+:root,
+[data-finish='obsidian'] {
+  --bg: #090a0d;
+  --fg: #f4f5f7;
+  --fg-2: rgb(232 236 243 / 0.64);
+  --fg-3: rgb(232 236 243 / 0.4);
+  --glass: rgb(255 255 255 / 0.04);
+  --glass-strong: rgb(255 255 255 / 0.075);
+  --field: rgb(255 255 255 / 0.05);
+  --line: rgb(255 255 255 / 0.09);
+  --highlight: rgb(255 255 255 / 0.14);
+  --shadow: 0 24px 60px -28px rgb(0 0 0 / 0.7);
+  --cta-bg: #f4f5f7;
+  --cta-fg: #0b0c0f;
+  --down: #64d2ff;
+  --up: #bf8cff;
+  --ok: #30d158;
+  --idle: #ffd60a;
+  --bad: #ff6961;
+  --relay: #ffb340;
+  --wave-a: #dfe6f1;
+  --wave-b: #9aa6b8;
+  --wave-crest: rgb(226 233 243 / 0.32);
+  --wave-opacity: 1;
+  --backdrop: rgb(4 5 8 / 0.55);
+  color-scheme: dark;
+}
+
+[data-finish='titanium'] {
+  --bg: #111318;
+  --glass: rgb(255 255 255 / 0.05);
+  --glass-strong: rgb(255 255 255 / 0.085);
+  --field: rgb(255 255 255 / 0.06);
+  --line: rgb(255 255 255 / 0.1);
+  --wave-a: #e6ebf3;
+  --wave-b: #a3adbd;
+  --backdrop: rgb(8 9 12 / 0.5);
+}
+
+[data-finish='daylight'] {
+  --bg: #f2f4f8;
+  --fg: #0b0d12;
+  --fg-2: rgb(11 13 18 / 0.62);
+  --fg-3: rgb(11 13 18 / 0.42);
+  --glass: rgb(255 255 255 / 0.52);
+  --glass-strong: rgb(255 255 255 / 0.74);
+  --field: rgb(255 255 255 / 0.7);
+  --line: rgb(15 22 36 / 0.085);
+  --highlight: rgb(255 255 255 / 0.95);
+  --shadow: 0 24px 50px -30px rgb(30 40 60 / 0.35);
+  --cta-bg: #0b0d12;
+  --cta-fg: #ffffff;
+  --down: #007aff;
+  --up: #9b51e0;
+  --ok: #1fa84a;
+  --idle: #d99a00;
+  --bad: #e5352b;
+  --relay: #d97a00;
+  --wave-a: #8d9ab0;
+  --wave-b: #c3cad6;
+  --wave-crest: rgb(105 120 145 / 0.5);
+  --backdrop: rgb(220 225 235 / 0.45);
+  color-scheme: light;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background-color 0.5s ease;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.025em;
+    font-weight: 600;
+    margin: 0;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  :focus-visible {
+    outline: 2px solid var(--down);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--down) 35%, transparent);
+  }
+}
+
+@layer components {
+  /* The frosted material: translucent fill, a crisp edge and a thin specular top highlight. */
+  .glass {
+    background: var(--glass);
+    border: 1px solid var(--line);
+    box-shadow:
+      inset 0 1px 0 var(--highlight),
+      var(--shadow);
+    backdrop-filter: blur(40px) saturate(150%);
+  }
+  .glass-strong {
+    background: var(--glass-strong);
+    border: 1px solid var(--line);
+    box-shadow:
+      inset 0 1px 0 var(--highlight),
+      var(--shadow);
+    backdrop-filter: blur(48px) saturate(160%);
+  }
+  .inset-glass {
+    background: color-mix(in srgb, var(--glass) 70%, transparent);
+    border: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--highlight) 60%, transparent);
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .field {
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 9999px;
+    padding: 0.55rem 1rem;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s, background-color 0.2s;
+  }
+  .field:focus {
+    border-color: color-mix(in srgb, var(--down) 60%, var(--line));
+  }
+  textarea.field {
+    border-radius: 18px;
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  select.field {
+    appearance: none;
+    padding-right: 2.2rem;
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg-2) 50%), linear-gradient(135deg, var(--fg-2) 50%, transparent 50%);
+    background-position:
+      calc(100% - 18px) 52%,
+      calc(100% - 13px) 52%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+  }
+  select.field option {
+    background: var(--bg);
+    color: var(--fg);
+  }
+
+  dialog.sheet {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--fg);
+    max-width: min(var(--sheet-width, 560px), calc(100vw - 32px));
+    width: 100%;
+    max-height: calc(100vh - 48px);
+    overflow: visible;
+  }
+  dialog.sheet::backdrop {
+    background: var(--backdrop);
+    backdrop-filter: blur(6px);
+  }
+  dialog.sheet[open] {
+    animation: sheet-in 0.32s cubic-bezier(0.2, 0.9, 0.25, 1);
+  }
+  .sheet-wide {
+    --sheet-width: 1180px;
+  }
+  .sheet-medium {
+    --sheet-width: 760px;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+
+/* --- Glass waves behind everything ------------------------------------------------------- */
+.waves {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: var(--wave-opacity);
+}
+.waves svg {
+  position: absolute;
+  left: 0;
+  width: 200%;
+  height: 100%;
+}
+.wave {
+  will-change: transform;
+  animation: wave-drift ease-in-out infinite alternate;
+}
+.wave-1 {
+  animation-duration: 22s;
+}
+.wave-2 {
+  animation-duration: 28s;
+  animation-delay: -9s;
+}
+.wave-3 {
+  animation-duration: 34s;
+  animation-delay: -17s;
+}
+[data-motion='calm'] .wave-1 {
+  animation-duration: 44s;
+}
+[data-motion='calm'] .wave-2 {
+  animation-duration: 56s;
+}
+[data-motion='calm'] .wave-3 {
+  animation-duration: 68s;
+}
+[data-motion='still'] .wave {
+  animation: none;
+}
+.wave-stop-a {
+  stop-color: var(--wave-a);
+}
+.wave-stop-b {
+  stop-color: var(--wave-b);
+}
+.wave-crest {
+  opacity: 0.55;
+}
+[data-finish='daylight'] .wave-crest {
+  opacity: 0.8;
+}
+@keyframes wave-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-25%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wave,
+  dialog.sheet[open] {
+    animation: none !important;
+  }
+}
+
+/* --- Mesh map ------------------------------------------------------------------------------ */
+.mesh-map {
+  touch-action: none;
+  user-select: none;
+}
+.mesh-map .link {
+  stroke-linecap: round;
+  fill: none;
+}
+.mesh-map .link.direct {
+  stroke: var(--ok);
+  opacity: 0.75;
+}
+.mesh-map .link.relay {
+  stroke: var(--relay);
+  stroke-dasharray: 7 6;
+  opacity: 0.85;
+}
+.mesh-map .link.down {
+  stroke: var(--bad);
+  stroke-dasharray: 2 6;
+  opacity: 0.6;
+}
+.mesh-map .link.selected {
+  opacity: 1;
+}
+.mesh-map .label {
+  fill: var(--fg-2);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4px;
+}
+.mesh-map .node {
+  cursor: pointer;
+  outline: none;
+}
+.mesh-map .node .shape {
+  fill: color-mix(in srgb, var(--bg) 70%, var(--fg) 6%);
+  stroke: var(--fg-2);
+  stroke-width: 1.5;
+}
+.mesh-map .node.online .shape {
+  stroke: var(--ok);
+}
+.mesh-map .node.offline .shape {
+  stroke-dasharray: 4 3;
+}
+.mesh-map .node.pending .shape {
+  stroke: var(--idle);
+  stroke-dasharray: 4 3;
+}
+.mesh-map .node.disabled {
+  opacity: 0.4;
+}
+.mesh-map .node.selected .shape {
+  stroke-width: 3;
+  fill: color-mix(in srgb, var(--bg) 60%, var(--fg) 14%);
+}
+.mesh-map .node:focus-visible .shape {
+  stroke: var(--down);
+  stroke-width: 3;
+}
+.mesh-map .node .relay-ring {
+  fill: none;
+  stroke: var(--relay);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.mesh-map .node .glyph {
+  fill: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.mesh-map .node .name {
+  fill: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4px;
+}
+.mesh-map .node .address {
+  fill: var(--fg-3);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4px;
+}
+.mesh-map .subnet rect {
+  fill: var(--glass-strong);
+  stroke: var(--line);
+}
+.mesh-map .subnet text {
+  fill: var(--fg-2);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.mesh-map .subnet-link {
+  stroke: var(--fg-3);
+  stroke-dasharray: 2 3;
+}
+.mesh-map .empty {
+  fill: var(--fg-3);
+  font-size: 13px;
+}
+
+/* --- Charts -------------------------------------------------------------------------------- */
+.chart .gridline {
+  stroke: var(--line);
+}
+.chart .axis-label {
+  fill: var(--fg-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.chart .area-down {
+  fill: url(#fill-down);
+}
+.chart .area-up {
+  fill: url(#fill-up);
+}
+.chart .line-down {
+  fill: none;
+  stroke: var(--down);
+  stroke-width: 1.75;
+}
+.chart .line-up {
+  fill: none;
+  stroke: var(--up);
+  stroke-width: 1.75;
+}
+.chart .stop-down {
+  stop-color: var(--down);
+}
+.chart .stop-up {
+  stop-color: var(--up);
+}
