@@ -34,7 +34,7 @@ export function Settings({ appearance }: { appearance: Appearance }) {
   useEffect(() => void loadSummary(), []);
 
   return (
-    <div className="grid max-w-[1000px] gap-4">
+    <div className="mx-auto grid w-full max-w-[1100px] gap-4">
       <div className="px-1">
         <h1 className="text-[26px] tracking-[-0.03em]">Settings</h1>
         <p className="text-[13.5px] text-fg-2">A few preferences for your everyday connection.</p>

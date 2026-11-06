@@ -17,6 +17,7 @@ These mechanisms reduce specific failures; they do not certify the platform defi
 - **Pinning:** the service connects with rustls, TLS 1.3 only. The certificate is checked against `certSha256` inside the handshake, and the handshake signature is still verified, so a peer that only copied the public certificate cannot pass. A test confirms that with a wrong pin the server receives no request bytes, which means the secret path is never sent.
 - **Request shape:** requests are typed operations mapped to fixed paths with decimal IDs. There are no redirects or proxies, answers are capped at 1 MiB, and calls time out after 25 s.
 - **Routing:** while a VPN connection is up, the management APIs of servers this device administers are routed around the tunnel. The Ghostlink server refuses its own API port to VPN users.
+- **Desktop views (v0.7.0):** the app's "Servers I run" pages share the dashboard's views, but reach the server only through the local service's typed operations. `ui/desktop/src/routes.ts` is the whole mapping: anything else, and any path with dot segments, empty segments, escapes or backslashes, is refused in the app. The service then validates each operation and builds fixed paths with decimal IDs, as before.
 
 **Ghostlink server.**
 - **Container:** a container with no capabilities, a read-only root and `no-new-privileges`, running as a dedicated unprivileged host account that owns only `/var/lib/ghostlink-server` (mode 0700).
@@ -36,7 +37,9 @@ These mechanisms reduce specific failures; they do not certify the platform defi
   - a Host check against DNS rebinding;
   - throttling after 20 bad tokens per minute;
   - `--reset-token` revokes every session.
-- **Page hardening:** a strict CSP (self only; images from blob/data), `frame-ancestors 'none'`, no external resources, and no user data inserted as HTML.
+- **Page hardening:**
+  - a strict CSP (self only; images from blob/data), `frame-ancestors 'none'`, no external resources, and no user data inserted as HTML;
+  - since v0.7.0 the page is a React build with self-hosted fonts, and a test checks the embedded build has one script and one stylesheet, flat names, no inline code, no `eval` and no outside URLs.
 
 **IKEv2/IPsec for iPhone, iPad and Mac (optional component).**
 - **Privilege split:**

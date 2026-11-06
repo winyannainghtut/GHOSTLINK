@@ -1,13 +1,14 @@
 // The Ghostlink desktop app: My servers (connect), Servers I run (manage your own servers with
 // the same views as the server dashboard) and Settings, under the glass navigation bar.
-import { KeyRound, Plus, Power } from 'lucide-react';
+import { KeyRound, Maximize2, Minimize2, Plus, Power } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Popover } from '@shared/Popover';
 import { WaveBackground } from '@shared/WaveBackground';
 import { FinishPicker, Mark, MotionButton, useAppearance } from '@shared/appearance';
-import { Button, Segmented, StatusDot, UIProvider, cx } from '@shared/glass';
+import { Button, IconButton, Segmented, StatusDot, UIProvider, cx } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
 import { megabits } from '@shared/format';
+import { useFullscreen } from './fullscreen';
 import { KINDS, isActive, stateLabel, type Profile } from './ipc';
 import { ServiceProvider, useService } from './service';
 import { VERSION } from './version';
@@ -37,10 +38,11 @@ function Shell() {
   const [view, setView] = useStoredState<View>('ghostlink-desktop-view', 'servers', VIEWS);
   const [addKey, setAddKey] = useState(0);
   const [addServer, setAddServer] = useState(0);
+  const fullscreen = useFullscreen();
   return (
     <>
-      <header className="sticky top-0 z-30 px-3 pt-3 sm:px-5 sm:pt-4">
-        <nav className="glass mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-3 rounded-[28px] px-4 py-3 lg:flex-nowrap">
+      <header className="sticky top-0 z-30 px-3 pt-3 sm:px-5 sm:pt-4 2xl:px-8">
+        <nav className="glass mx-auto flex max-w-[2400px] flex-wrap items-center gap-x-4 gap-y-3 rounded-[28px] px-4 py-3 lg:flex-nowrap">
           <div className="flex min-w-0 items-center gap-3 lg:w-[290px]">
             <Mark className="size-9 shrink-0" />
             <div className="min-w-0 leading-tight">
@@ -67,6 +69,11 @@ function Shell() {
           <div className="ml-auto flex items-center gap-1.5 lg:w-[290px] lg:justify-end">
             <MotionButton motion={appearance.motion} onChange={appearance.setMotion} />
             <FinishPicker value={appearance.finish} onChange={appearance.setFinish} />
+            {fullscreen.available && (
+              <IconButton label={fullscreen.full ? 'Leave full screen (F11)' : 'Full screen (F11)'} onClick={fullscreen.toggle}>
+                {fullscreen.full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </IconButton>
+            )}
             {view === 'manage' ? (
               <Button variant="cta" className="ml-1" icon={<Plus size={16} strokeWidth={2.4} />} onClick={() => setAddServer(n => n + 1)}>
                 Add server
@@ -79,7 +86,7 @@ function Shell() {
           </div>
         </nav>
       </header>
-      <main className="mx-auto max-w-[1440px] px-3 pt-5 pb-24 sm:px-5">
+      <main className="mx-auto max-w-[2400px] px-3 pt-5 pb-24 sm:px-5 2xl:px-8">
         {view === 'servers' && <MyServers addKeySignal={addKey} />}
         {view === 'manage' && <ServersIRun addServerSignal={addServer} />}
         {view === 'settings' && <Settings appearance={appearance} />}

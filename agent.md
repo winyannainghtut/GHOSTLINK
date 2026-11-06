@@ -1,6 +1,8 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.6.0** (Ghostlink mesh: a private WireGuard network between Linux servers coordinated by the Ghostlink server, with a live map in the app and dashboard; v0.5.0 added IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.7.0** (frosted-glass React UI for the desktop app and the server dashboard, one shared `ui/` package; v0.6.0 added the Ghostlink mesh: a private WireGuard network between Linux servers coordinated by the Ghostlink server, with a live map in the app and dashboard; v0.5.0 added IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+
+**Next planned (user, 2026-11-07):** migration from an Outline server that is already running into Ghostlink: users and access keys, ideally so existing `ss://` keys keep working. Settle the design with the user first: keep or reissue keys, same or new host, limits and usage, cut-over. Outline's management key has the same shape as Ghostlink's (`apiUrl` + `certSha256`); see `docs/deployment/outline-server.md`.
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -112,7 +114,8 @@ Current checkout: **`D:\custom vpn`**, Windows PowerShell. Git branch at handove
 | `services/vpn-daemon/src/service.rs` | Windows SCM entrypoint and service lifecycle |
 | `cli/ghostlink/src/main.rs` | User-facing CLI, private file/stdin input, wait/timeout/interrupt behavior |
 | `integrations/mcp-server/src/main.rs` | Restricted stdio JSON-RPC/MCP interface; no shell |
-| `apps/desktop/ui/{index.html,app.css,app.js,mark.svg}` | Original static frontend; plain HTML/CSS/JavaScript, not a React/Vite app |
+| `ui/` | The web UI (React, TypeScript, Tailwind, Lucide, Vite): `shared/` glass components, `admin/` server-administration views (dashboard and desktop), `dashboard/` and `desktop/` shells. See [ui/README.md](ui/README.md) |
+| `apps/desktop/ui/` | **Build output** of `ui/desktop` (committed; Tauri `frontendDist`). Do not edit; change `ui/` and run `npm run build` |
 | `apps/desktop/src-tauri/` | Separate Rust workspace and lock; native invoke bridge, tray, capabilities, CSP, app configuration/icons |
 | `apps/desktop/brand-spec.md` | Original Ghostlink design/branding direction |
 | `server/outline/` | Offline standard Shadowsocks server identity/config provisioning, Ansible and proxy service |
@@ -385,22 +388,27 @@ The `vpn_status` tool description now covers every protocol (reworded after v0.2
 
 ## 10. Desktop UI
 
-- Original Ghostlink branding: teal/neutral, sidebar, server cards, empty state, light/dark themes. Outline informed the experience; no Outline logos or official affiliation.
-- Add access key dialog masks input, imports through native private IPC, clears the key on completion/close, and stores credentials in the service.
-- Saved server cards: endpoint, protocol badge (Outline/WireGuard/AmneziaWG/VLESS/OpenVPN), default star, actual status, connect/disconnect, options for details/rename/default/split tunneling/remove, search.
-- The key dialog accepts `ss://`, `ssconf://`, `vless://` and `vpn://`; **Import a file…** reads a WireGuard/AmneziaWG `.conf` locally and sends it to the service (the desktop bridge allows `profile_import` only for WireGuard content; OpenVPN stays CLI-only).
-- Connection overview: actual duration and byte totals; no invented servers or connected state.
-- Settings: startup autoconnect, **Split tunneling** card with a dialog shared by the global and per-server scopes (per server adds "Use the settings for all servers"), diagnostics and About/help. `notice(message, ok)` shows success messages in the calm `.notice.ok` style. Theme uses local frontend preference storage.
-- Tauri invoke bridge calls shared typed service operations. CSP restricts content to local app resources and IPC; UI is not a network-facing web management service.
-- Window close hides to tray. Tray/open/quit/disconnect code exists; quitting GUI is intended to leave the independent daemon running. Tray/uninstall behavior still needs native verification.
-- Configured initial window: 1060 × 760, minimum 620 × 560. Narrow layout is implemented in CSS but has not been fully checked in the native window.
+Since v0.7.0 the desktop app's interface is built from `ui/desktop` (React 19, TypeScript, Tailwind 4, Lucide, Vite 8) into `apps/desktop/ui`, the committed build that Tauri bundles. Its design system (`ui/shared`) is shared with the server dashboard; see [ui/README.md](ui/README.md).
 
-Two defects were fixed and verified during native QA:
+- **Design:**
+  - Frosted surfaces (`.glass`) over three slow glass waves (`WaveBackground`: Subtle, Calm or Still; still for reduced motion).
+  - Finishes Obsidian, Titanium and Daylight are CSS variables on `<html data-finish>`; the finish and motion are kept in localStorage.
+  - Sentence-case labels, `.mono` only for addresses, keys and ports, `.num` (tabular figures) for live numbers.
+  - The fonts are self-hosted (OFL). No inline styles: React's `style` prop is applied through the CSSOM, which the CSP allows, and is used only for computed popover positions.
+- **Shell:** a floating navigation bar with My servers, Servers I run and Settings. Its Dynamic Island shows the connection (state, server, duration, live speed) and opens a server switcher. Floating panels render in a portal (`shared/Popover.tsx`), because a frosted element cannot blur through a frosted parent.
+- **My servers:**
+  - a connection hero with a power control and live rates;
+  - server cards with a frosted menu: details, rename, make default, split tunneling, remove;
+  - the add-key sheet (masked key, `.conf` import read locally and sent to the service).
+- **Servers I run:** managed servers (add by management key, setup help). Opening one mounts the shared `ui/admin` views with `serverTransport`.
+  - **Request mapping:** `ui/desktop/src/routes.ts` maps the REST requests the views make onto `server_call` operations. Anything else, or any path that is not plain, is refused; `npm test` checks the table against the Rust `ServerOp`.
+  - **Files:** QR codes are shown as `data:` URLs. Files go to Downloads through the shell's `save_download` (html, mobileconfig, conf).
+  - **On this device:** "Use on this device" imports a key as a local VPN connection.
+- **Settings:** connect when the service starts, split tunneling for all servers, finish, motion, diagnostics (`doctor`), About.
+- **Service state:** polled every second (`desktop/src/service.tsx`). Changes go through `act`, which serializes them and refreshes.
+- **Window:** close hides to tray; quitting the GUI leaves the daemon running.
 
-1. Polling every 1.5 seconds rebuilt unchanged cards and dismissed menus/focus. `appState.renderedServers` now compares profile/active-state/busy/availability/search signatures before rebuilding cards.
-2. Card `overflow:hidden` clipped lower menu actions. Overflow was corrected and footer corner styling preserved; rebuilt native app showed all actions.
-
-Do not reintroduce unconditional card replacement or clipped menus. Preserve accessibility labels, keyboard focus, masking and honest unavailable/error states. Unavailable-notice clearing on service recovery was implemented; a complete native outage/recovery interaction remains pending.
+The pre-0.7 hand-written UI (`app.js`, `manage.js`, `mesh.js`) is in git history.
 
 ## 11. Development environment and builds
 
@@ -699,7 +707,7 @@ Administrator installation is a human step on an authorized test machine. No UAC
 | Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz`, `ghostlink_<v>-1_amd64.deb`, `ghostlink-<v>-1.x86_64.rpm` (headless; `scripts/build-linux.sh` + nfpm 2.48.0; the `.deb` is smoke-tested as a systemd service) |
 | Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz`, `ghostlink_<v>-1_arm64.deb`, `ghostlink-<v>-1.aarch64.rpm` |
 
-Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, the UI version label, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
+Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
 Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md`. A maintainer must review and publish the draft. A manual `workflow_dispatch` run only produces workflow artifacts. Neither the workflow nor any agent has pushed a tag or created a release yet.
 

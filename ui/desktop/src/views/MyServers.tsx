@@ -102,7 +102,7 @@ export function MyServers({ addKeySignal }: { addKeySignal: number }) {
           </Empty>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
           {shown.map(p => (
             <ServerCard
               key={p.name}

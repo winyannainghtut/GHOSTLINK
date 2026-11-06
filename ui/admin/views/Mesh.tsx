@@ -92,7 +92,7 @@ export function MeshCard() {
       />
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="inset-glass overflow-hidden rounded-[24px]">
-          {topology && <MeshMap topology={topology} selected={selected} onSelect={setSelected} resetToken={reset} className="h-[min(62vh,520px)]" />}
+          {topology && <MeshMap topology={topology} selected={selected} onSelect={setSelected} resetToken={reset} className="h-[min(62vh,760px)]" />}
           <div className="flex flex-wrap items-center gap-4 border-t border-line px-4 py-2.5 text-[12px] text-fg-3">
             <LegendLine className="bg-ok" label="Direct" />
             <LegendLine className="border-t-2 border-dashed border-relay bg-transparent" label="Through the relay" />
@@ -100,7 +100,7 @@ export function MeshCard() {
             <span className="ml-auto">Drag nodes to arrange the map</span>
           </div>
         </div>
-        <aside className="max-h-[min(62vh,560px)] overflow-y-auto">
+        <aside className="max-h-[min(62vh,800px)] overflow-y-auto">
           {node ? <NodePanel node={node} topology={topology!} onClose={() => setSelected(null)} change={change} /> : <Overview nodes={nodes} info={info} onSelect={setSelected} change={change} />}
         </aside>
       </div>

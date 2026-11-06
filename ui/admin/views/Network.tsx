@@ -37,7 +37,7 @@ export function Network() {
     <div className="grid gap-4">
       <Card>
         <CardTitle title="Protocols" detail="Clients reconnect automatically after a change. Open these ports in the firewall and your cloud security group." />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-6">
           {ORDER.map(p => (
             <ProtocolTile key={p} protocol={p} server={server} onToggle={on => toggle(p, on)} onPort={port => patch({ protocols: { [p]: { port } } }, `${PROTOCOLS[p]} now uses port ${port}. Keys already shared keep the old port.`)} />
           ))}
