@@ -172,7 +172,8 @@ for i in $(seq 1 25); do
     sleep 2
 done
 [ "$used" -gt 0 ] || fail "IPsec traffic was not counted"
-api GET "/clients?user=$user" | jq -e '[.clients[].protocol] | (index("ikev2") != null) and (index("ipsec") != null)' >/dev/null || fail "client log lacks IKEv2/IPsec"
+clients=$(api GET "/clients?user=$user")
+echo "$clients" | jq -e 'any(.clients[]; .protocol == "ikev2" and .ip == "10.99.0.2") and any(.clients[]; .protocol == "ipsec")' >/dev/null || fail "client log lacks IKEv2/IPsec: $clients"
 api PATCH "/users/$user" "{\"data_limit_bytes\":$used}" >/dev/null
 in_client curl -s --max-time 5 -o /dev/null http://198.51.100.10:8080/ || true
 for i in $(seq 1 40); do swan --list-sas | grep -q ESTABLISHED || break; sleep 2; done
