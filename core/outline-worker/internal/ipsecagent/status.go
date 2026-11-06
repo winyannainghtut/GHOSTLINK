@@ -37,12 +37,18 @@ func identityOf(m *vici.Message) string {
 
 // ParseSAs reads list-sa events into the status the server understands. Only established SAs
 // are reported.
-func ParseSAs(events []*vici.Message) []ipsecproto.SA {
+func ParseSAs(events []*vici.Message) []ipsecproto.SA { return parseSAs(events, true) }
+
+func child(c *vici.Message) ipsecproto.Child {
+	return ipsecproto.Child{UniqueID: field(c, "uniqueid"), BytesIn: number(c, "bytes-in"), BytesOut: number(c, "bytes-out")}
+}
+
+func parseSAs(events []*vici.Message, onlyEstablished bool) []ipsecproto.SA {
 	sas := []ipsecproto.SA{}
 	for _, event := range events {
 		for _, name := range event.Keys() {
 			m, ok := event.Get(name).(*vici.Message)
-			if !ok || field(m, "uniqueid") == "" || field(m, "state") != "ESTABLISHED" {
+			if !ok || field(m, "uniqueid") == "" || (onlyEstablished && field(m, "state") != "ESTABLISHED") {
 				continue
 			}
 			version, _ := strconv.Atoi(field(m, "version"))
@@ -60,15 +66,37 @@ func ParseSAs(events []*vici.Message) []ipsecproto.SA {
 					if !ok {
 						continue
 					}
-					sa.Children = append(sa.Children, ipsecproto.Child{
-						UniqueID: field(c, "uniqueid"), BytesIn: number(c, "bytes-in"), BytesOut: number(c, "bytes-out"),
-					})
+					// A child-rekey event carries the replaced CHILD_SA as "old".
+					if old, ok := c.Get("old").(*vici.Message); ok {
+						c = old
+					}
+					if field(c, "uniqueid") != "" {
+						sa.Children = append(sa.Children, child(c))
+					}
 				}
 			}
 			sas = append(sas, sa)
 		}
 	}
 	return sas
+}
+
+// ClosedChildren reads an ike-updown, child-updown or child-rekey event and returns the
+// CHILD_SAs that ended, one SA entry per child, with final counters. Events about SAs coming
+// up return nothing.
+func ClosedChildren(event *vici.Message) []ipsecproto.SA {
+	if field(event, "up") == "yes" {
+		return nil
+	}
+	var closed []ipsecproto.SA
+	for _, sa := range parseSAs([]*vici.Message{event}, false) {
+		for _, c := range sa.Children {
+			one := sa
+			one.Children = []ipsecproto.Child{c}
+			closed = append(closed, one)
+		}
+	}
+	return closed
 }
 
 // Disallowed lists established SAs that must end: their identity is no longer allowed (removed

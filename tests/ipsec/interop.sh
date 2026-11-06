@@ -172,8 +172,13 @@ for i in $(seq 1 25); do
     sleep 2
 done
 [ "$used" -gt 0 ] || fail "IPsec traffic was not counted"
+# One record per address, with the protocol it last used.
 clients=$(api GET "/clients?user=$user")
-echo "$clients" | jq -e 'any(.clients[]; .protocol == "ikev2" and .ip == "10.99.0.2") and any(.clients[]; .protocol == "ipsec")' >/dev/null || fail "client log lacks IKEv2/IPsec: $clients"
+echo "$clients" | jq -e 'any(.clients[]; .ip == "10.99.0.2" and (.protocol == "ikev2" or .protocol == "ipsec"))' >/dev/null || fail "client log lacks the IPsec client: $clients"
+# Every session counted, including short ones that ended between reports.
+stats=$(api GET "/stats?range=24h&user=$user")
+echo "$stats" | jq -e 'any(.protocols[]; .label == "ikev2" and .bytes > 0) and any(.protocols[]; .label == "ipsec" and .bytes > 0) and any(.types[]; .label == "IPsec (not inspected)")' >/dev/null ||
+    fail "statistics lack IKEv2/IPsec traffic: $stats"
 api PATCH "/users/$user" "{\"data_limit_bytes\":$used}" >/dev/null
 in_client curl -s --max-time 5 -o /dev/null http://198.51.100.10:8080/ || true
 for i in $(seq 1 40); do swan --list-sas | grep -q ESTABLISHED || break; sleep 2; done

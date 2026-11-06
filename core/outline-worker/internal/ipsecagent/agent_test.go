@@ -230,6 +230,30 @@ func TestParseSAsAndEnforcement(t *testing.T) {
 	if sas[1].Identity != "bob-3@ghostlink" {
 		t.Fatalf("an IPsec PSK user is identified by XAuth, got %q", sas[1].Identity)
 	}
+	// Down and rekey events report the CHILD_SAs that ended; up events report nothing.
+	down := event(ConnIKEv2EAP, sa("ESTABLISHED", "2", "alice-2@ghostlink", "", "alice-2@ghostlink", map[string][2]string{"9": {"500", "700"}}))
+	_ = down.Set("up", "no")
+	if closed := ClosedChildren(down); len(closed) != 1 || closed[0].Children[0].BytesOut != 700 || closed[0].Identity != "alice-2@ghostlink" {
+		t.Fatalf("child-updown: %+v", closed)
+	}
+	upEvent := event(ConnIKEv2EAP, sa("ESTABLISHED", "2", "alice-2@ghostlink", "", "alice-2@ghostlink", map[string][2]string{"9": {"1", "1"}}))
+	_ = upEvent.Set("up", "yes")
+	if closed := ClosedChildren(upEvent); len(closed) != 0 {
+		t.Fatalf("an up event reported closed children: %+v", closed)
+	}
+	rekeyed := sa("ESTABLISHED", "2", "alice-2@ghostlink", "", "alice-2@ghostlink", nil)
+	old, fresh, pair, list := vici.NewMessage(), vici.NewMessage(), vici.NewMessage(), vici.NewMessage()
+	_ = old.Set("uniqueid", "9")
+	_ = old.Set("bytes-in", "800")
+	_ = old.Set("bytes-out", "900")
+	_ = fresh.Set("uniqueid", "10")
+	_ = pair.Set("old", old)
+	_ = pair.Set("new", fresh)
+	_ = list.Set("gl-ikev2-9", pair)
+	_ = rekeyed.Set("child-sas", list)
+	if closed := ClosedChildren(event(ConnIKEv2EAP, rekeyed)); len(closed) != 1 || closed[0].Children[0].UniqueID != "9" || closed[0].Children[0].BytesIn != 800 {
+		t.Fatalf("child-rekey: %+v", closed)
+	}
 	conns := map[string]bool{ConnIKEv2EAP: true, ConnIKEv1PSK: true}
 	if ended := Disallowed(sas, map[string]bool{"alice-2@ghostlink": true, "bob-3@ghostlink": true}, conns); len(ended) != 0 {
 		t.Fatalf("allowed SAs ended: %v", ended)

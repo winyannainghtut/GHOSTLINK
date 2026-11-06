@@ -548,7 +548,25 @@ func TestIPsecTrafficAccounting(t *testing.T) {
 	if len(clients.Clients) == 0 || clients.Clients[0].IP != "198.51.100.20" || clients.Clients[0].Protocol != IKEv2 {
 		t.Fatalf("client log: %+v", clients)
 	}
-	report(1100, 0, "2") // +1000: over the 5000 byte limit
+	// A session that ends between reports is counted from its final counters, once.
+	closed := func(child string, in uint64) {
+		data, _ := json.Marshal(ipsecproto.Status{Version: 1, UpdatedUnix: time.Now().Unix(), Running: true, SAs: []ipsecproto.SA{},
+			Closed: []ipsecproto.SA{{Name: "gl-ikev2-eap", UniqueID: "8", Version: 2, Identity: key.Identity, Remote: "198.51.100.20",
+				Children: []ipsecproto.Child{{UniqueID: child, BytesIn: in}}}}})
+		_ = os.WriteFile(filepath.Join(server.store.Dir(), IPsecDir, ipsecproto.StatusFile), data, 0o640)
+		server.service.recordIPsec(time.Now())
+	}
+	closed("2", 150) // child 2 was last seen at 100: +50
+	closed("2", 150) // the same closed child again: +0
+	closed("9", 30)  // never seen live: +30
+	if err := server.service.Account(); err != nil {
+		t.Fatal(err)
+	}
+	server.must(t, http.StatusOK, "GET", "/users/"+user.ID, nil, &got)
+	if got.UsageBytes != 4180 {
+		t.Fatalf("usage after closed sessions = %d, want 4180", got.UsageBytes)
+	}
+	report(1000, 0, "10") // +1000: over the 5000 byte limit
 	if err := server.service.Account(); err != nil {
 		t.Fatal(err)
 	}

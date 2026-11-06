@@ -90,6 +90,9 @@ type Status struct {
 	Error       string   `json:"error,omitempty"`
 	Plugins     []string `json:"plugins,omitempty"`
 	SAs         []SA     `json:"sas"`
+	// Closed holds CHILD_SAs that ended (or were rekeyed) in the last minute, with their final
+	// byte counts, so traffic since the last report is not lost. Each appears once per child.
+	Closed []SA `json:"closed,omitempty"`
 }
 
 type SA struct {

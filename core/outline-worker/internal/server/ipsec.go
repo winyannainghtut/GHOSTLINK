@@ -134,8 +134,10 @@ func (svc *Service) recordIPsec(now time.Time) {
 			}
 		}
 	})
+	// Counters are per CHILD_SA (its unique ID survives an IKE rekey). A child is counted
+	// against its last known counters once per report, whether still up or just closed.
 	seen := map[string][2]uint64{}
-	for _, sa := range status.SAs {
+	for _, sa := range append(append([]ipsecproto.SA{}, status.SAs...), status.Closed...) {
 		tag, ok := users[strings.ToLower(sa.Identity)]
 		if !ok {
 			continue
@@ -146,7 +148,10 @@ func (svc *Service) recordIPsec(now time.Time) {
 		}
 		remote := strings.Trim(sa.Remote, "[]")
 		for _, child := range sa.Children {
-			key := sa.UniqueID + "/" + child.UniqueID
+			key := child.UniqueID
+			if _, done := seen[key]; done || key == "" {
+				continue
+			}
 			previous := svc.ipsecSeen[key]
 			seen[key] = [2]uint64{child.BytesIn, child.BytesOut}
 			var up, down uint64

@@ -129,6 +129,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The artifact holds packages and the IPsec source bundle in subfolders; attach them flat.
+          mkdir flat && find arm64 -type f -exec mv -t flat {} + && rm -rf arm64 && mv flat arm64
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir sums
           # Idempotent on re-runs: drop any previous line for these files before appending.
           cp sums/SHA256SUMS.txt sums/next.txt

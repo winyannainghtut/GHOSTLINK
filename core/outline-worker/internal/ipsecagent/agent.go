@@ -22,6 +22,12 @@ import (
 	"ghostlink.local/outline-worker/internal/ipsecproto"
 )
 
+// closedChild is a CHILD_SA that ended, kept for a minute in the status.
+type closedChild struct {
+	sa ipsecproto.SA
+	at time.Time
+}
+
 // Interface holds the pool gateways, so DNS sent to them is delivered to this host.
 const Interface = "glipsec0"
 
@@ -46,6 +52,8 @@ type Agent struct {
 	listing    string // why sessions could not be listed
 	stamp      string // modification time and size of the settings last read
 	failedAt   time.Time
+	events     chan vici.Event
+	closed     map[string]closedChild // by CHILD_SA unique ID
 	conf       string
 	gateways   []string
 	onLoopback bool
@@ -111,6 +119,13 @@ func (a *Agent) Serve(ctx context.Context) error {
 		case err := <-a.charonDone:
 			a.charonDone = nil
 			return fmt.Errorf("charon stopped: %v", err)
+		case event, ok := <-a.events:
+			if !ok {
+				a.events = nil
+				continue
+			}
+			a.recordClosed(event)
+			continue
 		case <-ticker.C:
 		}
 	}
@@ -152,6 +167,12 @@ func (a *Agent) startCharon(ctx context.Context) error {
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
+	// Session-down and rekey events carry final byte counts.
+	a.events, a.closed = make(chan vici.Event, 512), map[string]closedChild{}
+	if err := a.session.Subscribe("ike-updown", "child-updown", "child-rekey"); err != nil {
+		return fmt.Errorf("charon events: %w", err)
+	}
+	a.session.NotifyEvents(a.events)
 	stats, err := a.session.Call(ctx, "stats", nil)
 	if err != nil {
 		return fmt.Errorf("charon stats: %w", err)
@@ -366,6 +387,23 @@ func (a *Agent) cycle(ctx context.Context, full bool) {
 	a.writeStatusWith(true, strings.Join(problems, "; "), sas)
 }
 
+// recordClosed keeps the final counters of CHILD_SAs that ended, keeping the larger counters
+// when one is reported twice (for example by child-updown and then ike-updown).
+func (a *Agent) recordClosed(event vici.Event) {
+	if event.Message == nil {
+		return
+	}
+	for _, sa := range ClosedChildren(event.Message) {
+		c := sa.Children[0]
+		if previous, ok := a.closed[c.UniqueID]; ok {
+			p := previous.sa.Children[0]
+			c.BytesIn, c.BytesOut = max(c.BytesIn, p.BytesIn), max(c.BytesOut, p.BytesOut)
+			sa.Children[0] = c
+		}
+		a.closed[c.UniqueID] = closedChild{sa, time.Now()}
+	}
+}
+
 func (a *Agent) writeStatus(running bool, problem string) { a.writeStatusWith(running, problem, nil) }
 
 func (a *Agent) writeStatusWith(running bool, problem string, sas []ipsecproto.SA) {
@@ -375,6 +413,13 @@ func (a *Agent) writeStatusWith(running bool, problem string, sas []ipsecproto.S
 	status := ipsecproto.Status{
 		Version: ipsecproto.Version, UpdatedUnix: time.Now().Unix(), Running: running,
 		Applied: a.applied, Error: problem, Plugins: a.plugins, SAs: sas,
+	}
+	for id, c := range a.closed {
+		if time.Since(c.at) > time.Minute {
+			delete(a.closed, id)
+			continue
+		}
+		status.Closed = append(status.Closed, c.sa)
 	}
 	data, err := json.MarshalIndent(status, "", "  ")
 	if err == nil {
