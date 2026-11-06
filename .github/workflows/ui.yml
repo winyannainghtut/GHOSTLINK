@@ -22,6 +22,9 @@ jobs:
       - name: Typecheck and build
         working-directory: ui
         run: npm run build
+      - name: Desktop request mapping matches the Rust contract
+        working-directory: ui
+        run: npm test
       - name: The committed builds match
         run: |
           git status --porcelain -- core/outline-worker/internal/server/dashboard apps/desktop/ui | tee changes.txt
