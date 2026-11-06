@@ -67,6 +67,7 @@ async function reloadManaged() {
     if (manageState.current !== name) return;
     Object.assign(manageState, { info, users, rules });
     renderManaged();
+    if (!$('#mesh-dialog').open) loadMeshCard();
   } catch (error) {
     notice(error.message);
     if (!manageState.info) showManagedHome();

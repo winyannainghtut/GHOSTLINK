@@ -168,7 +168,8 @@ wait_for 20 "peers drop the removed node" bash -c "! ip netns exec pub wg show g
 
 step "Stopping an agent leaves its host clean"
 kill "${agent[pub]}"
-wait_for 15 "the stopped agent removes glmesh0" bash -c "! ip netns exec pub ip link show glmesh0 >/dev/null 2>&1"
+wait_for 15 "the stopped agent exits" bash -c "! kill -0 ${agent[pub]} 2>/dev/null"
+in_ns pub ip link show glmesh0 >/dev/null 2>&1 && fail "glmesh0 left behind"
 in_ns pub iptables-save | grep -q GHOSTLINK-MESH && fail "firewall chains left behind"
 grep -q "mesh" "/etc/netns/pub/hosts" && fail "/etc/hosts block left behind"
 step "Mesh end-to-end passed"

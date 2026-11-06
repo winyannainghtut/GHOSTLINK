@@ -87,6 +87,14 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(verify_listeners(std::process::id(), &[port]).is_ok());
-        assert!(verify_listeners(std::process::id().wrapping_add(1), &[port]).is_err());
+        // Another PID; on Linux, not one of this test's own threads (they share its sockets).
+        let other = (1..)
+            .map(|n| std::process::id().wrapping_add(n))
+            .find(|pid| {
+                !cfg!(target_os = "linux")
+                    || !std::path::Path::new(&format!("/proc/self/task/{pid}")).exists()
+            })
+            .unwrap();
+        assert!(verify_listeners(other, &[port]).is_err());
     }
 }
