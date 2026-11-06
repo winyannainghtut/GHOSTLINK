@@ -19,21 +19,25 @@ cp "$packages" "$work/$name/packages.txt"
 
 # Lines look like: "strongswan-6.0.7-r2 x86_64 {strongswan} (GPL-2.0-or-later WITH ...)".
 # Copyleft = any GPL, LGPL or MPL license (dual-licensed packages are included too).
-docker run --rm -e BRANCH="$branch" -v "$work:/work" "$alpine" sh -euc '
-  apk add --no-cache abuild >/dev/null
+# The recipes come from Alpine's official aports mirror on GitHub (a sparse, shallow checkout),
+# since gitlab.alpinelinux.org refuses automated downloads.
+docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work" "$alpine" sh -euc '
+  trap "chown -R \"\$OWNER\" /work" EXIT
+  apk add --no-cache abuild git >/dev/null
   grep -E "\((.*GPL.*|.*MPL.*)\)" /work/packages.txt | while read -r package _ origin _; do
     origin=${origin#\{}; origin=${origin%\}}
     echo "$origin $package"
   done | sort -u > /work/copyleft
   cat /work/copyleft
+  git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$BRANCH" https://github.com/alpinelinux/aports.git /aports
+  (cd /aports && git sparse-checkout set $(cut -d" " -f1 /work/copyleft | sort -u | sed "s|.*|main/& community/&|"))
+  echo "aports $BRANCH at $(git -C /aports rev-parse HEAD)" > /work/'"$name"'/aports-commit.txt
   cut -d" " -f1 /work/copyleft | sort -u | while read -r origin; do
     dest=/work/'"$name"'/$origin
     mkdir -p "$dest/upstream"
     for repo in main community; do
-      url="https://gitlab.alpinelinux.org/alpine/aports/-/archive/$BRANCH/aports-$BRANCH.tar.gz?path=$repo/$origin"
-      if wget -q -O /tmp/recipe.tar.gz "$url" && tar -tzf /tmp/recipe.tar.gz | grep -q "/$repo/$origin/APKBUILD$"; then
-        tar -xzf /tmp/recipe.tar.gz -C /tmp
-        cp -R /tmp/aports-$BRANCH-$repo-$origin/$repo/$origin/. "$dest/"
+      if [ -f "/aports/$repo/$origin/APKBUILD" ]; then
+        cp -R "/aports/$repo/$origin/." "$dest/"
         break
       fi
     done

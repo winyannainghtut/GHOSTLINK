@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Collect actual dependency licenses from Cargo metadata and pinned Go modules."""
+import os
 import json
 from pathlib import Path
 import shutil
@@ -37,7 +38,12 @@ def main():
             if key not in entries:
                 notices = copy_notices(Path(package["manifest_path"]).parent, DEST / key)
                 entries[key] = {"ecosystem": "rust", "name": package["name"], "version": package["version"], "license": package["license"], "repository": package["repository"], "notices": notices}
-    listing = subprocess.check_output(["go", "list", "-deps", "-tags", "with_gvisor,with_utls,with_wireguard", "-f", "{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}", ".", "./cmd/ghostlink-server"], cwd=ROOT / "core/outline-worker", text=True)
+    go_list = ["go", "list", "-deps", "-tags", "with_gvisor,with_utls,with_wireguard", "-f", "{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}"]
+    worker = ROOT / "core/outline-worker"
+    # The worker for this platform, plus the Linux server and IPsec agent (Linux-only imports).
+    listing = subprocess.check_output(go_list + [".", "./cmd/ghostlink-server"], cwd=worker, text=True)
+    listing += subprocess.check_output(go_list + [".", "./cmd/ghostlink-server", "./cmd/ghostlink-ipsec-agent"], cwd=worker, text=True,
+                                       env={**os.environ, "GOOS": "linux", "GOARCH": "amd64"})
     for line in set(listing.splitlines()):
         if not line.strip():
             continue
