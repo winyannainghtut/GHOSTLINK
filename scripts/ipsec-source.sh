@@ -32,7 +32,8 @@ docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work
   git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$BRANCH" https://github.com/alpinelinux/aports.git /aports
   (cd /aports && git sparse-checkout set $(cut -d" " -f1 /work/copyleft | sort -u | sed "s|.*|main/& community/&|"))
   echo "aports $BRANCH at $(git -C /aports rev-parse HEAD)" > /work/'"$name"'/aports-commit.txt
-  cut -d" " -f1 /work/copyleft | sort -u | while read -r origin; do
+  for origin in $(cut -d" " -f1 /work/copyleft | sort -u); do
+    echo ">>> source for $origin"
     dest=/work/'"$name"'/$origin
     mkdir -p "$dest/upstream"
     for repo in main community; do
@@ -50,7 +51,7 @@ docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work
         *) echo "$origin recipe is $want but the image has $package; rebuild both" >&2; exit 1 ;;
       esac
     done
-    (cd "$dest" && SRCDEST="$dest/upstream" abuild -F fetch && SRCDEST="$dest/upstream" abuild -F verify)
+    (cd "$dest" && SRCDEST="$dest/upstream" abuild -F fetch </dev/null && SRCDEST="$dest/upstream" abuild -F verify </dev/null)
   done
 '
 cat > "$work/$name/README.txt" <<EOF
