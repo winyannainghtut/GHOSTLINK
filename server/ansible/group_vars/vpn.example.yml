@@ -1,0 +1,5 @@
+# Copy to group_vars/vpn.yml (ignored) and supply actual values.
+myvpn_public_interface: eth0
+myvpn_server_bundle: /secure/offline-generated/server-bundle.tar.gz
+# This playbook does not replace host input firewall rules or SSH rules.
+# Allow inbound UDP 1194 in the host firewall and cloud security group separately.

@@ -1,0 +1,27 @@
+[Unit]
+Description=MyVPN privileged local tunnel service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+EnvironmentFile=/etc/myvpn/myvpnd.env
+ExecStart=/usr/local/bin/myvpnd --owner-uid ${MYVPN_OWNER_UID} --outline-engine /usr/local/lib/myvpn/myvpn-tunnel
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+RuntimeDirectory=myvpn
+RuntimeDirectoryMode=0755
+StateDirectory=myvpn
+StateDirectoryMode=0700
+UMask=0077
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/run/myvpn /var/lib/myvpn
+[Install]
+WantedBy=multi-user.target

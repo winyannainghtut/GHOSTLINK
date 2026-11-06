@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="MyVPN" Language="1033" Version="0.1.0" Manufacturer="MyVPN contributors" UpgradeCode="8D3DE611-BA86-4B9F-A974-856C57AD8BD4">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="Personal Outline-compatible VPN client" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of MyVPN is already installed." Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="ARPNOREPAIR" Value="yes" />
+    <Property Id="MYVPN_OWNER_SID" Secure="yes">
+      <RegistrySearch Id="ExistingOwner" Root="HKLM" Key="Software\MyVPN" Name="OwnerSID" Type="raw" Win64="yes" />
+    </Property>
+    <SetProperty Id="MYVPN_OWNER_SID" Value="[UserSID]" Before="LaunchConditions" Sequence="both">NOT MYVPN_OWNER_SID</SetProperty>
+    <Property Id="WINDOWS_BUILD"><RegistrySearch Id="WindowsBuildSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Win64="yes" /></Property>
+    <Condition Message="MyVPN supports Windows 10/11 x64."><![CDATA[Installed OR (VersionNT64 AND WINDOWS_BUILD >= 10240)]]></Condition>
+    <Condition Message="The authorized user's SID is required. Supply MYVPN_OWNER_SID when installing unattended.">Installed OR MYVPN_OWNER_SID</Condition>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="MyVPN">
+        <Component Id="Desktop" Guid="*" Win64="yes">
+          <File Id="DesktopExe" Source="$(var.Stage)\myvpn-desktop.exe" KeyPath="yes"><Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="MyVPN" WorkingDirectory="INSTALLFOLDER" Advertise="yes" /></File>
+        </Component>
+        <Component Id="Cli" Guid="*" Win64="yes">
+          <File Id="CliExe" Source="$(var.Stage)\myvpn.exe" KeyPath="yes" />
+          <Environment Id="MyVPNPath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" System="yes" Permanent="no" />
+        </Component>
+        <Component Id="Mcp" Guid="*" Win64="yes"><File Source="$(var.Stage)\myvpn-mcp.exe" KeyPath="yes" /></Component>
+        <Component Id="Daemon" Guid="*" Win64="yes">
+          <File Id="DaemonExe" Source="$(var.Stage)\myvpnd.exe" KeyPath="yes" />
+          <ServiceInstall Id="InstallService" Name="MyVPN" DisplayName="MyVPN" Description="Privileged local MyVPN tunnel service" Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--service --owner-sid &quot;[MYVPN_OWNER_SID]&quot; --outline-engine &quot;[INSTALLFOLDER]engine\myvpn-tunnel.exe&quot; --data-dir &quot;[CommonAppDataFolder]MyVPN&quot;" Vital="yes" />
+          <ServiceControl Id="ServiceControl" Name="MyVPN" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+        <Component Id="InstallationMetadata" Guid="*" Win64="yes">
+          <RegistryValue Root="HKLM" Key="Software\MyVPN" Name="OwnerSID" Value="[MYVPN_OWNER_SID]" Type="string" KeyPath="yes" />
+        </Component>
+        <Directory Id="EngineFolder" Name="engine"><Component Id="TunnelWorker" Guid="*" Win64="yes"><File Id="WorkerExe" Source="$(var.Stage)\engine\myvpn-tunnel.exe" KeyPath="yes" /></Component></Directory>
+        <Directory Id="LicensesFolder" Name="licenses" />
+      </Directory></Directory>
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+    <Feature Id="MainFeature" Title="MyVPN" Level="1">
+      <ComponentRef Id="Desktop" /><ComponentRef Id="Cli" /><ComponentRef Id="Mcp" /><ComponentRef Id="Daemon" /><ComponentRef Id="TunnelWorker" /><ComponentRef Id="InstallationMetadata" />
+      <ComponentGroupRef Id="LicenseFiles" />
+    </Feature>
+    <Icon Id="MyVPNIcon" SourceFile="$(var.Root)\apps\desktop\src-tauri\icons\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="MyVPNIcon" />
+  </Product>
+</Wix>

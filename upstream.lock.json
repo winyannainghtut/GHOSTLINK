@@ -1,0 +1,8 @@
+{
+  "openvpn2": { "repository": "https://github.com/OpenVPN/openvpn", "tag": "v2.7.8", "commit": "dc1f569087135894ac2703aeabd7a960ee9452d4", "role": "external desktop engine and server" },
+  "openvpn3": { "repository": "https://github.com/OpenVPN/openvpn3", "tag": "release/3.11.8", "commit": "4f3bdef73245d4ee9e8216c5d65baccc9568f6ef", "role": "inspected; not linked or distributed" },
+  "outline_apps": { "repository": "https://github.com/OutlineFoundation/outline-apps", "commit": "ce518e8c058d4db9100ec27d15bc071a246a2274", "role": "access-key compatibility and UI reference; not embedded" },
+  "outline_sdk": { "repository": "https://github.com/OutlineFoundation/outline-sdk", "commit": "45e87213a473ff573378eb5f42081f71aff76664", "role": "inspected; not linked" },
+  "sing_box": { "repository": "https://github.com/SagerNet/sing-box", "tag": "v1.14.4", "commit": "c005f35300ce76427dc285481ec5695f5b179cd2", "role": "unmodified libraries linked by the separate GPL tunnel worker; go.sum pins dependencies" },
+  "wintun": { "version": "0.14.1", "url": "https://www.wintun.net/builds/wintun-0.14.1.zip", "sha256": "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51", "role": "signed DLL embedded by pinned sing-tun; notice and exact-byte verification required" }
+}

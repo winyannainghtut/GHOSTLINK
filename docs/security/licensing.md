@@ -1,0 +1,15 @@
+# Licensing decisions and unresolved distribution review
+
+Original Rust control-plane and UI files use MIT. The separate Go worker links the pinned sing-box libraries and uses GPL-3.0-or-later. Its process boundary avoids linking GPL code into the Rust GUI/CLI, but does not remove the worker's own source and notice obligations. Package its source, exact Go dependencies, notices, build flags and toolchain reference together with any binary distribution. The packaging script prepares a vendored source archive.
+
+The actual sing-box license contains its GPL notice and an additional naming/association statement; the upstream text is preserved in `LICENSES/sing-box.txt`. MyVPN uses its own name/icon and does not imply endorsement. Dependencies retain their file-level licenses. Generated Rust/Go notice inventory is a review aid, not a legal compatibility guarantee.
+
+Wintun is a separate signed binary embedded by the pinned sing-tun module. Its source and its prebuilt DLL have different licensing terms. MyVPN preserves the official prebuilt-binaries license, uses the unmodified DLL through the permitted API, and verifies that the embedded DLL matches the official 0.14.1 archive. Review the distribution/embedding conditions in `LICENSES/Wintun-0.14.1.txt` and the source-level MIT wrapper notices. Do not describe the prebuilt DLL as MIT or silently substitute an unsigned rebuilt driver.
+
+OpenVPN 2 is optional and separately installed. If bundled in future, preserve GPLv2/source obligations and its stated linking exceptions plus all driver/dependency terms. OpenVPN 3 Core was inspected but is not linked or distributed; its MPL/AGPL alternatives do not grant unrelated mobile/App Store distribution rights. Outline Apps/SDK were reference material and are not embedded components.
+
+The WebView2 Rust bindings' MIT text is preserved from their published source revision `edc2caf886175ccaebe86078c9cfe1ae2a187328`. Their static loader matched the x64 library in Microsoft's official WebView2 SDK 1.0.3800.47 package byte for byte (SHA256 `89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8`). Its separate SDK license and notices are included. The WebView2 Runtime remains an installed prerequisite; it is not bundled.
+
+The generated inventory covers 513 locked Rust packages/Go modules across targets. Thirty-eight Rust packages did not ship their own top-level license file; the manually preserved WebView2 texts address some runtime notices, but the inventory is not proof that every target's redistribution review is complete.
+
+Unresolved before public release: review complete target-specific dependency and driver terms, corresponding-source completeness, code-signing certificates, app-store distribution restrictions, mobile entitlements and trademarks. This repository does not assert a legally guaranteed distribution strategy.
