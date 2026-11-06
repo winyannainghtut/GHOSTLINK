@@ -1,6 +1,8 @@
-# MyVPN — AI agent project handover
+# Ghostlink — AI agent project handover
 
 Updated: **2026-11-06, Asia/Singapore**. Source baseline: **`7c875ad`** (`feat: implement Outline-key desktop client and managed VPN service`). This document was prepared after that implementation commit. Use `git log -1` and the current files to identify later changes.
+
+> **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
 This is a detailed, portable handover for an incoming AI coding agent. Read it before editing the project. It contains no production credentials. The project already has working source, real process integrations, tests and Windows development packages; continue that implementation.
 
@@ -29,7 +31,7 @@ This is a detailed, portable handover for an incoming AI coding agent. Read it b
 
 ### Product direction
 
-The user wants **MyVPN**, an independently branded, self-hosted, cross-platform personal VPN ecosystem, including a first-class CLI that local AI agents can control safely.
+The user wants **Ghostlink**, an independently branded, self-hosted, cross-platform personal VPN ecosystem, including a first-class CLI that local AI agents can control safely.
 
 The original brief preferred OpenVPN 2 servers, OpenVPN 3 Core clients, Rust CLI/daemon, Tauri desktop, Kotlin Android and Swift/SwiftUI iOS. The later clarification takes precedence for the main client experience:
 
@@ -104,26 +106,30 @@ Current checkout: **`D:\custom vpn`**, Windows PowerShell. Git branch at handove
 | `services/vpn-daemon/src/main.rs` | CLI arguments, persistent store, authorization/audit, operation dispatch, sessions, startup/shutdown |
 | `services/vpn-daemon/src/ipc.rs` | Server named-pipe/Unix-socket setup and peer restriction |
 | `services/vpn-daemon/src/service.rs` | Windows SCM entrypoint and service lifecycle |
-| `cli/myvpn/src/main.rs` | User-facing CLI, private file/stdin input, wait/timeout/interrupt behavior |
+| `cli/ghostlink/src/main.rs` | User-facing CLI, private file/stdin input, wait/timeout/interrupt behavior |
 | `integrations/mcp-server/src/main.rs` | Restricted stdio JSON-RPC/MCP interface; no shell |
 | `apps/desktop/ui/{index.html,app.css,app.js,mark.svg}` | Original static frontend; plain HTML/CSS/JavaScript, not a React/Vite app |
 | `apps/desktop/src-tauri/` | Separate Rust workspace and lock; native invoke bridge, tray, capabilities, CSP, app configuration/icons |
-| `apps/desktop/brand-spec.md` | Original MyVPN design/branding direction |
+| `apps/desktop/brand-spec.md` | Original Ghostlink design/branding direction |
 | `server/outline/` | Offline standard Shadowsocks server identity/config provisioning, Ansible and proxy service |
 | `server/openvpn/{pki.py,server.conf}` | Offline OpenVPN CA/client issuance/revocation/bundle and server defaults |
 | `server/ansible/` | Optional OpenVPN Linux deployment/firewall configuration |
 | `server/terraform/` | AWS draft and committed provider lock; originally OpenVPN ingress |
-| `packages/windows/MyVPN.wxs` | Custom WiX MSI service, files, owner policy, PATH and shortcut |
-| `packages/linux/myvpnd.service` | Privileged Linux client daemon unit; distinct from proxy server service |
+| `packages/windows/Ghostlink.wxs` | Custom WiX MSI service, files, owner policy, PATH and shortcut |
+| `packages/linux/ghostlinkd.service` | Privileged Linux client daemon unit; distinct from proxy server service |
 | `scripts/cargo.ps1` | Windows MSVC/SDK discovery wrapper for Cargo |
 | `scripts/bootstrap-windows.ps1` | Checksummed project-local WiX and optional SDK extraction |
 | `scripts/build-windows.ps1` | Optimized binaries, worker, staged licenses, validated MSI and portable ZIP |
 | `scripts/package-worker-source.ps1` | Vendored worker corresponding-source archive and build instructions |
 | `scripts/collect-licenses.py` | Actual locked Rust / used Go dependency notice inventory |
 | `scripts/audit-lockfiles.py` | OSV scan of both Rust lockfiles, including other targets |
-| `tests/integration/control-plane.test.mjs` | 14 actual daemon/CLI/MCP process tests |
+| `tests/integration/control-plane.test.mjs` | 16 actual daemon/CLI/MCP process tests |
 | `tests/integration/test_provision.py` | 2 offline Outline/OpenVPN provisioning tests |
 | `.github/workflows/desktop.yml` | Windows/Linux build and local verification workflow; hosted runs not yet observed |
+| `.github/workflows/release.yml`, `.github/release-notes.md` | Windows x64 / Linux x64 / Linux arm64 packages and a draft pre-release on `v*` tags (§14); hosted runs not yet observed |
+| `scripts/release-version.mjs` | Authoritative version plus consistency and tag check used by all builds |
+| `scripts/build-linux.sh` | Headless Linux release archive for the host architecture |
+| `docs/development/releases.md` | Maintainer release procedure |
 | `upstream.lock.json` | Inspected/used upstream revisions and Wintun provenance |
 | `LICENSE`, `NOTICE.md`, `LICENSES/` | Original license, component obligations and preserved/generated notices |
 | `.gitignore`, `.gitattributes` | Private/generated exclusions and LF text policy |
@@ -146,11 +152,11 @@ When documentation and source diverge, inspect source/tests and reconcile the do
 ```mermaid
 flowchart TD
   UI[Tauri desktop GUI] --> IPC[Typed local IPC]
-  CLI[Rust myvpn CLI] --> IPC
+  CLI[Rust ghostlink CLI] --> IPC
   MCP[Restricted stdio MCP] --> IPC
-  IPC --> D[myvpnd: authorization, state, audit]
+  IPC --> D[ghostlinkd: authorization, state, audit]
   D --> S[Private persistent storage]
-  D --> W[Managed MyVPN Go worker]
+  D --> W[Managed Ghostlink Go worker]
   D --> O[Optional external OpenVPN 2]
   W --> T[Upstream TUN / routing / DNS / Shadowsocks]
   T --> SS[Outline-compatible server]
@@ -163,7 +169,7 @@ Decisions already investigated and implemented:
 
 1. The initial desktop vertical slice uses an external unmodified OpenVPN 2 Community executable over its documented management interface. This is a staged deviation from the preferred OpenVPN 3 Core embedding, not OpenVPN 3 integration.
 2. The user's Outline clarification added standard Shadowsocks/Outline-key support as the primary product path. Outline SDK sample VPN CLI was Linux-only; Outline Apps has separate platform routing integrations. This repository does not embed Outline SDK or copy its UI implementation.
-3. A standalone sing-box CLI was initially used. **It was replaced on November 6 with `myvpn-tunnel`, a managed Go worker**, because force-ending a console-less Windows CLI does not establish graceful engine cleanup.
+3. A standalone sing-box CLI was initially used. **It was replaced on November 6 with `ghostlink-tunnel`, a managed Go worker**, because force-ending a console-less Windows CLI does not establish graceful engine cleanup.
 4. The worker links pinned sing-box libraries without modifying their protocol/cryptographic source. A process boundary keeps it separate from MIT Rust/UI components, while the worker retains its own GPL/source/driver obligations.
 5. Desktop is a separate Cargo workspace so a headless root build does not require GTK/WebView frontend dependencies.
 
@@ -182,21 +188,21 @@ Static local test endpoints are supported; the public-address restriction concer
 
 ### Managed worker contract
 
-Executable: `myvpn-tunnel.exe` on Windows, `myvpn-tunnel` on Linux.
+Executable: `ghostlink-tunnel.exe` on Windows, `ghostlink-tunnel` on Linux.
 
 ```text
-myvpn-tunnel version
-myvpn-tunnel check -c PRIVATE_CONFIG.json
-myvpn-tunnel run -c PRIVATE_CONFIG.json
+ghostlink-tunnel version
+ghostlink-tunnel check -c PRIVATE_CONFIG.json
+ghostlink-tunnel run -c PRIVATE_CONFIG.json
 ```
 
 Exact version identity currently required by Rust:
 
 ```text
-MyVPN tunnel worker 0.1.0; sing-box 1.14.4
+Ghostlink tunnel worker 0.1.0; sing-box 1.14.4
 ```
 
-The Rust check expects that line with a newline. A standalone sing-box executable fails this contract. `myvpnd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
+The Rust check expects that line with a newline. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
 
 Lifecycle:
 
@@ -204,7 +210,7 @@ Lifecycle:
 2. Worker `check` must validate it before native start.
 3. Parent keeps an inherited private stdin pipe open; stdout/stderr are controlled by the parent.
 4. Worker emits fixed credential-free JSON lifecycle events on stderr, suppressing upstream raw logs.
-5. Before starting, worker rejects an existing `MyVPN` interface name or overlapping local address range.
+5. Before starting, worker rejects an existing `Ghostlink` interface name or overlapping local address range.
 6. Worker reports a started tunnel address only after observing it on the OS interface. Proxy-only test configurations omit `vpn_ip`.
 7. Daemon verifies that worker PID owns both loopback listeners before sending per-session proxy/controller credentials.
 8. A real HTTPS 204 health request through the authenticated proxy is required before connected state.
@@ -217,7 +223,7 @@ Do not set `kill_on_drop(true)` on the running managed worker casually: parent-p
 
 These are implementation values, not proven leak-prevention guarantees:
 
-- Full TUN interface `MyVPN`, addresses `172.28.85.1/30` and `fdfe:85:85::1/126`, MTU 1500, mixed stack, automatic/strict routing and DNS hijack.
+- Full TUN interface `Ghostlink`, addresses `172.28.85.1/30` and `fdfe:85:85::1/126`, MTU 1500, mixed stack, automatic/strict routing and DNS hijack.
 - Loopback mixed health proxy and statistics/controller API use reserved ephemeral ports and random per-session credentials. They are not public unauthenticated listeners.
 - DNS uses DoH at `1.1.1.1`, TLS name `cloudflare-dns.com`, through the Outline outbound. Local resolver is used for bootstrap server-name resolution. Current strategy is IPv4-only.
 - IPv6 entering the Outline TUN is rejected by policy. This is not complete tested IPv6 VPN support.
@@ -247,12 +253,12 @@ Actual route/DNS/IPv6/egress behavior, shutdown recovery and collisions must sti
 
 | Item | Windows | Linux |
 |---|---|---|
-| Default IPC | `\\.\pipe\myvpn` | `/run/myvpn/control.sock` |
-| Default private state | `%ProgramData%\MyVPN` | `/var/lib/myvpn` |
-| Default managed worker | `C:\Program Files\MyVPN\engine\myvpn-tunnel.exe` | `/usr/local/lib/myvpn/myvpn-tunnel` |
+| Default IPC | `\\.\pipe\ghostlink` | `/run/ghostlink/control.sock` |
+| Default private state | `%ProgramData%\Ghostlink` | `/var/lib/ghostlink` |
+| Default managed worker | `C:\Program Files\Ghostlink\engine\ghostlink-tunnel.exe` | `/usr/local/lib/ghostlink/ghostlink-tunnel` |
 | Development state in this checkout | `D:\custom vpn\.state-dev` | Use a suitable private local directory |
 
-Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engine`, `--owner-sid`, `--owner-uid`, `--windows-driver`, `--allow-full-tunnel`, `--connection-timeout-seconds`, `--service`. Read `myvpnd --help` before using new combinations. Engine startup timeout defaults to 60 seconds, accepted range 1–600. `--windows-driver` pertains to the optional OpenVPN adapter path; the Outline worker embeds its pinned Wintun integration.
+Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engine`, `--owner-sid`, `--owner-uid`, `--windows-driver`, `--allow-full-tunnel`, `--connection-timeout-seconds`, `--service`. Read `ghostlinkd --help` before using new combinations. Engine startup timeout defaults to 60 seconds, accepted range 1–600. `--windows-driver` pertains to the optional OpenVPN adapter path; the Outline worker embeds its pinned Wintun integration.
 
 ### IPC and authorization
 
@@ -269,46 +275,49 @@ Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engi
 - `daemon.lock`: exclusive state ownership; do not start two daemons against one data directory.
 - `audit.jsonl` and rotated `audit.previous.jsonl`: timestamp/actor/operation/fixed outcome. No raw keys/configuration/engine logs.
 - Maximum profiles/grants are bounded (currently 32 each).
-- Writes use a new private `.pending` transaction file, data sync and atomic replacement. A stale transaction file fails closed rather than following a link or overwriting it. Inspect trusted private state after a crash; do not blindly delete state or transaction files.
+- Writes use a new private `.pending` transaction file, data sync and atomic replacement. While the daemon runs, an existing transaction file fails closed rather than being followed or overwritten. At startup, while holding `daemon.lock`, the daemon removes leftovers that can only come from a crash: `state.pending` (an uncommitted transaction; `state.json` is intact) and the plaintext runtime files in `run/` (`outline.json`, `active.conf`, `management.auth`, their `.pending` files, `engine.sock`). It audits `stale_runtime_cleanup`.
 - Windows secrets use user-scoped DPAPI under the **daemon identity**, plus protected ACLs. Private directories reject reparse points/untrusted owners.
 - A development daemon uses the developer identity; the installed service uses SYSTEM. Copying development sealed state into SYSTEM storage does not migrate it. Reimport keys through the installed service.
 - Linux currently uses root-private directories and mode-0600 files; no implemented Linux encrypted OS vault is claimed.
-- Autoconnect runs at daemon startup using saved policy. An explicit disconnect is respected until restart; it is not an always-on reconnect loop.
+- Autoconnect runs at daemon startup using saved policy. An explicit disconnect is respected until restart; it is not an always-on reconnect loop. A failed autoconnect never stops the service: an internal error leaves status `failed` with `last_error: "autoconnect_failed"` and audits `autoconnect`/`error`, so the user can still inspect it and disable autoconnect over IPC.
+- Audit writes have their own lock (`AuditLog`), separate from the daemon state mutex. Engine events are recorded without waiting for a long connect/switch, so accepting clients and shutdown are never stalled by them.
+- Access-key fingerprints (`sha256` in summaries, visible to read-only agents) are keyed with a per-installation `fingerprint_salt` stored only in `state.json`; they are not a plain hash of the credential.
 - Cleanup failure is an error (`cleanup_unverified`) and blocks another connect/switch in the affected daemon state. Verify behavior across process/service crashes; do not treat an in-memory state flag as a persistent firewall guarantee.
 
 Windows SCM reports Running after state/lock/IPC readiness, and StopPending during stop. Installed lifecycle has not been exercised as SYSTEM in this environment.
 
 ## 8. CLI and JSON contract
 
-Primary binary: `myvpn`. It communicates with the same local daemon as the GUI.
+Primary binary: `ghostlink`. It communicates with the same local daemon as the GUI.
 
 ```powershell
-myvpn --help
-myvpn version
-myvpn key add --name singapore --file C:\private\singapore-access.txt
-myvpn key add --name singapore --stdin
-myvpn profile import C:\private\client.ovpn --name office
-myvpn profile list --json
-myvpn profile default singapore
-myvpn profile remove singapore
-myvpn connect --profile singapore --json
-myvpn connect --profile singapore --no-wait --json
-myvpn status --json
-myvpn info --json
-myvpn servers list --json
-myvpn switch --profile japan --json
-myvpn disconnect --json
-myvpn autoconnect enable
-myvpn autoconnect disable
-myvpn logs --tail 100
-myvpn doctor --json
+ghostlink --help
+ghostlink version
+ghostlink key add --name singapore --file C:\private\singapore-access.txt
+ghostlink key add --name singapore --stdin
+ghostlink profile import C:\private\client.ovpn --name office
+ghostlink profile list --json
+ghostlink profile default singapore
+ghostlink profile remove singapore
+ghostlink connect --profile singapore --json
+ghostlink connect --profile singapore --no-wait --json
+ghostlink status --json
+ghostlink info --json
+ghostlink servers list --json
+ghostlink switch --profile japan --json
+ghostlink disconnect --json
+ghostlink autoconnect enable
+ghostlink autoconnect disable
+ghostlink logs --tail 100
+ghostlink doctor --json
 ```
 
 Examples refer to existing profiles/private input files; they are not instructions to create production credentials or change the current machine's routes. `--stdin` requires actual redirected/input key content. Never insert a key literal into the shell command.
 
-Global options: `--json`, `--timeout` (default 75 seconds, range 1–600), `--endpoint` / `MYVPN_ENDPOINT`, `--agent-token-file` / `MYVPN_AGENT_TOKEN_FILE`.
+Global options: `--json`, `--timeout` (default 75 seconds, range 1–600), `--endpoint` / `GHOSTLINK_ENDPOINT`, `--agent-token-file` / `GHOSTLINK_AGENT_TOKEN_FILE`.
 
 - Key input is file or stdin, never a credential argument. Normal list/status/info/logs do not reveal keys.
+- `key add` and `profile import` reject an existing server/profile ID with `invalid_request` (exit 2) unless `--replace` is given. The IPC actions carry `replace` (default `false`), so a client with a stale list can no longer silently overwrite a saved credential.
 - CLI profile subcommands currently include import/list/default/remove. Rename exists through GUI/private typed IPC, not a delivered `profile rename` CLI command.
 - Connect/switch wait for the observed result unless `--no-wait` is specified. Acceptance is not connection success.
 - Timeout/Ctrl+C stops the client wait, not a daemon operation already accepted. Poll status or explicitly disconnect.
@@ -347,11 +356,11 @@ Error envelope:
 Issue a read-only grant to a **new private file**:
 
 ```powershell
-myvpn agent grant --name assistant --token-file C:\private\myvpn-assistant.token
-myvpn-mcp --token-file C:\private\myvpn-assistant.token
+ghostlink agent grant --name assistant --token-file C:\private\ghostlink-assistant.token
+ghostlink-mcp --token-file C:\private\ghostlink-assistant.token
 ```
 
-For control, the grant needs `--control`, and MCP launch additionally needs `--allow-control`. Both gates matter; the daemon enforces scope even if a client advertises a tool. Revoke using `myvpn agent revoke --name assistant`. Re-granting the same agent name replaces its stored grant.
+For control, the grant needs `--control`, and MCP launch additionally needs `--allow-control`. Both gates matter; the daemon enforces scope even if a client advertises a tool. Revoke using `ghostlink agent revoke --name assistant`. Re-granting the same agent name replaces its stored grant.
 
 - Tokens are random 64-hex-character secrets; only their hashes are persisted as grants.
 - Token issuance is an internal private IPC exception: CLI consumes the one-time secret into a protected file, strips it from printed JSON and reports `token_saved: true`.
@@ -369,7 +378,7 @@ Known small cleanup candidate: the `vpn_status` tool description still mentions 
 
 ## 10. Desktop UI
 
-- Original MyVPN branding: teal/neutral, sidebar, server cards, empty state, light/dark themes. Outline informed the experience; no Outline logos or official affiliation.
+- Original Ghostlink branding: teal/neutral, sidebar, server cards, empty state, light/dark themes. Outline informed the experience; no Outline logos or official affiliation.
 - Add access key dialog masks input, imports through native private IPC, clears the key on completion/close, and stores credentials in the service.
 - Saved server cards: endpoint, default star, actual status, connect/disconnect, options for details/rename/default/remove, search.
 - Connection overview: actual duration and byte totals; no invented servers or connected state.
@@ -422,7 +431,7 @@ The desktop is excluded from root workspace builds; **root `--workspace` does no
 Push-Location core/outline-worker
 go test -tags with_gvisor ./...
 go vet -tags with_gvisor ./...
-go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/myvpn-tunnel.exe .
+go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/ghostlink-tunnel.exe .
 Pop-Location
 ```
 
@@ -433,24 +442,52 @@ Pop-Location
 Start daemon in one terminal:
 
 ```powershell
-./target/debug/myvpnd.exe --data-dir 'D:\custom vpn\.state-dev' --outline-engine 'D:\custom vpn\target\debug\myvpn-tunnel.exe' --openvpn 'D:\custom vpn\.tools\openvpn-bin\openvpn.exe'
+./target/debug/ghostlinkd.exe --data-dir 'D:\custom vpn\.state-dev' --outline-engine 'D:\custom vpn\target\debug\ghostlink-tunnel.exe' --openvpn 'D:\custom vpn\.tools\openvpn-bin\openvpn.exe'
 ```
 
 In a second terminal:
 
 ```powershell
-./target/debug/myvpn.exe status --json
-./target/debug/myvpn.exe profile list --json
-./apps/desktop/src-tauri/target/debug/myvpn-desktop.exe
+./target/debug/ghostlink.exe status --json
+./target/debug/ghostlink.exe profile list --json
+./apps/desktop/src-tauri/target/debug/ghostlink-desktop.exe
 ```
 
-An unelevated development daemon is useful for real IPC, key/profile/agent management and UI checks; it cannot establish the required privileged native tunnel in the observed environment. The default pipe is shared with an installed service: inspect it before starting a development instance, or use a consistent isolated `--endpoint`/`MYVPN_ENDPOINT` across clients and daemon. Never run two daemons against the same private data directory.
+An unelevated development daemon is useful for real IPC, key/profile/agent management and UI checks; it cannot establish the required privileged native tunnel in the observed environment. The default pipe is shared with an installed service: inspect it before starting a development instance, or use a consistent isolated `--endpoint`/`GHOSTLINK_ENDPOINT` across clients and daemon. Never run two daemons against the same private data directory.
 
 Do not broadly kill processes named OpenVPN/sing-box. If stopping an owned development process is necessary, verify its absolute executable path and data directory/command line first. Do not stop another user's VPN or an unrelated installed service.
 
 ## 12. Tests and verification
 
-No new runtime tests are needed merely for editing this handover. The following results were actually recorded during implementation on November 6.
+No new runtime tests are needed merely for editing this handover.
+
+**After the Ghostlink rename and review fixes** (later on November 6, same host), all of these were re-run and passed:
+
+- fmt and clippy;
+- 12 unit tests;
+- **16** process tests on debug and release binaries;
+- 3 real-engine tests with the renamed worker;
+- Go vet/test, plus linux/amd64 and linux/arm64 worker cross-builds;
+- 2 Python provisioning tests on Python 3.12 and 3.13;
+- the full Windows MSI, portable ZIP and worker-source packaging.
+
+The review fixes were:
+
+1. A failed autoconnect no longer stops the service.
+2. The Linux unit has `CAP_CHOWN`.
+3. Engine events are audited outside the daemon mutex.
+4. OpenVPN forced kills after hold release are flagged as unverified cleanup.
+5. Crash leftovers are removed at startup.
+6. `Session::stop` is cancel-safe.
+7. A first connection is `connecting`, not `reconnecting`.
+8. Imports need `replace` to overwrite.
+9. Fingerprints are salted.
+10. MCP uses a 75 s timeout.
+11. `cargo.ps1` probes `cl.exe`.
+12. `build-windows.ps1` no longer passes a trailing-backslash `-out`.
+13. `provision.py` uses absolute System32 tools.
+
+See [the verification ledger](docs/development/verification.md). The table below records the earlier implementation results.
 
 | Suite / check | Last observed result |
 |---|---|
@@ -484,9 +521,9 @@ If `python` resolves to a Windows Store alias, invoke the known working runtime 
 ### Explicit real-engine tests
 
 ```powershell
-$env:MYVPN_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
-$env:MYVPN_TEST_OUTLINE_WORKER = 'D:\custom vpn\target\debug\myvpn-tunnel.exe'
-./scripts/cargo.ps1 test --locked -p myvpn-engine --test outline_traffic '--' --ignored --nocapture
+$env:GHOSTLINK_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
+$env:GHOSTLINK_TEST_OUTLINE_WORKER = 'D:\custom vpn\target\debug\ghostlink-tunnel.exe'
+./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
 ```
 
 Keep `'--'` quoted through the PowerShell wrapper. Those three tests are ignored in an ordinary `cargo test` run and must be enabled explicitly. They verify:
@@ -499,17 +536,17 @@ The independent standalone peer and the managed worker have distinct roles. Thes
 
 ### Process suite coverage and switches
 
-The 14 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove; dynamic SSRF/obsolete cipher/plugin rejection.
+The 16 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove with overwrite protection and a salted fingerprint; failed startup autoconnect keeps the service reachable; crash leftovers are removed at startup; dynamic SSRF/obsolete cipher/plugin rejection.
 
 | Variable | Use |
 |---|---|
-| `MYVPN_BUILD_PROFILE=release` | Run process tests against optimized binaries; default is debug |
-| `MYVPN_TEST_ENGINE` | Override optional OpenVPN executable for process/Python tests |
-| `MYVPN_TEST_OUTLINE_WORKER` | Managed worker executable |
-| `MYVPN_TEST_SING_BOX` | Independent original peer; also used for generated server config checks |
+| `GHOSTLINK_BUILD_PROFILE=release` | Run process tests against optimized binaries; default is debug |
+| `GHOSTLINK_TEST_ENGINE` | Override optional OpenVPN executable for process/Python tests |
+| `GHOSTLINK_TEST_OUTLINE_WORKER` | Managed worker executable |
+| `GHOSTLINK_TEST_SING_BOX` | Independent original peer; also used for generated server config checks |
 | `OPENSSL` | Node suite OpenSSL path |
-| `MYVPN_TEST_OPENSSL` | Python provisioning suite OpenSSL path |
-| `MYVPN_TEST_EXPECT_UNPRIVILEGED=1` | Deliberately exercise native startup failure; only after verifying the process is unelevated |
+| `GHOSTLINK_TEST_OPENSSL` | Python provisioning suite OpenSSL path |
+| `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED=1` | Deliberately exercise native startup failure; only after verifying the process is unelevated |
 
 The unprivileged-start option was run after an actual administrator-role check. It verified failed state/no VPN IP, successful disconnect and config removal. **Do not enable it in a privileged shared environment**: it deliberately invokes the native startup path. Ordinary tests use unique endpoints/private temporary state and local fixtures. Clear environment overrides when changing test modes.
 
@@ -541,7 +578,7 @@ These are disposable local provisioning examples, not an instruction to start/ch
 - Rotate by issuing a new identity/port, distributing/verifying it privately, then removing/deploying the old identity. Static keys have no OpenVPN certificate-expiry mechanism.
 - Keep state/key backups encrypted and separate from publicly readable files. A rollback can re-enable revoked keys; inspect identities before restoring.
 
-`server/outline/deploy.yml` targets inventory group `outline_vpn` and takes `myvpn_outline_config=/private/path/config.json`. It downloads a pinned/checksummed official Linux x64 engine and installs `myvpn-proxy.service` under an unprivileged account, with low-port binding capability as needed. It does not deploy offline identity state or client key exports.
+`server/outline/deploy.yml` targets inventory group `outline_vpn` and takes `ghostlink_outline_config=/private/path/config.json`. It downloads a pinned/checksummed official Linux x64 engine and installs `ghostlink-proxy.service` under an unprivileged account, with low-port binding capability as needed. It does not deploy offline identity state or client key exports.
 
 Allow TCP and UDP for chosen listener ports while preserving restricted SSH access. This proxy server path does not require changing default routes, IP forwarding or NAT. Ansible/systemd/VPS execution remains unverified and no remote deployment is authorized by these examples.
 
@@ -577,28 +614,35 @@ Build script uses optimized Rust binaries with static MSVC CRT, optimized manage
 
 MSI behavior in source:
 
-- Installs x64 Program Files application files, `engine/myvpn-tunnel.exe`, notices, Start menu shortcut and machine CLI PATH entry.
-- Installs automatic LocalSystem service **`MyVPN`** with explicit worker/data-directory/owner arguments.
-- Owner SID property `MYVPN_OWNER_SID` is read from existing installation metadata or interactive Windows Installer UserSID; explicitly supply intended user's SID for unattended installation. Never authorize Everyone/a broad group.
-- Service owns `%ProgramData%\MyVPN` state and DPAPI identity. GUI/CLI run as the ordinary authorized user.
+- Installs x64 Program Files application files, `engine/ghostlink-tunnel.exe`, notices, Start menu shortcut and machine CLI PATH entry.
+- Installs automatic LocalSystem service **`Ghostlink`** with explicit worker/data-directory/owner arguments.
+- Owner SID property `GHOSTLINK_OWNER_SID` is read from existing installation metadata or interactive Windows Installer UserSID; explicitly supply intended user's SID for unattended installation. Never authorize Everyone/a broad group.
+- Service owns `%ProgramData%\Ghostlink` state and DPAPI identity. GUI/CLI run as the ordinary authorized user.
 - WebView2 Runtime must already be installed; it is not bundled.
 - Uninstall source retains encrypted state intentionally; any subsequent removal needs explicit administrator intent and verified disconnect.
 - Package is unsigned development output. Installer execution, owner behavior under elevation, service stop/restart, installation rollback and uninstall still require actual administrator testing.
 
 Administrator installation is a human step on an authorized test machine. No UAC/install action was performed by the agent during implementation.
 
+### Release workflow
+
+`.github/workflows/release.yml` builds every supported platform on GitHub-hosted runners:
+
+| Job | Runner | Output |
+|---|---|---|
+| Windows x64 | `windows-2022` | `Ghostlink-<v>-windows-x64.msi`, `-portable.zip`, `Ghostlink-<v>-worker-corresponding-source.zip` |
+| Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz` (headless; `scripts/build-linux.sh`) |
+| Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz` |
+
+Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, the UI version label, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
+
+Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md`. A maintainer must review and publish the draft. A manual `workflow_dispatch` run only produces workflow artifacts. Neither the workflow nor any agent has pushed a tag or created a release yet.
+
+Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), DEB/RPM packages (Linux runtime unverified), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). Arm64 Linux runners are free for public repositories; a private repository needs a plan that provides them, or remove that matrix entry.
+
 ### Artifacts actually produced
 
-These are ignored local outputs, not committed source. Copy them separately when handing the project to another machine.
-
-| Artifact | Size at handover | SHA256 |
-|---|---:|---|
-| `artifacts/windows-x64/MyVPN-0.1.0-windows-x64.msi` | 11,585,844 bytes | `18208546104f1dbfb5b32a4e364a6a90d28ce6f212b9a0f96a3e535525a62d0f` |
-| `artifacts/windows-x64/MyVPN-0.1.0-windows-x64-portable.zip` | 16,606,080 bytes | `ed1f51d03bcbbba7d0d9e8f990a7c4bf74cfda10089ad95fce95ba54068ba3c1` |
-| `artifacts/source/MyVPN-0.1.0-worker-corresponding-source.zip` | 11,774,029 bytes | `e1b08871061d58c0b74421c6d5bb8c9a77051b35f95102b01314fa9bacc9db03` |
-| `artifacts/linux-x64/myvpn-tunnel` | 22,880,418 bytes | `58d4b4e975bab8b4d3af6b6a0bd9435486872a56113c31b53ae4c38d24e3a423` |
-
-`artifacts/SHA256SUMS.txt` also records the individual release executables. Recompute after every rebuild; MSI identity/archive timestamps can change hashes. These values identify this snapshot, not all future builds.
+These are ignored local outputs, not committed source. The hashes recorded before the rename identified `MyVPN-*` files and are superseded. Rebuild with `scripts/build-windows.ps1` / `scripts/build-linux.sh` or the release workflow, and recompute checksums after every rebuild; MSI identity/archive timestamps change hashes.
 
 The corresponding-source bundle includes worker Go files/tests/module locks, actual vendored engine/dependency source/resources, notices and `BUILD.txt`. A build from its vendored source staging succeeded. Vendored builds omit module checksum build metadata found in module-cache builds, so **byte-identical reproduction has not been established**. Do not equate a successful source build with a complete legal distribution review.
 
@@ -628,7 +672,7 @@ Recorded November 6; databases change, so rescan before release:
 - `npm audit`: **zero known vulnerabilities** in verification tooling. `package.json` is private; Ajv is pinned at 8.20.0.
 - OSV queried **472 unique Rust registry package versions** across both Cargo locks. Eight OpenSSL advisory matches were cleared by root lock update to `openssl` **0.10.82** and `openssl-sys` **0.9.118**.
 - Remaining **3 advisory IDs describe 2 Linux GUI/build dependencies**: `glib` 0.18.5 iterator unsoundness (**RUSTSEC-2024-0429**, alias **GHSA-wrw7-89jp-8q8g**), and unmaintained `proc-macro-error` 1.0.4 (**RUSTSEC-2024-0370**).
-- glib fix is in 0.20.0, while current GTK/Tauri chain uses 0.18. It cannot simply be replaced across that ABI/dependency chain. MyVPN does not call the affected iterator directly; transitive Linux reachability has not been established. Linux GUI release needs a chain upgrade/reviewed backport and testing.
+- glib fix is in 0.20.0, while current GTK/Tauri chain uses 0.18. It cannot simply be replaced across that ABI/dependency chain. Ghostlink does not call the affected iterator directly; transitive Linux reachability has not been established. Linux GUI release needs a chain upgrade/reviewed backport and testing.
 - Those GTK components are not compiled into the Windows app. Do not hide their findings or claim the all-target Rust scan is clean; the script intentionally returns nonzero while matches remain.
 - Scans do not certify system libraries, drivers, WebView2 Runtime, separately installed OpenVPN, test peers or the absence of unknown vulnerabilities.
 
@@ -669,8 +713,8 @@ The workflow has not been observed on hosted runners. It does not certify privil
 ### Linux continuation
 
 - Build and run on an actual Ubuntu/Debian environment, then RHEL-compatible targets as feasible. Native compiler, pkg-config, OpenSSL dev libraries and Tauri GTK/WebKit2GTK 4.1 requirements are needed.
-- Install trusted root-owned binaries in `/usr/local/bin`; worker in `/usr/local/lib/myvpn/myvpn-tunnel`.
-- `packages/linux/myvpnd.service` requires `/etc/myvpn/myvpnd.env` with intended numeric `MYVPN_OWNER_UID`. Do not accidentally default to an unrelated user.
+- Install trusted root-owned binaries in `/usr/local/bin`; worker in `/usr/local/lib/ghostlink/ghostlink-tunnel`.
+- `packages/linux/ghostlinkd.service` requires `/etc/ghostlink/ghostlinkd.env` with intended numeric `GHOSTLINK_OWNER_UID`. Do not accidentally default to an unrelated user.
 - Unit has network capability bounding, restrictive state paths/umask and filesystem hardening. Verify `/dev/net/tun` and that the unit's sandbox allows required network operations on the actual target.
 - **Full tunnel is disabled by default on Linux.** Preserve the SSH administrator route and explicitly authorize route changes before an override adds `--allow-full-tunnel`.
 - Client daemon service is distinct from the unprivileged server proxy service; do not use the wrong unit on a VPS.
@@ -757,4 +801,4 @@ After meaningful work:
 
 Suggested instruction when handing this repository to another AI agent:
 
-> Read `agent.md` first, then the current verification and security reports. Inspect Git/process state and continue the existing MyVPN implementation. Keep Outline-compatible access keys as the primary flow and use local test servers for now. Preserve the real daemon/CLI/GUI/MCP architecture, never fabricate connected state, and distinguish compiled or proxy-tested behavior from administrator-verified device-wide VPN routing.
+> Read `agent.md` first, then the current verification and security reports. Inspect Git/process state and continue the existing Ghostlink implementation. Keep Outline-compatible access keys as the primary flow and use local test servers for now. Preserve the real daemon/CLI/GUI/MCP architecture, never fabricate connected state, and distinguish compiled or proxy-tested behavior from administrator-verified device-wide VPN routing.

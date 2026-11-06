@@ -17,23 +17,55 @@ pub struct Request {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    AccessKeyImport { name: String, access_key: String },
-    ProfileRename { name: String, display_name: String },
-    ProfileImport { name: String, content: String },
+    /// An existing server ID is rejected unless `replace` is set, so a stale client view can
+    /// never silently overwrite a saved credential.
+    AccessKeyImport {
+        name: String,
+        access_key: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    ProfileRename {
+        name: String,
+        display_name: String,
+    },
+    ProfileImport {
+        name: String,
+        content: String,
+        #[serde(default)]
+        replace: bool,
+    },
     ProfileList,
-    ProfileDefault { name: String },
-    ProfileRemove { name: String },
-    Connect { profile: Option<String> },
+    ProfileDefault {
+        name: String,
+    },
+    ProfileRemove {
+        name: String,
+    },
+    Connect {
+        profile: Option<String>,
+    },
     Disconnect,
-    Switch { profile: String },
+    Switch {
+        profile: String,
+    },
     Status,
     Info,
     ServersList,
-    Autoconnect { enabled: bool },
-    Logs { tail: usize },
+    Autoconnect {
+        enabled: bool,
+    },
+    Logs {
+        tail: usize,
+    },
     Doctor,
-    AgentGrant { name: String, control: bool },
-    AgentRevoke { name: String },
+    AgentGrant {
+        name: String,
+        control: bool,
+    },
+    AgentRevoke {
+        name: String,
+    },
 }
 
 impl Action {
@@ -157,9 +189,9 @@ pub type Stream = Box<dyn IpcStream>;
 
 pub fn default_endpoint() -> String {
     if cfg!(windows) {
-        r"\\.\pipe\myvpn".into()
+        r"\\.\pipe\ghostlink".into()
     } else {
-        "/run/myvpn/control.sock".into()
+        "/run/ghostlink/control.sock".into()
     }
 }
 
@@ -293,7 +325,7 @@ pub async fn call(endpoint: &str, request: Request, timeout: std::time::Duration
         let stream = connect(endpoint).await.map_err(|_| {
             Response::err(
                 "daemon_unavailable",
-                "Cannot reach the authorized local MyVPN service",
+                "Cannot reach the authorized local Ghostlink service",
             )
         })?;
         let mut reader = BufReader::new(stream);
@@ -340,7 +372,8 @@ mod tests {
         .agent_allowed(true));
         assert!(!Action::ProfileImport {
             name: "x".into(),
-            content: "".into()
+            content: "".into(),
+            replace: true
         }
         .agent_allowed(true));
         assert!(!Action::Disconnect.agent_allowed(false));

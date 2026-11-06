@@ -104,7 +104,7 @@ authorityKeyIdentifier = keyid,issuer
         (self.root / "newcerts").mkdir(mode=0o700)
         (self.root / "clients").mkdir(mode=0o700)
         self.run("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-384", "-aes-256-cbc", "-pass", "stdin", "-out", "ca.key", secret=True)
-        self.run("req", "-new", "-x509", "-sha384", "-days", "3650", "-config", "openssl.cnf", "-extensions", "ca_cert", "-subj", "/CN=MyVPN-Personal-CA", "-key", "ca.key", "-passin", "stdin", "-out", "ca.crt", secret=True)
+        self.run("req", "-new", "-x509", "-sha384", "-days", "3650", "-config", "openssl.cnf", "-extensions", "ca_cert", "-subj", "/CN=Ghostlink-Personal-CA", "-key", "ca.key", "-passin", "stdin", "-out", "ca.crt", secret=True)
         # TLS-crypt uses the official OpenVPN static-key format; OpenSSL only supplies random bytes.
         # Prefer an actual OpenVPN-generated key for compatibility rather than implementing a key format.
         private_write(self.root / "README.txt", "Offline CA: keep ca.key and this directory off the VPN server. Run server to generate a server identity, then issue separate client identities.\n")
@@ -129,7 +129,7 @@ authorityKeyIdentifier = keyid,issuer
         self.run("ca", "-config", "openssl.cnf", "-gencrl", "-out", "crl.pem", "-passin", "stdin", secret=True)
 
     def server(self, openvpn):
-        self.create_identity("myvpn-server", server=True)
+        self.create_identity("ghostlink-server", server=True)
         result = subprocess.run([str(openvpn), "--genkey", "secret", str(self.root / "tls-crypt.key")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if result.returncode:
             raise RuntimeError("OpenVPN TLS-crypt key generation failed")
@@ -144,7 +144,7 @@ authorityKeyIdentifier = keyid,issuer
         if output.exists():
             raise ValueError("Profile output already exists")
         target = self.create_identity(name, days=days)
-        settings = f"client\ndev tun\nproto {transport}\nremote {endpoint} {port}\nnobind\nremote-cert-tls server\nverify-x509-name myvpn-server name\ntls-version-min 1.2\ndata-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\nauth SHA256\nauth-nocache\nallow-compression no\n"
+        settings = f"client\ndev tun\nproto {transport}\nremote {endpoint} {port}\nnobind\nremote-cert-tls server\nverify-x509-name ghostlink-server name\ntls-version-min 1.2\ndata-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\nauth SHA256\nauth-nocache\nallow-compression no\n"
         settings += "redirect-gateway def1\n" if mode == "full" else "route-nopull\nroute 10.8.0.0 255.255.255.0\n"
         for tag, source in [("ca", self.root / "ca.crt"), ("cert", target / "client.crt"), ("key", target / "client.key"), ("tls-crypt", self.root / "tls-crypt.key")]:
             settings += f"<{tag}>\n{source.read_text().strip()}\n</{tag}>\n"

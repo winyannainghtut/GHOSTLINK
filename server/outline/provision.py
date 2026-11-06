@@ -40,11 +40,14 @@ def private_directory(path):
         raise ValueError("Private directory must not be a link")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if os.name == "nt":
-        result = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
+        # Absolute System32 paths: a bare name can resolve to an unrelated tool on PATH, such as
+        # Git for Windows' GNU whoami, which rejects these arguments.
+        system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+        result = subprocess.check_output([str(system32 / "whoami.exe"), "/user", "/fo", "csv", "/nh"], text=True)
         sid = next(csv.reader([result.strip()]))[-1]
         if not re.fullmatch(r"S-1-[0-9-]+", sid):
             raise ValueError("Cannot identify private storage owner")
-        subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([str(system32 / "icacls.exe"), str(path), "/inheritance:r", "/grant:r", f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         if path.stat().st_uid != os.geteuid():
             raise ValueError("Private directory has a different owner")

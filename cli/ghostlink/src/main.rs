@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use myvpn_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
+use ghostlink_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
 use serde_json::json;
 use std::{
     io::Write,
@@ -9,18 +9,18 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    name = "myvpn",
+    name = "ghostlink",
     version,
-    about = "Control the authorized local MyVPN service"
+    about = "Control the authorized local Ghostlink service"
 )]
 struct Args {
     #[arg(long, global = true)]
     json: bool,
     #[arg(long, global = true, default_value_t = 75, value_parser = clap::value_parser!(u64).range(1..=600))]
     timeout: u64,
-    #[arg(long, global = true, env = "MYVPN_ENDPOINT", default_value_t = myvpn_contracts::default_endpoint())]
+    #[arg(long, global = true, env = "GHOSTLINK_ENDPOINT", default_value_t = ghostlink_contracts::default_endpoint())]
     endpoint: String,
-    #[arg(long, global = true, env = "MYVPN_AGENT_TOKEN_FILE")]
+    #[arg(long, global = true, env = "GHOSTLINK_AGENT_TOKEN_FILE")]
     agent_token_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
@@ -76,6 +76,9 @@ enum ProfileCommand {
         file: PathBuf,
         #[arg(long)]
         name: Option<String>,
+        /// Overwrite an existing profile with the same name.
+        #[arg(long)]
+        replace: bool,
     },
     List,
     Default {
@@ -94,6 +97,9 @@ enum KeyCommand {
         file: Option<PathBuf>,
         #[arg(long, conflicts_with = "file")]
         stdin: bool,
+        /// Overwrite an existing server with the same ID.
+        #[arg(long)]
+        replace: bool,
     },
 }
 #[derive(Subcommand)]
@@ -172,7 +178,13 @@ async fn run(args: &Args) -> Response {
     };
     let action = match &args.command {
         Command::Key {
-            command: KeyCommand::Add { name, file, stdin },
+            command:
+                KeyCommand::Add {
+                    name,
+                    file,
+                    stdin,
+                    replace,
+                },
         } => {
             let content = if let Some(file) = file {
                 match std::fs::metadata(file).and_then(|m| {
@@ -214,12 +226,17 @@ async fn run(args: &Args) -> Response {
             Action::AccessKeyImport {
                 name: name.clone(),
                 access_key: content,
+                replace: *replace,
             }
         }
         Command::Profile { command } => match command {
-            ProfileCommand::Import { file, name } => {
+            ProfileCommand::Import {
+                file,
+                name,
+                replace,
+            } => {
                 let content = match std::fs::metadata(file).and_then(|meta| {
-                    if meta.len() > myvpn_engine::profile::MAX_PROFILE as u64 {
+                    if meta.len() > ghostlink_engine::profile::MAX_PROFILE as u64 {
                         Err(std::io::Error::other("Profile too large"))
                     } else {
                         std::fs::read_to_string(file)
@@ -237,7 +254,11 @@ async fn run(args: &Args) -> Response {
                     .clone()
                     .or_else(|| file.file_stem().and_then(|s| s.to_str()).map(String::from))
                     .unwrap_or_default();
-                Action::ProfileImport { name, content }
+                Action::ProfileImport {
+                    name,
+                    content,
+                    replace: *replace,
+                }
             }
             ProfileCommand::List => Action::ProfileList,
             ProfileCommand::Default { name } => Action::ProfileDefault { name: name.clone() },
@@ -271,7 +292,7 @@ async fn run(args: &Args) -> Response {
     };
     let start = Instant::now();
     let timeout = Duration::from_secs(args.timeout);
-    let mut response = myvpn_contracts::call(
+    let mut response = ghostlink_contracts::call(
         &args.endpoint,
         Request {
             schema_version: SCHEMA_VERSION,
@@ -307,7 +328,7 @@ async fn run(args: &Args) -> Response {
                 }
                 let mut file = options.open(token_file)?;
                 #[cfg(windows)]
-                myvpn_engine::storage::restrict_acl(token_file)
+                ghostlink_engine::storage::restrict_acl(token_file)
                     .map_err(|_| std::io::Error::other("Cannot protect token file"))?;
                 writeln!(file, "{issued}")?;
                 file.sync_all()?;
@@ -324,10 +345,9 @@ async fn run(args: &Args) -> Response {
         Command::Connect { no_wait: false, .. } | Command::Switch { no_wait: false, .. }
     );
     while response.success && wait {
-        let status = response
-            .data
-            .as_ref()
-            .and_then(|data| serde_json::from_value::<myvpn_contracts::Status>(data.clone()).ok());
+        let status = response.data.as_ref().and_then(|data| {
+            serde_json::from_value::<ghostlink_contracts::Status>(data.clone()).ok()
+        });
         match status.map(|s| s.status) {
             Some(ConnectionState::Connected) => break,
             Some(ConnectionState::Failed | ConnectionState::Disconnected) => return Response::err("connection_failed", "The engine did not establish a VPN connection; inspect status and doctor for the sanitized failure reason"),
@@ -342,7 +362,7 @@ async fn run(args: &Args) -> Response {
             ),
         };
         tokio::time::sleep(Duration::from_millis(250)).await;
-        response = myvpn_contracts::call(
+        response = ghostlink_contracts::call(
             &args.endpoint,
             Request {
                 schema_version: SCHEMA_VERSION,
@@ -369,7 +389,7 @@ fn print(response: &Response, json_output: bool) {
         return;
     }
     let data = response.data.as_ref().unwrap();
-    if let Ok(status) = serde_json::from_value::<myvpn_contracts::Status>(data.clone()) {
+    if let Ok(status) = serde_json::from_value::<ghostlink_contracts::Status>(data.clone()) {
         println!(
             "{}",
             serde_json::to_value(&status.status)

@@ -1,0 +1,5 @@
+# Only this dedicated table is replaced. Never flush the host ruleset.
+add table ip ghostlink_nat
+flush table ip ghostlink_nat
+add chain ip ghostlink_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }
+add rule ip ghostlink_nat postrouting ip saddr 10.8.0.0/24 oifname "{{ ghostlink_public_interface }}" masquerade

@@ -25,7 +25,7 @@ func TestExistingInterfaceAndOverlappingAddressAreRejected(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		options := &option.TunInboundOptions{InterfaceName: "myvpn-conflict-test-never-created"}
+		options := &option.TunInboundOptions{InterfaceName: "ghostlink-conflict-test-never-created"}
 		options.Address = append(options.Address, prefix)
 		if !checkInterfaceCollision(options) {
 			t.Fatal("Overlapping local address was accepted")

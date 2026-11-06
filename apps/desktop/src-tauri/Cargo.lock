@@ -1814,7 +1814,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "myvpn-contracts"
+name = "ghostlink-contracts"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1825,10 +1825,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "myvpn-desktop"
+name = "ghostlink-desktop"
 version = "0.1.0"
 dependencies = [
- "myvpn-contracts",
+ "ghostlink-contracts",
  "serde_json",
  "tauri",
  "tauri-build",

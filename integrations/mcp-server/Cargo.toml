@@ -1,5 +1,5 @@
 [package]
-name = "myvpn-mcp"
+name = "ghostlink-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,4 +9,4 @@ anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-myvpn-contracts.workspace = true
+ghostlink-contracts.workspace = true

@@ -33,7 +33,7 @@ jobs:
           go test -tags with_gvisor ./...
           go vet -tags with_gvisor ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags with_gvisor ./...
-          CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor -o "../../target/debug/myvpn-tunnel$suffix" .
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor -o "../../target/debug/ghostlink-tunnel$suffix" .
       - name: Windows core build, unit tests and clippy
         if: runner.os == 'Windows'
         shell: pwsh
@@ -62,9 +62,9 @@ jobs:
           Invoke-WebRequest 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile '.tools/peer.zip'
           if ((Get-FileHash '.tools/peer.zip').Hash -ne '99185D75D314A07DBBA4A130C8AD986CBEB629A07927975636B341CA61F991DF') { throw 'Peer checksum mismatch' }
           Expand-Archive '.tools/peer.zip' '.tools/peer'
-          $env:MYVPN_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
-          $env:MYVPN_TEST_OUTLINE_WORKER = (Resolve-Path 'target/debug/myvpn-tunnel.exe').Path
-          ./scripts/cargo.ps1 test --locked -p myvpn-engine --test outline_traffic '--' --ignored --nocapture
+          $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
+          $env:GHOSTLINK_TEST_OUTLINE_WORKER = (Resolve-Path 'target/debug/ghostlink-tunnel.exe').Path
+          ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
       - name: Linux independent encrypted peer
         if: runner.os == 'Linux'
         run: |
@@ -72,9 +72,9 @@ jobs:
           curl -fLsS 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz' -o .tools/peer.tar.gz
           printf '%s\n' '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968  .tools/peer.tar.gz' | sha256sum -c
           tar -xzf .tools/peer.tar.gz -C .tools/peer
-          export MYVPN_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"
-          export MYVPN_TEST_OUTLINE_WORKER="$PWD/target/debug/myvpn-tunnel"
-          cargo test --locked -p myvpn-engine --test outline_traffic -- --ignored --nocapture
+          export GHOSTLINK_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"
+          export GHOSTLINK_TEST_OUTLINE_WORKER="$PWD/target/debug/ghostlink-tunnel"
+          cargo test --locked -p ghostlink-engine --test outline_traffic -- --ignored --nocapture
       - name: Windows GUI build
         if: runner.os == 'Windows'
         shell: pwsh

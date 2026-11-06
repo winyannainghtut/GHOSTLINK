@@ -1,4 +1,4 @@
-# MyVPN development journey and resume handoff
+# Ghostlink development journey and resume handoff
 
 Last updated: **2026-11-06, Asia/Singapore**.
 
@@ -8,11 +8,29 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: Ghostlink rename, review fixes and release workflow
+
+- **Rename.** The product is now Ghostlink everywhere: binaries, crates, Go module, service, pipe, data paths, `GHOSTLINK_*` variables, TUN interface, worker identity, UI and docs. It has a new ghost icon and a new MSI `UpgradeCode`. Old `MyVPN` state and artifacts are not migrated. Entries below that predate this note were renamed in place, so they describe the same work under the new name.
+- **Fixes from the code review.**
+  - A failed autoconnect no longer stops the service. This was reproduced first: the old daemon exited at startup and `autoconnect disable` became unreachable.
+  - The Linux unit gained `CAP_CHOWN`, which the socket owner change needs.
+  - Engine events are audited without waiting for the daemon mutex.
+  - OpenVPN forced kills after hold release are flagged `forced_stop_network_cleanup_unverified`.
+  - Crash leftovers (`state.pending`, plaintext `run/` configs) are removed at startup.
+  - `Session::stop` is cancel-safe.
+  - A first connection reports `connecting`, not `reconnecting`.
+  - Imports refuse to overwrite an existing ID without `replace`/`--replace`.
+  - Access-key fingerprints are salted.
+  - MCP waits 75 s like the CLI, and its `vpn_status` wording is corrected.
+  - `scripts/cargo.ps1` now detects MSVC by `cl.exe`, because Git for Windows' `link.exe` previously broke every link from Git Bash.
+- **Releases.** `.github/workflows/release.yml`, `scripts/build-linux.sh`, `scripts/release-version.mjs` and `docs/development/releases.md` add Windows x64 and Linux x64/arm64 packages and a draft GitHub pre-release on `v*` tags. No tag has been pushed and no release has been created.
+- Observed results are recorded in [the verification ledger](docs/development/verification.md).
+
 ### Product direction and implemented state
 
 Outline-style UI and standard Outline access keys remain the primary product direction. OpenVPN is optional. The Windows Rust daemon, CLI, restricted MCP bridge and Tauri GUI use the same real local IPC and encrypted storage. Native GUI runs were performed this session, including actual key import followed by CLI confirmation, light/dark views, Settings and server details.
 
-The main change is **a managed Go tunnel worker**, `core/outline-worker`, instead of force-killing the standalone sing-box CLI on Windows. It links unmodified sing-box 1.14.4 libraries, pins Go 1.26.10, and builds as `myvpn-tunnel.exe`. Explicit stop, parent stdin EOF and termination signals cancel the engine and call bounded upstream `Close()`. Raw engine logs are suppressed; private JSON lifecycle events have fixed error codes. Native TUN startup must observe the actual interface address. The daemon also requires a real proxied HTTPS health check before reporting connected. No proxy-only fixture invents a VPN IP.
+The main change is **a managed Go tunnel worker**, `core/outline-worker`, instead of force-killing the standalone sing-box CLI on Windows. It links unmodified sing-box 1.14.4 libraries, pins Go 1.26.10, and builds as `ghostlink-tunnel.exe`. Explicit stop, parent stdin EOF and termination signals cancel the engine and call bounded upstream `Close()`. Raw engine logs are suppressed; private JSON lifecycle events have fixed error codes. Native TUN startup must observe the actual interface address. The daemon also requires a real proxied HTTPS health check before reporting connected. No proxy-only fixture invents a VPN IP.
 
 Additional changes:
 
@@ -31,7 +49,7 @@ See `docs/development/verification.md` for precise limits.
 - Rust root workspace: build, **12 unit tests**, fmt and clippy with `-D warnings` passed.
 - Actual daemon/CLI/MCP process suite: **14 passed**, including 32 concurrent requests, DPAPI persistence, scoped/revoked agent grants, malformed IPC and credential/config rejection.
 - Explicit real-engine suite: **3 passed**. Real HTTP crossed independent encrypted local Shadowsocks peers; wrong password did not reach the live destination. Managed worker listener closed on stop and parent EOF; invalid config cleanup left no plaintext config.
-- The Node suite also ran with `MYVPN_TEST_EXPECT_UNPRIVILEGED=1` after checking the shell was unelevated. TUN start failed without pretending connected, disconnect succeeded and temporary config was removed.
+- The Node suite also ran with `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED=1` after checking the shell was unelevated. TUN start failed without pretending connected, disconnect succeeded and temporary config was removed.
 - Go interface collision test and vet passed. **2 Python provisioning tests** passed for Outline key isolation/removal and OpenVPN CA/CRL/server-only bundle behavior.
 - Native Tauri debug/release GUI launched and inspected. No real Connect button, native VPN permission prompt or UAC was automated.
 - Windows optimized binaries and MSI compiled and passed WiX linking/validation. **MSI installation/service elevation/uninstall and full-device routing are not verified.** Linux worker cross-compiles; no Linux Rust/GUI/runtime verification.
@@ -43,14 +61,14 @@ See `docs/development/verification.md` for precise limits.
 Working directory remains `D:\custom vpn`, PowerShell. Git is now initialized on `main`; inspect `git status` and `git log` before committing. `.gitignore` now covers nested Cargo targets, build tools, caches, state, generated keys/tokens, artifacts and vendored worker source. Do not stage private state or binaries.
 
 - Root build wrapper: `./scripts/cargo.ps1` discovers MSVC and pinned local Windows SDK. Rust 1.92 used. Do not replace `$HOME` or `$CODEX_HOME` variables.
-- GUI: `apps/desktop/src-tauri/target/{debug,release}/myvpn-desktop.exe`.
-- CLI/service/MCP: `target/{debug,release}/{myvpn,myvpnd,myvpn-mcp}.exe`.
-- Worker: build from `core/outline-worker` with `go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/myvpn-tunnel.exe .`.
+- GUI: `apps/desktop/src-tauri/target/{debug,release}/ghostlink-desktop.exe`.
+- CLI/service/MCP: `target/{debug,release}/{ghostlink,ghostlinkd,ghostlink-mcp}.exe`.
+- Worker: build from `core/outline-worker` with `go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/ghostlink-tunnel.exe .`.
 - Independent test peer: `.tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe`; optional OpenVPN: `.tools/openvpn-bin/openvpn.exe`. **The standalone sing-box CLI is no longer accepted as the managed daemon worker.** `--sing-box` is only a legacy flag alias for `--outline-engine`.
 - Python: `C:\Users\winya\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`.
 - Bootstrap: `scripts/bootstrap-windows.ps1 -IncludeSdk` extracts checksummed official build tools without installing them system-wide.
 - Package: `scripts/build-windows.ps1`; vendored corresponding source: `scripts/package-worker-source.ps1`; dependency notices: `python scripts/collect-licenses.py`. Rebuild all three when Go dependencies change.
-- Outputs: `artifacts/windows-x64/MyVPN-0.1.0-windows-x64.msi`, portable ZIP beside it, `artifacts/source/MyVPN-0.1.0-worker-corresponding-source.zip`, cross-compiled `artifacts/linux-x64/myvpn-tunnel`. Final hashes are in `artifacts/SHA256SUMS.txt` once packaging is finalized; do not reuse earlier session hashes.
+- Outputs: `artifacts/windows-x64/Ghostlink-0.1.0-windows-x64.msi`, portable ZIP beside it, `artifacts/source/Ghostlink-0.1.0-worker-corresponding-source.zip`, cross-compiled `artifacts/linux-x64/ghostlink-tunnel`. Final hashes are in `artifacts/SHA256SUMS.txt` once packaging is finalized; do not reuse earlier session hashes.
 
 The worker is GPL-3.0-or-later; original Rust/UI is MIT. Corresponding-source archive includes actual vendored Go sources/resources and build instructions. Preserve it with distributed worker binaries. Official Wintun 0.14.1 amd64 bytes match the embedded DLL and its WireGuard LLC signature was valid; prebuilt DLL terms differ from source/wrapper licenses. Microsoft WebView2 SDK static loader also matched official package 1.0.3800.47; SDK and bindings licenses/notices preserved. See licensing notes; complete public-distribution review remains outstanding.
 
@@ -89,10 +107,10 @@ Working directory: **`D:\custom vpn`**. Shell: PowerShell. The original workspac
 
 We have working, compiled Windows development binaries for:
 
-- Rust CLI: `target\debug\myvpn.exe` (3,390,976 bytes at pause).
-- Rust local daemon: `target\debug\myvpnd.exe` (9,080,320 bytes).
-- Optional Rust stdio MCP bridge: `target\debug\myvpn-mcp.exe` (3,181,056 bytes).
-- Tauri desktop GUI: `apps\desktop\src-tauri\target\debug\myvpn-desktop.exe` (14,037,504 bytes).
+- Rust CLI: `target\debug\ghostlink.exe` (3,390,976 bytes at pause).
+- Rust local daemon: `target\debug\ghostlinkd.exe` (9,080,320 bytes).
+- Optional Rust stdio MCP bridge: `target\debug\ghostlink-mcp.exe` (3,181,056 bytes).
+- Tauri desktop GUI: `apps\desktop\src-tauri\target\debug\ghostlink-desktop.exe` (14,037,504 bytes).
 
 The GUI and the CLI call the same daemon over OS-restricted IPC. There is no mock backend.
 
@@ -100,7 +118,7 @@ The GUI and the CLI call the same daemon over OS-restricted IPC. There is no moc
 
 No MSI/release package, Linux package, Android APK/AAB, or iOS binary has been produced. No mobile implementation exists yet. The server deployment files are written but unvalidated and undeployed.
 
-At pause, a process check found **no running `myvpnd`, `myvpn-desktop`, `sing-box`, or `openvpn` processes**. Tests cleaned their temporary state. Do not assume a daemon is still running.
+At pause, a process check found **no running `ghostlinkd`, `ghostlink-desktop`, `sing-box`, or `openvpn` processes**. Tests cleaned their temporary state. Do not assume a daemon is still running.
 
 There is **no Git repository initialized in the project root**, and no project commits have been made. The `.upstream` clones have their own Git metadata and are ignored. Before initializing/staging the project, fix ignore rules for nested Tauri build output; see remaining work.
 
@@ -112,7 +130,7 @@ There is **no Git repository initialized in the project root**, and no project c
 - Tauri desktop is a separate Rust workspace, excluded from the root workspace, so normal CLI/service builds do not require GUI dependencies.
 - Newline-delimited JSON IPC, schema version 1, maximum frame 2 MiB, bounded connection count and timeouts.
 - Response envelope: `{ "schema_version": 1, "success": true, "data": ... }`; errors use `error.code` and `error.message`. This intentionally uses an envelope rather than the original brief's illustrative flat status object.
-- Windows named pipe, default `\\.\pipe\myvpn`, explicit protected DACL for SYSTEM and one authorized owner SID, remote pipe clients rejected.
+- Windows named pipe, default `\\.\pipe\ghostlink`, explicit protected DACL for SYSTEM and one authorized owner SID, remote pipe clients rejected.
 - Windows clients use identification-only security QoS and verify the server runs as the current user or SYSTEM.
 - Linux Unix-domain socket code uses private socket permissions, configured owner UID, and peer credentials. **Linux implementation is not built/tested here yet.**
 - Service state mutations are serialized. Some long operations also hold that mutex; only short concurrent status requests have been tested so far.
@@ -168,7 +186,7 @@ Read the detailed records:
 | `services/vpn-daemon/src/main.rs` | Persistent profiles/keys/defaults/autoconnect, authorization, audit, command dispatch |
 | `services/vpn-daemon/src/ipc.rs` | Windows named-pipe / Linux Unix-socket listener |
 | `services/vpn-daemon/src/service.rs` | Windows SCM entrypoint; compiled but service install/start not tested |
-| `cli/myvpn/src/main.rs` | CLI commands, JSON/human output, exit codes, connect wait, secret-file issuance |
+| `cli/ghostlink/src/main.rs` | CLI commands, JSON/human output, exit codes, connect wait, secret-file issuance |
 | `integrations/mcp-server/src/main.rs` | Restricted stdio MCP server with explicit agent token |
 | `apps/desktop/ui/` | Original HTML/CSS/JS UI, original monoline app icon |
 | `apps/desktop/src-tauri/` | Native Tauri app, tray, IPC command, close-to-tray behavior, separate Cargo lock |
@@ -178,7 +196,7 @@ Read the detailed records:
 | `server/ansible/` | Ubuntu deployment, dedicated NAT table, no host firewall flush; not validated |
 | `server/terraform/main.tf` | Initial AWS EC2/EIP/security group draft; currently needs HCL syntax fixes |
 | `scripts/cargo.ps1` | Local MSVC/SDK environment wrapper |
-| `scripts/generate-icon.ps1` | Generates native PNG/ICO from original MyVPN icon geometry |
+| `scripts/generate-icon.ps1` | Generates native PNG/ICO from original Ghostlink icon geometry |
 | `package.json`, `package-lock.json` | Node integration-test dependency (Ajv 8.20.0) |
 | `upstream.lock.json` | OpenVPN pins; still needs Outline and sing-box entries |
 
@@ -187,24 +205,24 @@ Read the detailed records:
 CLI commands include:
 
 ```text
-myvpn profile import FILE [--name ID]
-myvpn profile list
-myvpn profile default ID
-myvpn profile remove ID
-myvpn key add --name ID --file PRIVATE_KEY_FILE
-myvpn key add --name ID --stdin
-myvpn connect [--profile ID] [--no-wait]
-myvpn switch --profile ID [--no-wait]
-myvpn disconnect
-myvpn status
-myvpn info
-myvpn servers list
-myvpn autoconnect enable|disable
-myvpn logs --tail N
-myvpn doctor
-myvpn agent grant --name NAME [--control] --token-file NEW_PRIVATE_FILE
-myvpn agent revoke --name NAME
-myvpn version
+ghostlink profile import FILE [--name ID]
+ghostlink profile list
+ghostlink profile default ID
+ghostlink profile remove ID
+ghostlink key add --name ID --file PRIVATE_KEY_FILE
+ghostlink key add --name ID --stdin
+ghostlink connect [--profile ID] [--no-wait]
+ghostlink switch --profile ID [--no-wait]
+ghostlink disconnect
+ghostlink status
+ghostlink info
+ghostlink servers list
+ghostlink autoconnect enable|disable
+ghostlink logs --tail N
+ghostlink doctor
+ghostlink agent grant --name NAME [--control] --token-file NEW_PRIVATE_FILE
+ghostlink agent revoke --name NAME
+ghostlink version
 ```
 
 Global flags: `--json`, `--timeout 1..600`, `--endpoint`, `--agent-token-file`.
@@ -220,7 +238,7 @@ MCP tools: `vpn_list_profiles`, `vpn_status`, `vpn_diagnostics`, and, only with 
 
 ## 6. Desktop UI already implemented
 
-Original MyVPN branding with Outline-inspired utility layout: teal, neutral background, sidebar, saved-server cards and a prominent add-key dialog. Includes:
+Original Ghostlink branding with Outline-inspired utility layout: teal, neutral background, sidebar, saved-server cards and a prominent add-key dialog. Includes:
 
 - Actual daemon state, connection duration and transfer totals.
 - Empty state with no invented servers or statistics.
@@ -296,14 +314,14 @@ Ignored, shallow clones are available under `.upstream\`:
 
 Read actual upstream license files, OpenVPN management source/options, OpenVPN 3 ClientAPI/TunBuilder documentation, Outline access-key parsers, shared CSS and server-card/access-key-dialog code, desktop VPN/routing code, and sing-box TUN/DNS/Shadowsocks/controller docs.
 
-Licenses observed: OpenVPN 2 GPLv2 with its stated exceptions; OpenVPN 3 MPL-2.0 or AGPL-3.0 with applicable file/exception terms; Outline Apps/SDK Apache-2.0; sing-box GPLv3-or-later with an additional naming/association statement. MyVPN authored crate manifests currently say MIT, but a full repository license/NOTICE/source-compliance bundle and distribution review remain unfinished. Do not claim distribution strategy is legally guaranteed.
+Licenses observed: OpenVPN 2 GPLv2 with its stated exceptions; OpenVPN 3 MPL-2.0 or AGPL-3.0 with applicable file/exception terms; Outline Apps/SDK Apache-2.0; sing-box GPLv3-or-later with an additional naming/association statement. Ghostlink authored crate manifests currently say MIT, but a full repository license/NOTICE/source-compliance bundle and distribution review remain unfinished. Do not claim distribution strategy is legally guaranteed.
 
 ## 9. Tests and builds actually run
 
 ### Passed
 
 1. Root Windows workspace `cargo check` and `cargo build` after adding the Outline backend.
-2. Tauri Windows debug build: `apps/desktop/src-tauri/target/debug/myvpn-desktop.exe`.
+2. Tauri Windows debug build: `apps/desktop/src-tauri/target/debug/ghostlink-desktop.exe`.
 3. JavaScript syntax check: `node --check apps/desktop/ui/app.js`.
 4. Original Rust unit suite: **8 tests passed** before the later Outline additions: framing limits, agent restrictions, profile names/unsafe profiles, management state/counter/auth event parsing, private storage/DPAPI round trip. **New Outline unit tests have been written but the full unit suite has not yet been rerun after adding them.**
 5. Latest Node integration suite: **14 passed, 0 failed, 0 skipped**. It launches actual built daemon/CLI/MCP processes and validates JSON with Ajv. Coverage:
@@ -347,8 +365,8 @@ npm ci --ignore-scripts
 npm test
 
 # Real Shadowsocks traffic test (does not modify system routes)
-$env:MYVPN_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
-./scripts/cargo.ps1 test -p myvpn-engine --test outline_traffic '--' --ignored --nocapture
+$env:GHOSTLINK_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
+./scripts/cargo.ps1 test -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
 
 # Native desktop
 ./scripts/cargo.ps1 build --manifest-path apps/desktop/src-tauri/Cargo.toml
@@ -359,7 +377,7 @@ $env:MYVPN_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-window
 To run a user-owned development daemon in a terminal (no service installation, no connection until explicitly requested):
 
 ```powershell
-./target/debug/myvpnd.exe `
+./target/debug/ghostlinkd.exe `
   --data-dir 'D:\custom vpn\.state-dev' `
   --openvpn 'D:\custom vpn\.tools\openvpn-bin\openvpn.exe' `
   --sing-box 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
@@ -368,9 +386,9 @@ To run a user-owned development daemon in a terminal (no service installation, n
 Then, in another terminal:
 
 ```powershell
-./target/debug/myvpn.exe status --json
-./target/debug/myvpn.exe doctor --json
-./apps/desktop/src-tauri/target/debug/myvpn-desktop.exe
+./target/debug/ghostlink.exe status --json
+./target/debug/ghostlink.exe doctor --json
+./apps/desktop/src-tauri/target/debug/ghostlink-desktop.exe
 ```
 
 Use a private key file or piped stdin for a real Outline key; **never put the key itself in command arguments, screenshots, logs or this handoff**. Default engine installation paths differ from the local extracted development paths, so pass the explicit flags shown above.
@@ -397,7 +415,7 @@ These are pending engineering work, not claims of completed fixes:
 - Outline local proxy/controller use fresh random credentials, loopback and ephemeral ports. Unlike OpenVPN's management path, their listeners do not yet have OS PID ownership verification. Review port-reservation race, health-state authenticity, controller/proxy exposure and parent/service-death cleanup.
 - Confirm correct sing-box Windows TUN driver/runtime requirements. Existing TAP/DCO adapters do not prove the required runtime is installed. The extracted archive contains `sing-box.exe`, `libcronet.dll` and LICENSE; do not silently distribute an unrelated driver.
 - Clean up private `outline.json` and temporary configuration files on every startup/config-check failure, not only successful worker shutdown. Current state directories are private, but lifecycle cleanup needs hardening.
-- Check for address/interface-name collisions before assigning the fixed MyVPN TUN addresses. Do not interfere with another VPN or existing adapter.
+- Check for address/interface-name collisions before assigning the fixed Ghostlink TUN addresses. Do not interfere with another VPN or existing adapter.
 - OpenVPN status currently initializes protocol from the first configured remote; mixed per-remote protocols and remote-random selection need accurate reporting or rejection. Do not present planned endpoint/protocol information as observed traffic state.
 - OpenVPN Linux DNS integration and encrypted credential workflow are not implemented. Password/encrypted-key profiles are deliberately rejected rather than stored unsafely.
 - Full-tunnel leak-protection configuration is not a substitute for actual tests; retain explicit diagnostic `not_tested` fields.

@@ -10,9 +10,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
-OPENSSL = os.environ.get("MYVPN_TEST_OPENSSL", r"C:\Program Files\Git\usr\bin\openssl.exe" if os.name == "nt" else "openssl")
-ENGINE = Path(os.environ.get("MYVPN_TEST_SING_BOX", ROOT / ".tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe"))
-OPENVPN = Path(os.environ.get("MYVPN_TEST_ENGINE", ROOT / ".tools/openvpn-bin/openvpn.exe" if os.name == "nt" else shutil.which("openvpn") or "/usr/sbin/openvpn"))
+OPENSSL = os.environ.get("GHOSTLINK_TEST_OPENSSL", r"C:\Program Files\Git\usr\bin\openssl.exe" if os.name == "nt" else "openssl")
+ENGINE = Path(os.environ.get("GHOSTLINK_TEST_SING_BOX", ROOT / ".tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe"))
+OPENVPN = Path(os.environ.get("GHOSTLINK_TEST_ENGINE", ROOT / ".tools/openvpn-bin/openvpn.exe" if os.name == "nt" else shutil.which("openvpn") or "/usr/sbin/openvpn"))
 
 
 class ProvisioningTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class ProvisioningTests(unittest.TestCase):
 
     @unittest.skipUnless(OPENVPN.is_file(), "Standalone OpenVPN required for official tls-crypt generation")
     def test_openvpn_offline_ca_issuance_bundle_and_revocation(self):
-        spec = importlib.util.spec_from_file_location("myvpn_pki", ROOT / "server/openvpn/pki.py")
+        spec = importlib.util.spec_from_file_location("ghostlink_pki", ROOT / "server/openvpn/pki.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory(prefix=".state-pki-", dir=ROOT) as temporary:

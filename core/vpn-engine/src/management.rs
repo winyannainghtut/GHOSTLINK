@@ -1,6 +1,6 @@
 use crate::{profile::ValidatedProfile, storage};
 use anyhow::{ensure, Result};
-use myvpn_contracts::{ConnectionState, Status, Stream};
+use ghostlink_contracts::{ConnectionState, Status, Stream};
 use rand::{rngs::OsRng, RngCore};
 use std::{
     path::{Path, PathBuf},
@@ -38,9 +38,15 @@ pub struct Session {
     pub task: JoinHandle<()>,
 }
 impl Session {
-    pub async fn stop(self) {
-        let _ = self.stop.send(()).await;
-        let _ = self.task.await;
+    /// Request a stop and wait for the engine teardown to finish.
+    ///
+    /// Cancel-safe: if the caller is cancelled mid-wait, the session stays owned by the caller
+    /// and a later `stop` waits for the same teardown instead of losing track of it. Callers
+    /// must drop the session once this returns; awaiting it again is not supported.
+    pub async fn stop(&mut self) {
+        // A full channel already holds a stop request; a closed one means teardown is done.
+        let _ = self.stop.try_send(());
+        let _ = (&mut self.task).await;
     }
     pub fn finished(&self) -> bool {
         self.task.is_finished()
@@ -210,6 +216,8 @@ pub async fn start(
         };
         let mut reason = None;
         let mut requested_stop = false;
+        // Set once the hold is released: from then on the engine may have changed routes/DNS.
+        let mut initialized = false;
         let stream = tokio::select! {
             _ = stop_rx.recv() => { requested_stop = true; None }
             _ = child.wait() => { reason = Some("engine_exited_before_management"); None }
@@ -225,14 +233,13 @@ pub async fn start(
             }
             let deadline = tokio::time::sleep(connection_timeout);
             tokio::pin!(deadline);
-            let mut initialized = false;
             let mut connected_once = false;
             while reason.is_none() {
                 tokio::select! {
                     _ = stop_rx.recv() => { requested_stop = true; break; }
                     _ = &mut deadline, if !connected_once => { reason = Some("connection_timeout"); break; }
                     _ = child.wait() => { reason = Some("engine_exited"); break; }
-                    line = myvpn_contracts::read_frame(&mut reader) => {
+                    line = ghostlink_contracts::read_frame(&mut reader) => {
                         let line = match line { Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_string(), Err(_) => { reason = Some("management_connection_lost"); break; } };
                         if !initialized && line.contains("SUCCESS: password is correct") {
                             initialized = true;
@@ -267,6 +274,11 @@ pub async fn start(
                 .is_err()
         {
             let _ = child.kill().await;
+            // Same rule as an explicit stop: a forced kill after hold release may leave
+            // routes/DNS behind, so block further connects until someone inspects them.
+            if initialized {
+                reason = Some("forced_stop_network_cleanup_unverified");
+            }
         }
         if requested_stop {
             let _ = child.kill().await;

@@ -5,8 +5,8 @@ mod service;
 use anyhow::{Context, Result};
 use clap::Parser;
 use fs2::FileExt;
-use myvpn_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
-use myvpn_engine::{
+use ghostlink_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
+use ghostlink_engine::{
     management::{self, Session, Shared},
     profile::{self, ProfileSummary},
     storage,
@@ -19,7 +19,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -29,10 +29,10 @@ use tokio::sync::{mpsc, Mutex};
 #[derive(Parser, Clone)]
 #[command(
     version,
-    about = "MyVPN local service. Install under a dedicated privileged identity for real tunnels."
+    about = "Ghostlink local service. Install under a dedicated privileged identity for real tunnels."
 )]
 pub struct Args {
-    #[arg(long, env = "MYVPN_ENDPOINT", default_value_t = myvpn_contracts::default_endpoint())]
+    #[arg(long, env = "GHOSTLINK_ENDPOINT", default_value_t = ghostlink_contracts::default_endpoint())]
     endpoint: String,
     #[arg(long, default_value_os_t = default_data_dir())]
     data_dir: PathBuf,
@@ -60,9 +60,9 @@ pub struct Args {
 fn default_data_dir() -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into()))
-            .join("MyVPN")
+            .join("Ghostlink")
     } else {
-        "/var/lib/myvpn".into()
+        "/var/lib/ghostlink".into()
     }
 }
 fn default_engine() -> PathBuf {
@@ -74,9 +74,9 @@ fn default_engine() -> PathBuf {
 }
 fn default_outline_engine() -> PathBuf {
     if cfg!(windows) {
-        r"C:\Program Files\MyVPN\engine\myvpn-tunnel.exe".into()
+        r"C:\Program Files\Ghostlink\engine\ghostlink-tunnel.exe".into()
     } else {
-        "/usr/local/lib/myvpn/myvpn-tunnel".into()
+        "/usr/local/lib/ghostlink/ghostlink-tunnel".into()
     }
 }
 
@@ -97,6 +97,9 @@ struct Store {
     default_profile: Option<String>,
     autoconnect: bool,
     agents: BTreeMap<String, Agent>,
+    /// Per-installation secret mixed into access-key fingerprints. Never returned over IPC.
+    #[serde(default)]
+    fingerprint_salt: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Audit {
@@ -106,29 +109,24 @@ struct Audit {
     outcome: String,
 }
 
-struct Daemon {
-    args: Args,
-    store: Store,
-    state: Shared,
-    session: Option<Session>,
-    events: mpsc::Sender<&'static str>,
+/// Append-only audit file with its own lock, independent of the daemon state mutex, so engine
+/// events can be recorded while a long connect or switch holds the daemon.
+struct AuditLog {
+    dir: PathBuf,
+    lock: std::sync::Mutex<()>,
 }
-impl Daemon {
-    fn commit(&mut self, next: Store) -> Result<()> {
-        storage::atomic_write(
-            &self.args.data_dir.join("state.json"),
-            &serde_json::to_vec(&next)?,
-        )?;
-        self.store = next;
-        Ok(())
-    }
-    fn audit(&self, actor: &str, operation: &str, outcome: &str) -> Result<()> {
-        let path = self.args.data_dir.join("audit.jsonl");
+impl AuditLog {
+    fn record(&self, actor: &str, operation: &str, outcome: &str) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = self.dir.join("audit.jsonl");
         if fs::metadata(&path)
             .map(|m| m.len() > 1024 * 1024)
             .unwrap_or(false)
         {
-            let previous = self.args.data_dir.join("audit.previous.jsonl");
+            let previous = self.dir.join("audit.previous.jsonl");
             if previous.exists() {
                 fs::remove_file(&previous)?;
             }
@@ -152,6 +150,61 @@ impl Daemon {
         writeln!(file)?;
         file.sync_data()?;
         Ok(())
+    }
+}
+
+/// Keyed with the installation salt so the fingerprint shown to read-only agents cannot be used
+/// to test guesses of a weak access-key password offline.
+fn fingerprint(salt: &str, source: &str) -> String {
+    hex::encode(
+        Sha256::new()
+            .chain_update(b"ghostlink-access-key-fingerprint-v1\0")
+            .chain_update(salt.as_bytes())
+            .chain_update(source.as_bytes())
+            .finalize(),
+    )
+}
+
+/// Files that exist only while a request or tunnel is in flight. Startup holds the exclusive
+/// daemon lock, so any that remain were left by a crash: an uncommitted transaction (the
+/// committed state.json is intact) or a plaintext engine configuration. Removing a link
+/// removes the link itself, never its target.
+fn remove_stale_runtime_files(data_dir: &Path) -> bool {
+    let mut removed = fs::remove_file(data_dir.join("state.pending")).is_ok();
+    let run = data_dir.join("run");
+    for name in [
+        "outline.json",
+        "outline.pending",
+        "active.conf",
+        "active.pending",
+        "management.auth",
+        "management.pending",
+        "engine.sock",
+    ] {
+        removed |= fs::remove_file(run.join(name)).is_ok();
+    }
+    removed
+}
+
+struct Daemon {
+    args: Args,
+    store: Store,
+    state: Shared,
+    session: Option<Session>,
+    events: mpsc::Sender<&'static str>,
+    audit_log: Arc<AuditLog>,
+}
+impl Daemon {
+    fn commit(&mut self, next: Store) -> Result<()> {
+        storage::atomic_write(
+            &self.args.data_dir.join("state.json"),
+            &serde_json::to_vec(&next)?,
+        )?;
+        self.store = next;
+        Ok(())
+    }
+    fn audit(&self, actor: &str, operation: &str, outcome: &str) -> Result<()> {
+        self.audit_log.record(actor, operation, outcome)
     }
     fn authorize(&self, request: &Request) -> Result<String, Response> {
         if request.schema_version != SCHEMA_VERSION {
@@ -214,9 +267,12 @@ impl Daemon {
         response
     }
     async fn disconnect(&mut self) {
-        if let Some(session) = self.session.take() {
+        // Keep ownership until teardown completes: if this request is cancelled (for example
+        // at service shutdown), the next disconnect still waits for the same engine cleanup.
+        if let Some(session) = self.session.as_mut() {
             session.stop().await;
         }
+        self.session = None;
     }
     async fn cleanup_failure(&self) -> Option<Response> {
         let state = self.state.read().await;
@@ -244,13 +300,13 @@ impl Daemon {
             if !self.args.allow_full_tunnel {
                 return Ok(Response::err("permission_denied", "Outline full tunnel requires the administrator to authorize route changes with --allow-full-tunnel after protecting SSH access"));
             }
-            if !myvpn_engine::outline_session::worker_available(&self.args.sing_box).await {
+            if !ghostlink_engine::outline_session::worker_available(&self.args.sing_box).await {
                 return Ok(Response::err(
                     "engine_unavailable",
-                    "Install the pinned managed MyVPN tunnel worker in the service installation",
+                    "Install the pinned managed Ghostlink tunnel worker in the service installation",
                 ));
             }
-            let key = match myvpn_engine::outline::resolve(&content).await { Ok(key) => key, Err(_) => return Ok(Response::err("invalid_profile", "Access key is invalid, unsupported or its dynamic configuration is unavailable")) };
+            let key = match ghostlink_engine::outline::resolve(&content).await { Ok(key) => key, Err(_) => return Ok(Response::err("invalid_profile", "Access key is invalid, unsupported or its dynamic configuration is unavailable")) };
             if let Some(session) = &self.session {
                 if !session.finished() {
                     let status = self.state.read().await.status();
@@ -270,7 +326,7 @@ impl Daemon {
                 return Ok(error);
             }
             self.session = Some(
-                myvpn_engine::outline_session::start(
+                ghostlink_engine::outline_session::start(
                     &self.args.sing_box,
                     &self.args.data_dir.join("run"),
                     name,
@@ -332,11 +388,21 @@ impl Daemon {
     }
     async fn dispatch(&mut self, action: Action) -> Result<Response> {
         match action {
-            Action::AccessKeyImport { name, access_key } => {
+            Action::AccessKeyImport {
+                name,
+                access_key,
+                replace,
+            } => {
                 if !profile::valid_name(&name) {
                     return Ok(Response::err(
                         "invalid_request",
                         "Server ID must contain 1-64 letters, digits, hyphens or underscores",
+                    ));
+                }
+                if !replace && self.store.profiles.contains_key(&name) {
+                    return Ok(Response::err(
+                        "invalid_request",
+                        "A server with this ID already exists; choose another ID or explicitly replace it",
                     ));
                 }
                 if self.store.profiles.len() >= 32 && !self.store.profiles.contains_key(&name) {
@@ -353,12 +419,20 @@ impl Daemon {
                         "Disconnect before replacing the active access key",
                     ));
                 }
-                let key = match myvpn_engine::outline::resolve(&access_key).await {
+                let key = match ghostlink_engine::outline::resolve(&access_key).await {
                     Ok(key) => key,
                     Err(e) => return Ok(Response::err("invalid_profile", &e.to_string())),
                 };
-                let summary = key.summary(&name, &access_key);
                 let mut next = self.store.clone();
+                let salt = next
+                    .fingerprint_salt
+                    .get_or_insert_with(|| {
+                        let mut random = [0u8; 32];
+                        OsRng.fill_bytes(&mut random);
+                        hex::encode(random)
+                    })
+                    .clone();
+                let summary = key.summary(&name, fingerprint(&salt, access_key.trim()));
                 next.profiles.insert(
                     name.clone(),
                     StoredProfile {
@@ -373,7 +447,7 @@ impl Daemon {
                 Ok(Response::ok(summary))
             }
             Action::ProfileRename { name, display_name } => {
-                if !myvpn_engine::outline::valid_label(&display_name) {
+                if !ghostlink_engine::outline::valid_label(&display_name) {
                     return Ok(Response::err(
                         "invalid_request",
                         "Server name must contain 1-80 characters",
@@ -389,11 +463,21 @@ impl Daemon {
                 self.commit(next)?;
                 Ok(Response::ok(summary))
             }
-            Action::ProfileImport { name, content } => {
+            Action::ProfileImport {
+                name,
+                content,
+                replace,
+            } => {
                 let profile = match profile::validate(&name, &content) {
                     Ok(p) => p,
                     Err(e) => return Ok(Response::err("invalid_profile", &e.to_string())),
                 };
+                if !replace && self.store.profiles.contains_key(&name) {
+                    return Ok(Response::err(
+                        "invalid_request",
+                        "A profile with this name already exists; choose another name or explicitly replace it",
+                    ));
+                }
                 if self.store.profiles.len() >= 32 && !self.store.profiles.contains_key(&name) {
                     return Ok(Response::err(
                         "invalid_request",
@@ -521,7 +605,7 @@ impl Daemon {
             }
             Action::Doctor => {
                 let outline_available =
-                    myvpn_engine::outline_session::worker_available(&self.args.sing_box).await;
+                    ghostlink_engine::outline_session::worker_available(&self.args.sing_box).await;
                 let engine_available =
                     self.args.openvpn.is_absolute() && self.args.openvpn.is_file();
                 let version = if engine_available {
@@ -628,6 +712,7 @@ async fn run(
         .open(args.data_dir.join("daemon.lock"))?;
     lock.try_lock_exclusive()
         .context("Another daemon owns this data directory")?;
+    let removed_stale_files = remove_stale_runtime_files(&args.data_dir);
     let state_path = args.data_dir.join("state.json");
     let store = if state_path.exists() {
         anyhow::ensure!(
@@ -641,29 +726,40 @@ async fn run(
     };
     let state = Arc::new(tokio::sync::RwLock::new(management::Snapshot::default()));
     let (events, mut event_rx) = mpsc::channel(128);
+    let audit_log = Arc::new(AuditLog {
+        dir: args.data_dir.clone(),
+        lock: std::sync::Mutex::new(()),
+    });
     let daemon = Arc::new(Mutex::new(Daemon {
         args: args.clone(),
         store,
         state,
         session: None,
         events,
+        audit_log: audit_log.clone(),
     }));
     let mut listener = ipc::Listener::bind(&args).await?;
     {
         let mut daemon = daemon.lock().await;
         daemon.audit("service", "startup", "success")?;
+        if removed_stale_files {
+            daemon.audit("service", "stale_runtime_cleanup", "removed")?;
+        }
         ready()?;
         if daemon.store.autoconnect {
-            let response = daemon.connect(None, false).await?;
-            daemon.audit(
-                "service",
-                "autoconnect",
-                if response.success {
-                    "accepted"
-                } else {
-                    "failed"
-                },
-            )?;
+            // Never let a failed automatic connection take the service down: the user needs
+            // the service running to see the failure and to disable autoconnect.
+            let outcome = match daemon.connect(None, false).await {
+                Ok(response) if response.success => "accepted",
+                Ok(_) => "failed",
+                Err(_) => {
+                    let mut snapshot = daemon.state.write().await;
+                    snapshot.status.status = ConnectionState::Failed;
+                    snapshot.status.last_error = Some("autoconnect_failed".into());
+                    "error"
+                }
+            };
+            let _ = daemon.audit("service", "autoconnect", outcome);
         }
     }
     let permits = Arc::new(tokio::sync::Semaphore::new(32));
@@ -672,7 +768,9 @@ async fn run(
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
-            Some(event) = event_rx.recv() => { let _ = daemon.lock().await.audit("engine", "event", event); }
+            // Must not wait for the daemon mutex: that would stall accepting and shutdown
+            // for as long as a connect or switch holds it.
+            Some(event) = event_rx.recv() => { let _ = audit_log.record("engine", "event", event); }
             Some(_) = clients.join_next(), if !clients.is_empty() => {}
             accepted = listener.accept() => {
                 let stream = accepted?;
@@ -681,20 +779,23 @@ async fn run(
                 clients.spawn(async move {
                     let _permit = permit;
                     let mut reader = tokio::io::BufReader::new(stream);
-                    let request = tokio::time::timeout(Duration::from_secs(10), myvpn_contracts::read_frame(&mut reader)).await;
+                    let request = tokio::time::timeout(Duration::from_secs(10), ghostlink_contracts::read_frame(&mut reader)).await;
                     let response = match request {
                         Ok(Ok(bytes)) => match serde_json::from_slice::<Request>(&bytes) {
                             Ok(request) => daemon.lock().await.handle(request).await,
-                            Err(_) => Response::err("invalid_request", "Invalid request; use the versioned MyVPN contract"),
+                            Err(_) => Response::err("invalid_request", "Invalid request; use the versioned Ghostlink contract"),
                         },
                         _ => Response::err("invalid_request", "Incomplete or oversized IPC frame"),
                     };
-                    let _ = tokio::time::timeout(Duration::from_secs(5), myvpn_contracts::write_frame(reader.get_mut(), &response)).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(5), ghostlink_contracts::write_frame(reader.get_mut(), &response)).await;
                 });
             }
         }
     }
-    // Finish accepted mutations before disconnecting, then release the OS endpoint.
+    // Cancel requests still in flight. State commits are synchronous, so a cancelled request
+    // either committed or did not. A cancelled disconnect keeps its session, and a cancelled
+    // engine start drops its child handles (OpenVPN is killed before hold release; the managed
+    // worker sees parent-pipe EOF), so the disconnect below still covers any running tunnel.
     clients.abort_all();
     while clients.join_next().await.is_some() {}
     let mut daemon = daemon.lock().await;
