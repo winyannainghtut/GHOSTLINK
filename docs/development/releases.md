@@ -12,7 +12,7 @@ The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the
 
 ## Cutting a release
 
-1. Set the new version in every declaration: `[workspace.package]` in `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, the version label in `apps/desktop/ui/index.html`, `version` in `core/outline-worker/main.go`, and `WORKER_VERSION` in `core/vpn-engine/src/outline_session.rs`. Update the lockfiles with a normal build, and update the CLI version assertion in `tests/integration/control-plane.test.mjs`.
+1. Set the new version in every declaration: `[workspace.package]` in `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, the version label in `apps/desktop/ui/index.html`, `version` in `core/outline-worker/main.go`, and `WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`. Update the lockfiles with a normal build, and update the CLI version assertion in `tests/integration/control-plane.test.mjs`.
 2. Run `node scripts/release-version.mjs`. It prints the version, or names every declaration that disagrees.
 3. Regenerate notices if dependencies changed: `python scripts/collect-licenses.py`.
 4. Commit, then push a matching tag: `git tag v<version> && git push origin v<version>`.

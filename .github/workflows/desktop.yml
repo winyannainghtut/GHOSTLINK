@@ -30,10 +30,10 @@ jobs:
         run: |
           mkdir -p ../../target/debug
           if [ "$RUNNER_OS" = Windows ]; then suffix=.exe; else suffix=; fi
-          go test -tags with_gvisor ./...
-          go vet -tags with_gvisor ./...
-          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags with_gvisor ./...
-          CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor -o "../../target/debug/ghostlink-tunnel$suffix" .
+          go test -tags with_gvisor,with_utls,with_wireguard ./...
+          go vet -tags with_gvisor,with_utls,with_wireguard ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags with_gvisor,with_utls,with_wireguard ./...
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o "../../target/debug/ghostlink-tunnel$suffix" .
       - name: Windows core build, unit tests and clippy
         if: runner.os == 'Windows'
         shell: pwsh
@@ -64,7 +64,7 @@ jobs:
           Expand-Archive '.tools/peer.zip' '.tools/peer'
           $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
           $env:GHOSTLINK_TEST_OUTLINE_WORKER = (Resolve-Path 'target/debug/ghostlink-tunnel.exe').Path
-          ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
+          ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols '--' --ignored --nocapture
       - name: Linux independent encrypted peer
         if: runner.os == 'Linux'
         run: |
@@ -74,7 +74,7 @@ jobs:
           tar -xzf .tools/peer.tar.gz -C .tools/peer
           export GHOSTLINK_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"
           export GHOSTLINK_TEST_OUTLINE_WORKER="$PWD/target/debug/ghostlink-tunnel"
-          cargo test --locked -p ghostlink-engine --test outline_traffic -- --ignored --nocapture
+          cargo test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --nocapture
       - name: Windows GUI build
         if: runner.os == 'Windows'
         shell: pwsh

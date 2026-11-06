@@ -2,7 +2,7 @@
 
 The Rust daemon/CLI and Go worker have Linux code paths; this environment has not run them on Linux. CI is provided to build/check them. Do not treat the systemd unit as runtime-verified.
 
-On Ubuntu/Debian install Rust 1.92+, Go (the worker pins 1.26.10), a native C linker, pkg-config and OpenSSL development libraries. For GUI development also install the Tauri GTK/WebKit2GTK 4.1 development requirements. Build the root workspace with `cargo build --release --locked`; build the managed worker from `core/outline-worker` with `CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor -o ghostlink-tunnel .`.
+On Ubuntu/Debian install Rust 1.92+, Go (the worker pins 1.26.10), a native C linker, pkg-config and OpenSSL development libraries. For GUI development also install the Tauri GTK/WebKit2GTK 4.1 development requirements. Build the root workspace with `cargo build --release --locked`; build the managed worker from `core/outline-worker` with `CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ghostlink-tunnel .`.
 
 Install `ghostlink`, `ghostlinkd`, `ghostlink-mcp` in `/usr/local/bin`, worker in `/usr/local/lib/ghostlink/ghostlink-tunnel`, and the supplied unit under `/etc/systemd/system/ghostlinkd.service`, all root-owned and not writable by other users. Create a root-owned `/etc/ghostlink/ghostlinkd.env` containing `GHOSTLINK_OWNER_UID=` followed by the intended user's numeric UID. This value is mandatory so a service does not authorize an accidental default user. The daemon sets the Unix socket owner and checks peer credentials.
 

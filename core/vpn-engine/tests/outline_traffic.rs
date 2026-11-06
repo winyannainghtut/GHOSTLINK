@@ -1,5 +1,5 @@
 //! Real encrypted Shadowsocks interoperability; proxy-only, without changing OS routes.
-use ghostlink_engine::{outline::AccessKey, outline_session, storage};
+use ghostlink_engine::{access::Outbound, outline::AccessKey, storage, worker_session};
 use serde_json::json;
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
@@ -106,11 +106,12 @@ async fn failed_engine_validation_removes_plaintext_configuration() {
         ghostlink_engine::management::Snapshot::default(),
     ));
     let (events, _receiver) = tokio::sync::mpsc::channel(8);
-    let result = outline_session::start(
+    let result = worker_session::start(
         &engine,
         dir.path(),
         "invalid".into(),
-        key,
+        Outbound::Shadowsocks(key),
+        Default::default(),
         shared,
         events,
         Duration::from_secs(3),
@@ -155,12 +156,13 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
         "ss://aes-256-gcm:test-only-randomish-access-credential@127.0.0.1:{ss_port}#Loopback"
     ))
     .unwrap();
-    let config = outline_session::config(
-        &key,
+    let config = worker_session::config(
+        &Outbound::Shadowsocks(key),
         proxy_port,
         api_port,
         "local-test-controller-password",
         false,
+        &Default::default(),
     );
     let client_path = dir.path().join("client.json");
     storage::atomic_write(&client_path, &serde_json::to_vec(&config).unwrap()).unwrap();
@@ -244,12 +246,13 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
     let wrong_path = dir.path().join("wrong.json");
     storage::atomic_write(
         &wrong_path,
-        &serde_json::to_vec(&outline_session::config(
-            &wrong,
+        &serde_json::to_vec(&worker_session::config(
+            &Outbound::Shadowsocks(wrong),
             proxy_port,
             api_port,
             "local-test-controller-password",
             false,
+            &Default::default(),
         ))
         .unwrap(),
     )

@@ -5,11 +5,14 @@ mod service;
 use anyhow::{Context, Result};
 use clap::Parser;
 use fs2::FileExt;
-use ghostlink_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
+use ghostlink_contracts::{
+    Action, ConnectionState, Request, Response, RoutingPolicy, SCHEMA_VERSION,
+};
 use ghostlink_engine::{
+    access,
     management::{self, Session, Shared},
     profile::{self, ProfileSummary},
-    storage,
+    split, storage, worker_session,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -84,6 +87,9 @@ fn default_outline_engine() -> PathBuf {
 struct StoredProfile {
     summary: ProfileSummary,
     sealed_content: Vec<u8>,
+    /// Per-server split tunneling; `None` follows the global policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    routing_override: Option<RoutingPolicy>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Agent {
@@ -100,6 +106,8 @@ struct Store {
     /// Per-installation secret mixed into access-key fingerprints. Never returned over IPC.
     #[serde(default)]
     fingerprint_salt: Option<String>,
+    #[serde(default)]
+    routing_policy: RoutingPolicy,
 }
 #[derive(Serialize, Deserialize)]
 struct Audit {
@@ -295,18 +303,27 @@ impl Daemon {
         };
         let clear = storage::unseal(&stored.sealed_content)?;
         let content = String::from_utf8(clear)?;
-        if stored.summary.kind == "outline" {
-            #[cfg(unix)]
-            if !self.args.allow_full_tunnel {
-                return Ok(Response::err("permission_denied", "Outline full tunnel requires the administrator to authorize route changes with --allow-full-tunnel after protecting SSH access"));
-            }
-            if !ghostlink_engine::outline_session::worker_available(&self.args.sing_box).await {
+        // Every kind except OpenVPN runs in the managed tunnel worker.
+        if stored.summary.kind != "openvpn" {
+            if !worker_session::worker_available(&self.args.sing_box).await {
                 return Ok(Response::err(
                     "engine_unavailable",
                     "Install the pinned managed Ghostlink tunnel worker in the service installation",
                 ));
             }
-            let key = match ghostlink_engine::outline::resolve(&content).await { Ok(key) => key, Err(_) => return Ok(Response::err("invalid_profile", "Access key is invalid, unsupported or its dynamic configuration is unavailable")) };
+            // A server's own override wins over the global split-tunnel policy.
+            let policy = stored
+                .routing_override
+                .clone()
+                .unwrap_or_else(|| self.store.routing_policy.clone());
+            let outbound = match access::resolve(&content).await {
+                Ok(resolved) => resolved.outbound,
+                Err(_) => return Ok(Response::err("invalid_profile", "The saved key is invalid, unsupported or its dynamic configuration is unavailable")),
+            };
+            #[cfg(unix)]
+            if outbound.full_tunnel() && !self.args.allow_full_tunnel {
+                return Ok(Response::err("permission_denied", "Full tunnel requires the administrator to authorize route changes with --allow-full-tunnel after protecting SSH access"));
+            }
             if let Some(session) = &self.session {
                 if !session.finished() {
                     let status = self.state.read().await.status();
@@ -326,11 +343,12 @@ impl Daemon {
                 return Ok(error);
             }
             self.session = Some(
-                ghostlink_engine::outline_session::start(
+                worker_session::start(
                     &self.args.sing_box,
                     &self.args.data_dir.join("run"),
                     name,
-                    key,
+                    outbound,
+                    policy,
                     self.state.clone(),
                     self.events.clone(),
                     Duration::from_secs(self.args.connection_timeout_seconds),
@@ -386,66 +404,82 @@ impl Daemon {
         self.session = Some(session);
         Ok(Response::ok(self.state.read().await.status()))
     }
+    /// Imports any credential the managed worker uses: `ss://`, `ssconf://`, `vless://`,
+    /// `vpn://` or WireGuard/AmneziaWG configuration text.
+    async fn import_credential(
+        &mut self,
+        name: String,
+        source: String,
+        replace: bool,
+    ) -> Result<Response> {
+        if !profile::valid_name(&name) {
+            return Ok(Response::err(
+                "invalid_request",
+                "Server ID must contain 1-64 letters, digits, hyphens or underscores",
+            ));
+        }
+        if !replace && self.store.profiles.contains_key(&name) {
+            return Ok(Response::err(
+                "invalid_request",
+                "A server with this ID already exists; choose another ID or explicitly replace it",
+            ));
+        }
+        if self.store.profiles.len() >= 32 && !self.store.profiles.contains_key(&name) {
+            return Ok(Response::err(
+                "invalid_request",
+                "At most 32 servers may be saved",
+            ));
+        }
+        if self.session.as_ref().is_some_and(|s| !s.finished())
+            && self.state.read().await.status.profile.as_deref() == Some(&name)
+        {
+            return Ok(Response::err(
+                "busy",
+                "Disconnect before replacing the active access key",
+            ));
+        }
+        let source = source.trim();
+        let resolved = match access::resolve(source).await {
+            Ok(resolved) => resolved,
+            Err(e) => return Ok(Response::err("invalid_profile", &e.to_string())),
+        };
+        let mut next = self.store.clone();
+        let salt = next
+            .fingerprint_salt
+            .get_or_insert_with(|| {
+                let mut random = [0u8; 32];
+                OsRng.fill_bytes(&mut random);
+                hex::encode(random)
+            })
+            .clone();
+        let summary = resolved
+            .outbound
+            .summary(&name, fingerprint(&salt, source), resolved.label);
+        next.profiles.insert(
+            name.clone(),
+            StoredProfile {
+                summary: summary.clone(),
+                sealed_content: storage::seal(source.as_bytes())?,
+                routing_override: self
+                    .store
+                    .profiles
+                    .get(&name)
+                    .and_then(|p| p.routing_override.clone()),
+            },
+        );
+        if next.default_profile.is_none() {
+            next.default_profile = Some(name);
+        }
+        self.commit(next)?;
+        Ok(Response::ok(summary))
+    }
     async fn dispatch(&mut self, action: Action) -> Result<Response> {
         match action {
             Action::AccessKeyImport {
                 name,
                 access_key,
                 replace,
-            } => {
-                if !profile::valid_name(&name) {
-                    return Ok(Response::err(
-                        "invalid_request",
-                        "Server ID must contain 1-64 letters, digits, hyphens or underscores",
-                    ));
-                }
-                if !replace && self.store.profiles.contains_key(&name) {
-                    return Ok(Response::err(
-                        "invalid_request",
-                        "A server with this ID already exists; choose another ID or explicitly replace it",
-                    ));
-                }
-                if self.store.profiles.len() >= 32 && !self.store.profiles.contains_key(&name) {
-                    return Ok(Response::err(
-                        "invalid_request",
-                        "At most 32 servers may be saved",
-                    ));
-                }
-                if self.session.as_ref().is_some_and(|s| !s.finished())
-                    && self.state.read().await.status.profile.as_deref() == Some(&name)
-                {
-                    return Ok(Response::err(
-                        "busy",
-                        "Disconnect before replacing the active access key",
-                    ));
-                }
-                let key = match ghostlink_engine::outline::resolve(&access_key).await {
-                    Ok(key) => key,
-                    Err(e) => return Ok(Response::err("invalid_profile", &e.to_string())),
-                };
-                let mut next = self.store.clone();
-                let salt = next
-                    .fingerprint_salt
-                    .get_or_insert_with(|| {
-                        let mut random = [0u8; 32];
-                        OsRng.fill_bytes(&mut random);
-                        hex::encode(random)
-                    })
-                    .clone();
-                let summary = key.summary(&name, fingerprint(&salt, access_key.trim()));
-                next.profiles.insert(
-                    name.clone(),
-                    StoredProfile {
-                        summary: summary.clone(),
-                        sealed_content: storage::seal(access_key.trim().as_bytes())?,
-                    },
-                );
-                if next.default_profile.is_none() {
-                    next.default_profile = Some(name);
-                }
-                self.commit(next)?;
-                Ok(Response::ok(summary))
-            }
+            } => self.import_credential(name, access_key, replace).await,
             Action::ProfileRename { name, display_name } => {
                 if !ghostlink_engine::outline::valid_label(&display_name) {
                     return Ok(Response::err(
@@ -468,6 +502,10 @@ impl Daemon {
                 content,
                 replace,
             } => {
+                // WireGuard/AmneziaWG files run in the managed worker like access keys.
+                if access::handles(&content) {
+                    return self.import_credential(name, content, replace).await;
+                }
                 let profile = match profile::validate(&name, &content) {
                     Ok(p) => p,
                     Err(e) => return Ok(Response::err("invalid_profile", &e.to_string())),
@@ -501,6 +539,11 @@ impl Daemon {
                     StoredProfile {
                         summary: summary.clone(),
                         sealed_content: storage::seal(content.as_bytes())?,
+                        routing_override: self
+                            .store
+                            .profiles
+                            .get(&name)
+                            .and_then(|p| p.routing_override.clone()),
                     },
                 );
                 if next.default_profile.is_none() {
@@ -604,8 +647,7 @@ impl Daemon {
                 ))
             }
             Action::Doctor => {
-                let outline_available =
-                    ghostlink_engine::outline_session::worker_available(&self.args.sing_box).await;
+                let outline_available = worker_session::worker_available(&self.args.sing_box).await;
                 let engine_available =
                     self.args.openvpn.is_absolute() && self.args.openvpn.is_file();
                 let version = if engine_available {
@@ -662,6 +704,43 @@ impl Daemon {
                 next.agents.remove(&name);
                 self.commit(next)?;
                 Ok(Response::ok(json!({"revoked": name})))
+            }
+            Action::RoutingPolicyGet { profile } => match profile {
+                None => Ok(Response::ok(
+                    json!({"scope": "global", "policy": self.store.routing_policy}),
+                )),
+                Some(name) => match self.store.profiles.get(&name) {
+                    None => Ok(Response::err("not_found", "VPN profile does not exist")),
+                    Some(stored) => Ok(Response::ok(json!({
+                        "scope": "profile",
+                        "profile": name,
+                        "policy": stored.routing_override,
+                        "follows_global": stored.routing_override.is_none(),
+                        "applies": stored.summary.kind != "openvpn",
+                    }))),
+                },
+            },
+            Action::RoutingPolicySet { profile, policy } => {
+                let policy = match policy.as_ref().map(split::validate).transpose() {
+                    Ok(policy) => policy,
+                    Err(e) => return Ok(Response::err("invalid_request", &e.to_string())),
+                };
+                let mut next = self.store.clone();
+                match &profile {
+                    None => next.routing_policy = policy.clone().unwrap_or_default(),
+                    Some(name) => match next.profiles.get_mut(name) {
+                        None => {
+                            return Ok(Response::err("not_found", "VPN profile does not exist"))
+                        }
+                        Some(stored) => stored.routing_override = policy.clone(),
+                    },
+                }
+                self.commit(next)?;
+                Ok(Response::ok(json!({
+                    "scope": if profile.is_some() { "profile" } else { "global" },
+                    "policy": policy,
+                    "applies": "next_connection",
+                })))
             }
         }
     }

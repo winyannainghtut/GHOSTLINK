@@ -13,9 +13,14 @@ async function request(action) {
   if (!response.success) throw new Error(response.error?.message || 'The VPN service could not complete this request.');
   return response.data;
 }
-function notice(message) { $('#notice').textContent = message; $('#notice').hidden = !message; }
+function notice(message, ok = false) { $('#notice').textContent = message; $('#notice').hidden = !message; $('#notice').classList.toggle('ok', ok); }
 function formatBytes(bytes) { if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`; if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`; return `${(bytes / 1073741824).toFixed(1)} GB`; }
 function formatTime(seconds) { return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(x => String(x).padStart(2, '0')).join(':'); }
+const KEY_PREFIXES = ['ss://', 'ssconf://', 'vless://', 'vpn://'];
+const PROTOCOL_LABELS = { outline: 'Outline', wireguard: 'WireGuard', amneziawg: 'AmneziaWG', vless: 'VLESS', openvpn: 'OpenVPN' };
+const TRANSPORTS = { outline: 'Outline-compatible Shadowsocks', wireguard: 'WireGuard', amneziawg: 'AmneziaWG (obfuscated WireGuard)', vless: 'VLESS with REALITY or TLS', openvpn: 'OpenVPN' };
+function slug(text) { return text.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,45) || 'server'; }
+function uniqueName(base) { return appState.profiles.some(profile => profile.name === base) ? `${base}-${Date.now().toString(36)}` : base; }
 const stateLabel = state => ({ connected: 'Connected', connecting: 'Connecting…', reconnecting: 'Reconnecting…', disconnecting: 'Disconnecting…', failed: 'Connection failed', disconnected: 'Disconnected' }[state] || 'Disconnected');
 
 async function refresh() {
@@ -64,11 +69,16 @@ function renderServers() {
     head.append(el('div', 'server-avatar', title.slice(0, 2).toUpperCase()));
     const identity = el('div', 'server-identity'); const heading = el('h3', '', title);
     if (profile.is_default) { const star = el('span', 'default-star', '★'); star.title = 'Default server'; heading.append(star); }
-    identity.append(heading, el('div', 'endpoint', `${profile.remotes[0]?.host || 'Dynamic server'}:${profile.remotes[0]?.port || ''}`)); head.append(identity);
+    const endpoint = el('div', 'endpoint', `${profile.remotes[0]?.host || 'Dynamic server'}:${profile.remotes[0]?.port || ''}`);
+    endpoint.append(el('span', 'badge', PROTOCOL_LABELS[profile.kind] || profile.kind));
+    identity.append(heading, endpoint); head.append(identity);
     const menuContainer = el('div', 'server-menu'); const toggle = el('button', 'menu-toggle', '⋮');
     toggle.setAttribute('aria-label', `Options for ${title}`); toggle.setAttribute('aria-expanded', 'false');
     const menu = el('div', 'card-menu'); menu.hidden = true;
-    for (const [label, action] of [['Server details', () => showDetails(profile)], ['Rename', () => rename(profile)], ['Make default', () => mutate({type:'profile_default',name:profile.name})], ['Remove server', () => remove(profile)]]) {
+    const actions = [['Server details', () => showDetails(profile)], ['Rename', () => rename(profile)], ['Make default', () => mutate({type:'profile_default',name:profile.name})]];
+    if (profile.kind !== 'openvpn') actions.push(['Split tunneling', () => openSplit(profile)]);
+    actions.push(['Remove server', () => remove(profile)]);
+    for (const [label, action] of actions) {
       const button = el('button', '', label); button.addEventListener('click', () => { menu.hidden = true; toggle.setAttribute('aria-expanded','false'); action(); }); menu.append(button);
     }
     toggle.addEventListener('click', () => { const wasHidden = menu.hidden; document.querySelectorAll('.card-menu').forEach(node => node.hidden = true); menu.hidden = !wasHidden; toggle.setAttribute('aria-expanded', String(wasHidden)); });
@@ -96,10 +106,46 @@ function rename(profile) { appState.selected = profile; $('#rename-value').value
 function remove(profile) { appState.selected = profile; $('#remove-caption').textContent = `This removes ${profile.display_name || profile.name} from this device. You’ll need its access key to add it again.`; $('#remove-dialog').showModal(); }
 function showDetails(profile) {
   $('#detail-title').textContent = profile.display_name || profile.name; const dl = el('dl');
-  const details = [['Server ID',profile.name],['Address',profile.remotes.map(remote => `${remote.host}:${remote.port}`).join(', ')],['Transport',profile.kind === 'outline' ? 'Outline-compatible Shadowsocks' : 'OpenVPN'],['Tunnel',profile.tunnel_mode === 'full' ? 'Full tunnel' : 'Split tunnel'],['Default',profile.is_default ? 'Yes' : 'No']];
+  const details = [['Server ID',profile.name],['Address',profile.remotes.map(remote => `${remote.host}:${remote.port}`).join(', ')],['Transport',TRANSPORTS[profile.kind] || profile.kind],['Tunnel',profile.tunnel_mode === 'full' ? 'Full tunnel' : 'Split tunnel'],['Default',profile.is_default ? 'Yes' : 'No']];
   if (profile.certificate_expires_unix) details.push(['Certificate expiry', new Date(profile.certificate_expires_unix * 1000).toLocaleDateString()]);
   for (const [name,value] of details) dl.append(el('dt','',name),el('dd','',value));
   $('#detail-content').replaceChildren(dl); $('#detail-dialog').showModal();
+}
+const lines = text => text.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+function splitSummary(policy) {
+  const lan = policy?.lan_direct && policy.mode !== 'only' ? ' Local network stays direct.' : '';
+  if (!policy || policy.mode === 'full') return 'Everything uses the VPN.' + lan;
+  const count = policy.domains.length + policy.ip_ranges.length + policy.apps.length;
+  const items = `${count} item${count === 1 ? '' : 's'}`;
+  return (policy.mode === 'bypass' ? `${items} skip the VPN.` : `Only ${items} use the VPN.`) + lan;
+}
+async function loadSplitSummary() {
+  try { $('#split-summary').textContent = splitSummary((await request({type:'routing_policy_get'})).policy); } catch {}
+}
+function updateSplitForm() {
+  const following = !$('#split-follow-row').hidden && $('#split-follow').checked;
+  const mode = $('#split-mode').value;
+  $('#split-fields').hidden = following;
+  $('#split-lists').hidden = mode === 'full';
+  $('#split-lan-row').hidden = mode === 'only';
+}
+async function openSplit(profile) {
+  appState.splitProfile = profile ? profile.name : null;
+  $('#split-error').hidden = true;
+  $('#split-scope').textContent = profile ? `FOR ${(profile.display_name || profile.name).toUpperCase()}` : 'ALL SERVERS';
+  $('#split-follow-row').hidden = !profile;
+  try {
+    const data = await request(profile ? {type:'routing_policy_get',profile:profile.name} : {type:'routing_policy_get'});
+    const policy = data.policy || {mode:'full',domains:[],ip_ranges:[],apps:[],lan_direct:false};
+    $('#split-follow').checked = Boolean(profile && data.follows_global);
+    $('#split-mode').value = policy.mode;
+    $('#split-sites').value = policy.domains.join('\n');
+    $('#split-ips').value = policy.ip_ranges.join('\n');
+    $('#split-apps').value = policy.apps.join('\n');
+    $('#split-lan').checked = policy.lan_direct;
+    updateSplitForm();
+    $('#split-dialog').showModal();
+  } catch (error) { notice(error.message); }
 }
 function theme(value) { document.documentElement.dataset.theme = value; localStorage.setItem('ghostlink-theme',value); $('#theme').textContent = value === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'; }
 
@@ -110,9 +156,8 @@ $('#key-dialog').addEventListener('close', () => { $('#access-key').value = ''; 
 $('#reveal-key').addEventListener('click', () => { const hidden = $('#access-key').type === 'password'; $('#access-key').type = hidden ? 'text' : 'password'; $('#reveal-key').textContent = hidden ? 'Hide' : 'Show'; });
 $('#key-form').addEventListener('submit', async event => {
   event.preventDefault(); const displayName = $('#server-name').value.trim(); let source = $('#access-key').value.trim();
-  if (!source.startsWith('ss://') && !source.startsWith('ssconf://')) { $('#key-error').textContent = 'Paste a valid Outline key beginning with ss:// or ssconf://.'; $('#key-error').hidden = false; return; }
-  let name = displayName.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,45) || 'server';
-  if (appState.profiles.some(profile => profile.name === name)) name += `-${Date.now().toString(36)}`;
+  if (!KEY_PREFIXES.some(prefix => source.startsWith(prefix))) { $('#key-error').textContent = 'Paste a key beginning with ss://, ssconf://, vless:// or vpn://, or import a WireGuard file.'; $('#key-error').hidden = false; return; }
+  const name = uniqueName(slug(displayName));
   $('#save-key').disabled = true; $('#save-key').textContent = 'Adding…'; $('#key-error').hidden = true;
   try {
     await request({type:'access_key_import',name,access_key:source});
@@ -122,6 +167,23 @@ $('#key-form').addEventListener('submit', async event => {
   } catch (error) { $('#key-error').textContent = error.message; $('#key-error').hidden = false; }
   finally { source = ''; $('#save-key').disabled = false; $('#save-key').textContent = 'Add server'; }
 });
+// WireGuard/AmneziaWG files are read locally and sent straight to the service; nothing is stored here.
+$('#import-file').addEventListener('click', () => { $('#config-file').value = ''; $('#config-file').click(); });
+$('#config-file').addEventListener('change', async event => {
+  const file = event.target.files[0]; if (!file) return;
+  $('#key-error').hidden = true;
+  if (file.size > 65536) { $('#key-error').textContent = 'That file is too large to be a WireGuard configuration.'; $('#key-error').hidden = false; return; }
+  let content = await file.text(); event.target.value = '';
+  const displayName = $('#server-name').value.trim() || file.name.replace(/\.(conf|txt)$/i, '');
+  const name = uniqueName(slug(displayName));
+  try {
+    await request({type:'profile_import',name,content});
+    content = '';
+    await request({type:'profile_rename',name,display_name:displayName.slice(0,80)});
+    $('#key-dialog').close(); $('#server-name').value = ''; notice(''); await refresh();
+  } catch (error) { $('#key-error').textContent = error.message; $('#key-error').hidden = false; }
+  finally { content = ''; }
+});
 $('#rename-form').addEventListener('submit', async event => { event.preventDefault(); const profile = appState.selected; $('#rename-dialog').close(); await mutate({type:'profile_rename',name:profile.name,display_name:$('#rename-value').value.trim()}); });
 $('#confirm-remove').addEventListener('click', async () => { const profile = appState.selected; $('#remove-dialog').close(); await mutate({type:'profile_remove',name:profile.name}); });
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
@@ -129,6 +191,23 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('#servers-view').hidden = button.dataset.view !== 'servers'; $('#settings-view').hidden = button.dataset.view !== 'settings';
 }));
 $('#autoconnect').addEventListener('change', async event => { await mutate({type:'autoconnect',enabled:event.target.checked}); if (appState.info) event.target.checked = appState.info.autoconnect; });
+$('#split-edit').addEventListener('click', () => openSplit(null));
+$('#split-mode').addEventListener('change', updateSplitForm);
+$('#split-follow').addEventListener('change', updateSplitForm);
+$('#split-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const following = !$('#split-follow-row').hidden && $('#split-follow').checked;
+  const policy = following ? null : {mode:$('#split-mode').value, domains:lines($('#split-sites').value), ip_ranges:lines($('#split-ips').value), apps:lines($('#split-apps').value), lan_direct:$('#split-lan').checked};
+  const action = {type:'routing_policy_set', policy};
+  if (appState.splitProfile) action.profile = appState.splitProfile;
+  try {
+    await request(action);
+    $('#split-dialog').close();
+    const active = appState.connection && !['disconnected','failed'].includes(appState.connection.status);
+    notice(active ? 'Split tunneling saved. Disconnect and connect again to apply it.' : 'Split tunneling saved. It applies the next time you connect.', true);
+    loadSplitSummary();
+  } catch (error) { $('#split-error').textContent = error.message; $('#split-error').hidden = false; }
+});
 $('#theme').addEventListener('click', () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 $('#diagnostics').addEventListener('click', async () => {
   $('#detail-title').textContent = 'Connection diagnostics';
@@ -141,4 +220,4 @@ $('#help').addEventListener('click', () => {
   $('#detail-content').replaceChildren(copy); $('#detail-dialog').showModal();
 });
 theme(localStorage.getItem('ghostlink-theme') === 'dark' ? 'dark' : 'light');
-refresh(); setInterval(refresh, 1500);
+refresh(); loadSplitSummary(); setInterval(refresh, 1500);

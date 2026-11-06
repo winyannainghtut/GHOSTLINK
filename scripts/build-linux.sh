@@ -17,7 +17,7 @@ cargo build --release --locked --workspace
 (
   cd core/outline-worker
   CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -mod=readonly -trimpath -buildvcs=false \
-    -tags with_gvisor -ldflags '-s -w' -o ../../target/release/ghostlink-tunnel .
+    -tags with_gvisor,with_utls,with_wireguard -ldflags '-s -w' -o ../../target/release/ghostlink-tunnel .
 )
 
 name="ghostlink-$version-linux-$arch"

@@ -8,6 +8,23 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.2.0 — WireGuard, AmneziaWG, VLESS-REALITY, Amnezia import, split tunneling
+
+The approved plan is in four phases: (1) client protocols, (2) client split tunneling, (3) an Outline-style Ghostlink server shipped as `.deb`/`.rpm` packages with the Docker image included, and (4) server management from the app. Phases 1–2 are implemented as **v0.2.0**; phases 3–4 are next (v0.3.0).
+
+- **Engine:** `core/outline-worker/internal/awg` drives unmodified amneziawg-go v3 through sing-box's userspace stack and interface-bound dialer. It serves both client and server roles and carries peer user names for `auth_user` rules.
+  - Do not reuse sing-box's `ClientBind` unchanged: it rewrites packet bytes 1–3 for WARP, which breaks AmneziaWG headers.
+  - Upstream amneziawg-go reports `AdvancedSecurity` as EINVAL in userspace mode, so the parser refuses `AdvancedSecurity = on`.
+- **Worker:** registers VLESS, the native WireGuard endpoint and `amneziawg`. Build tags are now `with_gvisor,with_utls,with_wireguard`.
+- **Dependencies:** uTLS made brotli/klauspost reachable, and both were updated after `govulncheck` flagged them.
+- **Rust:**
+  - `access.rs`: the single resolve entry point;
+  - `wireguard.rs`, `vless.rs`, `amnezia.rs`: strict parsers;
+  - `split.rs`: split-tunnel policies;
+  - `worker_session.rs`: the renamed `outline_session.rs`, now generating every outbound.
+- **Split tunneling:** the health probe is pinned to the tunnel so "only" mode cannot report a dead tunnel as connected.
+- **Tests:** results are in the verification ledger. The interop tests run against the real upstream implementations.
+
 ### Later on November 6: Ghostlink rename, review fixes and release workflow
 
 - **Rename.** The product is now Ghostlink everywhere: binaries, crates, Go module, service, pipe, data paths, `GHOSTLINK_*` variables, TUN interface, worker identity, UI and docs. It has a new ghost icon and a new MSI `UpgradeCode`. Old `MyVPN` state and artifacts are not migrated. Entries below that predate this note were renamed in place, so they describe the same work under the new name.
@@ -63,7 +80,7 @@ Working directory remains `D:\custom vpn`, PowerShell. Git is now initialized on
 - Root build wrapper: `./scripts/cargo.ps1` discovers MSVC and pinned local Windows SDK. Rust 1.92 used. Do not replace `$HOME` or `$CODEX_HOME` variables.
 - GUI: `apps/desktop/src-tauri/target/{debug,release}/ghostlink-desktop.exe`.
 - CLI/service/MCP: `target/{debug,release}/{ghostlink,ghostlinkd,ghostlink-mcp}.exe`.
-- Worker: build from `core/outline-worker` with `go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/ghostlink-tunnel.exe .`.
+- Worker: build from `core/outline-worker` with `go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -o ../../target/debug/ghostlink-tunnel.exe .`.
 - Independent test peer: `.tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe`; optional OpenVPN: `.tools/openvpn-bin/openvpn.exe`. **The standalone sing-box CLI is no longer accepted as the managed daemon worker.** `--sing-box` is only a legacy flag alias for `--outline-engine`.
 - Python: `C:\Users\winya\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`.
 - Bootstrap: `scripts/bootstrap-windows.ps1 -IncludeSdk` extracts checksummed official build tools without installing them system-wide.

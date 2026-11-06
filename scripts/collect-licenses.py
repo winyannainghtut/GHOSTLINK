@@ -37,7 +37,7 @@ def main():
             if key not in entries:
                 notices = copy_notices(Path(package["manifest_path"]).parent, DEST / key)
                 entries[key] = {"ecosystem": "rust", "name": package["name"], "version": package["version"], "license": package["license"], "repository": package["repository"], "notices": notices}
-    listing = subprocess.check_output(["go", "list", "-deps", "-tags", "with_gvisor", "-f", "{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}", "."], cwd=ROOT / "core/outline-worker", text=True)
+    listing = subprocess.check_output(["go", "list", "-deps", "-tags", "with_gvisor,with_utls,with_wireguard", "-f", "{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}", "."], cwd=ROOT / "core/outline-worker", text=True)
     for line in set(listing.splitlines()):
         if not line.strip():
             continue

@@ -7,7 +7,7 @@ Unlike a console-less standalone CLI forcibly terminated on Windows, this worker
 Build with Go's checksum database enabled:
 
 ```text
-go build -trimpath -tags with_gvisor -o ghostlink-tunnel.exe .
+go build -trimpath -tags with_gvisor,with_utls,with_wireguard -o ghostlink-tunnel.exe .
 ```
 
 `go.mod` pins the Go toolchain and engine; `go.sum` records dependency checksums. Only TUN, mixed local proxy, Shadowsocks, direct routing, the DNS transports needed by Ghostlink, and the authenticated statistics controller are registered. This binary does not expose arbitrary shell commands. Do not configure a service to run it directly with closed stdin: the daemon owns its lifecycle.

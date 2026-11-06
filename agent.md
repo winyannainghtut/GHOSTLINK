@@ -95,7 +95,11 @@ Current checkout: **`D:\custom vpn`**, Windows PowerShell. Git branch at handove
 | `packages/shared-contracts/status.schema.json` | Status schema used by process tests |
 | `core/vpn-engine/src/profile.rs` | OpenVPN allowlist parser, certificate checks, canonical profile construction, summary/name validation |
 | `core/vpn-engine/src/outline.rs` | Static/dynamic Outline key parsing, HTTPS/public-address policy |
-| `core/vpn-engine/src/outline_session.rs` | Worker identity/configuration, native start, health/counters, bounded shutdown and cleanup reporting |
+| `core/vpn-engine/src/worker_session.rs` | Worker identity and generated configuration for every outbound (Shadowsocks, VLESS, WireGuard, AmneziaWG), native start, health/counters, bounded shutdown and cleanup reporting |
+| `core/vpn-engine/src/access.rs` | `Outbound` enum and the single import/resolve entry point for `ss://`, `ssconf://`, `vless://`, `vpn://` and `.conf` |
+| `core/vpn-engine/src/{wireguard,vless,amnezia}.rs` | Strict WireGuard/AmneziaWG `.conf` parser, VLESS link/Xray-JSON parser, Amnezia `vpn://` decoder |
+| `core/vpn-engine/src/split.rs` | Split-tunnel policy validation and sing-box rule rendering |
+| `core/outline-worker/internal/awg/` | GPL AmneziaWG endpoint (client and server) around unmodified amneziawg-go v3, with interop tests against upstream |
 | `core/vpn-engine/src/management.rs` | OpenVPN management integration, real state/counters, shared session/snapshot types |
 | `core/vpn-engine/src/process.rs` | Local TCP listener PID ownership verification on Windows/Linux |
 | `core/vpn-engine/src/storage.rs` | Private directories/ACLs, DPAPI, atomic writes and `PrivateConfig` cleanup guard |
@@ -316,6 +320,7 @@ Examples refer to existing profiles/private input files; they are not instructio
 
 Global options: `--json`, `--timeout` (default 75 seconds, range 1–600), `--endpoint` / `GHOSTLINK_ENDPOINT`, `--agent-token-file` / `GHOSTLINK_AGENT_TOKEN_FILE`.
 
+- Split tunneling: `ghostlink split show|set|clear [--profile NAME]` (IPC `routing_policy_get/set`, owner-only). Global policy in `Store.routing_policy`, per-server overrides in `StoredProfile.routing_override` (kept across `--replace`). `core/vpn-engine/src/split.rs` validates and renders sing-box rules: `sniff` first, the health proxy pinned to the tunnel, then bypass/only matchers (`process_name`/`process_path` with `find_process`, `domain_suffix`, `ip_cidr`, `ip_is_private`) and DNS rules. OpenVPN ignores it.
 - Key input is file or stdin, never a credential argument. Normal list/status/info/logs do not reveal keys.
 - `key add` and `profile import` reject an existing server/profile ID with `invalid_request` (exit 2) unless `--replace` is given. The IPC actions carry `replace` (default `false`), so a client with a stale list can no longer silently overwrite a saved credential.
 - CLI profile subcommands currently include import/list/default/remove. Rename exists through GUI/private typed IPC, not a delivered `profile rename` CLI command.
@@ -429,13 +434,13 @@ The desktop is excluded from root workspace builds; **root `--workspace` does no
 
 ```powershell
 Push-Location core/outline-worker
-go test -tags with_gvisor ./...
-go vet -tags with_gvisor ./...
-go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -o ../../target/debug/ghostlink-tunnel.exe .
+go test -tags with_gvisor,with_utls,with_wireguard ./...
+go vet -tags with_gvisor,with_utls,with_wireguard ./...
+go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -o ../../target/debug/ghostlink-tunnel.exe .
 Pop-Location
 ```
 
-`with_gvisor` is intentional. Preserve `go.mod`, `go.sum`, upstream pins and checksum verification. Do not substitute an arbitrary standalone engine binary.
+`with_gvisor,with_utls,with_wireguard` is intentional: gVisor for the userspace stacks, uTLS for REALITY, and the WireGuard endpoint. Preserve `go.mod`, `go.sum`, upstream pins and checksum verification. Do not substitute an arbitrary standalone engine binary.
 
 ### User-owned development runtime
 
@@ -680,7 +685,7 @@ Recorded November 6; databases change, so rescan before release:
 python scripts/audit-lockfiles.py
 npm audit
 Push-Location core/outline-worker
-go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags with_gvisor -show verbose ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -tags with_gvisor,with_utls,with_wireguard -show verbose ./...
 Pop-Location
 ```
 

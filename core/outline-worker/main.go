@@ -32,10 +32,14 @@ import (
 	"github.com/sagernet/sing-box/protocol/mixed"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/protocol/vless"
+	"github.com/sagernet/sing-box/protocol/wireguard"
 	boxjson "github.com/sagernet/sing/common/json"
+
+	"ghostlink.local/outline-worker/internal/awg"
 )
 
-const version = "Ghostlink tunnel worker 0.1.0; sing-box 1.14.4"
+const version = "Ghostlink tunnel worker 0.2.0; sing-box 1.14.4; amneziawg-go 3.1.20260828"
 
 func engineContext() context.Context {
 	in := inbound.NewRegistry()
@@ -44,13 +48,17 @@ func engineContext() context.Context {
 	shadowsocks.RegisterInbound(in) // Used by the isolated local interoperability tests.
 	out := outbound.NewRegistry()
 	shadowsocks.RegisterOutbound(out)
+	vless.RegisterOutbound(out)
 	direct.RegisterOutbound(out)
+	endpoints := endpoint.NewRegistry()
+	wireguard.RegisterEndpoint(endpoints)
+	awg.Register(endpoints)
 	dnsRegistry := dns.NewTransportRegistry()
 	transport.RegisterHTTPS(dnsRegistry)
 	transport.RegisterTCP(dnsRegistry)
 	transport.RegisterUDP(dnsRegistry)
 	local.RegisterTransport(dnsRegistry)
-	return box.Context(context.Background(), in, out, endpoint.NewRegistry(), dnsRegistry,
+	return box.Context(context.Background(), in, out, endpoints, dnsRegistry,
 		boxservice.NewRegistry(), certificate.NewRegistry())
 }
 

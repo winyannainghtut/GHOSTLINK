@@ -29,11 +29,11 @@ Ghostlink outline worker $Version corresponding source
 
 Build toolchain: Go 1.26.10 (pinned in go.mod).
 Windows x64: CGO_ENABLED=0 GOOS=windows GOARCH=amd64
-  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor -ldflags "-s -w" -o ghostlink-tunnel.exe .
+  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-tunnel.exe .
 Linux x64: CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor -ldflags "-s -w" -o ghostlink-tunnel .
+  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-tunnel .
 Linux arm64: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
-  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor -ldflags "-s -w" -o ghostlink-tunnel .
+  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-tunnel .
 
 Set those variables using your shell's environment syntax. The vendor directory contains
 the actual engine/dependency source used by this worker and required embedded resources.

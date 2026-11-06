@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
-use ghostlink_contracts::{Action, ConnectionState, Request, Response, SCHEMA_VERSION};
+use ghostlink_contracts::{
+    Action, ConnectionState, Request, Response, RoutingPolicy, SplitMode, SCHEMA_VERSION,
+};
 use serde_json::json;
 use std::{
     io::Write,
@@ -69,6 +71,43 @@ enum Command {
         command: AgentCommand,
     },
     Version,
+    /// Split tunneling: choose which sites, IP ranges and apps use the VPN.
+    Split {
+        #[command(subcommand)]
+        command: SplitCommand,
+    },
+}
+#[derive(Subcommand)]
+enum SplitCommand {
+    /// Show the global policy, or one server's override.
+    Show {
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Replace the policy. bypass: listed items skip the VPN; only: only listed items use it.
+    Set {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long, value_parser = ["full", "bypass", "only"])]
+        mode: String,
+        /// Site (matches subdomains), e.g. example.com. Repeatable.
+        #[arg(long = "site", visible_alias = "domain")]
+        sites: Vec<String>,
+        /// IPv4/IPv6 CIDR range. Repeatable.
+        #[arg(long = "ip")]
+        ips: Vec<String>,
+        /// Executable name or full path, e.g. chrome.exe. Repeatable.
+        #[arg(long = "app")]
+        apps: Vec<String>,
+        /// Keep local-network destinations off the VPN.
+        #[arg(long)]
+        lan_direct: bool,
+    },
+    /// Remove a server's override (it follows the global policy again), or reset the global policy.
+    Clear {
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 #[derive(Subcommand)]
 enum ProfileCommand {
@@ -281,6 +320,36 @@ async fn run(args: &Args) -> Response {
             tail: *tail as usize,
         },
         Command::Doctor => Action::Doctor,
+        Command::Split { command } => match command {
+            SplitCommand::Show { profile } => Action::RoutingPolicyGet {
+                profile: profile.clone(),
+            },
+            SplitCommand::Set {
+                profile,
+                mode,
+                sites,
+                ips,
+                apps,
+                lan_direct,
+            } => Action::RoutingPolicySet {
+                profile: profile.clone(),
+                policy: Some(RoutingPolicy {
+                    mode: match mode.as_str() {
+                        "bypass" => SplitMode::Bypass,
+                        "only" => SplitMode::Only,
+                        _ => SplitMode::Full,
+                    },
+                    domains: sites.clone(),
+                    ip_ranges: ips.clone(),
+                    apps: apps.clone(),
+                    lan_direct: *lan_direct,
+                }),
+            },
+            SplitCommand::Clear { profile } => Action::RoutingPolicySet {
+                profile: profile.clone(),
+                policy: None,
+            },
+        },
         Command::Agent { command } => match command {
             AgentCommand::Grant { name, control, .. } => Action::AgentGrant {
                 name: name.clone(),

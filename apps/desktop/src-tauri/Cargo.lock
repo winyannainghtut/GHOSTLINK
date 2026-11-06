@@ -1029,6 +1029,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostlink-contracts"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ghostlink-desktop"
+version = "0.2.0"
+dependencies = [
+ "ghostlink-contracts",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+]
+
+[[package]]
 name = "gio"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1811,28 +1833,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "ghostlink-contracts"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "ghostlink-desktop"
-version = "0.1.0"
-dependencies = [
- "ghostlink-contracts",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
 ]
 
 [[package]]
