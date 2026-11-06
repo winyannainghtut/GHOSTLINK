@@ -37,9 +37,8 @@ import (
 	boxjson "github.com/sagernet/sing/common/json"
 
 	"ghostlink.local/outline-worker/internal/awg"
+	"ghostlink.local/outline-worker/internal/version"
 )
-
-const version = "Ghostlink tunnel worker 0.2.1; sing-box 1.14.4; amneziawg-go 3.1.20260828"
 
 func engineContext() context.Context {
 	in := inbound.NewRegistry()
@@ -150,7 +149,7 @@ func closeEngine(instance *box.Box) string {
 func main() {
 	ignoreBrokenPipe()
 	if len(os.Args) == 2 && os.Args[1] == "version" {
-		fmt.Println(version)
+		fmt.Println(version.Worker)
 		return
 	}
 	if len(os.Args) != 4 || (os.Args[1] != "check" && os.Args[1] != "run") || os.Args[2] != "-c" {

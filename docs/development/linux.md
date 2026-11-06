@@ -12,12 +12,32 @@ Full tunnel is disabled by default on Linux. After preserving the route to an SS
 
 Releases include `.deb` and `.rpm` packages built with nfpm from `packages/linux/ghostlink.nfpm.yaml` by `scripts/build-linux.sh`. They:
 
-- install `/usr/bin/{ghostlink,ghostlinkd,ghostlink-mcp}`, `/usr/lib/ghostlink/ghostlink-tunnel`, `/usr/lib/systemd/system/ghostlinkd.service`, the config file `/etc/ghostlink/ghostlinkd.env` (kept on upgrade) and `/usr/share/doc/ghostlink/`;
+- install `/usr/bin/{ghostlink,ghostlinkd,ghostlink-mcp}`, `/usr/lib/ghostlink/ghostlink-tunnel`, the unit (`/lib/systemd/system/ghostlinkd.service` in the `.deb`, where Debian/Ubuntu register units; `/usr/lib/systemd/system/` in the `.rpm`), the config file `/etc/ghostlink/ghostlinkd.env` (kept on upgrade) and `/usr/share/doc/ghostlink/`;
 - in post-install, set `GHOSTLINK_OWNER_UID` from `SUDO_UID` when it is empty (never root), then enable and restart the service; without an owner they print instructions instead;
 - in pre-remove, disable and stop the service (stop only on upgrade);
 - on a Debian `purge`, delete `/var/lib/ghostlink` and `/etc/ghostlink`. RPM removal keeps them.
 
 Release CI installs the `.deb` on Ubuntu 22.04 (x64 and arm64), checks that `ghostlinkd` is active and answers `ghostlink status` and `doctor`, then purges it. The `.tar.gz` contains the same files in a `/usr/local` layout plus an `INSTALL.txt`.
+
+## Server packages
+
+`scripts/build-linux-server.sh` builds:
+- the static `ghostlink-server` binary;
+- the container image, from `packages/linux/server/Dockerfile` (pinned distroless base, no `RUN` steps, so it builds natively on each architecture without emulation);
+- `ghostlink-server` `.deb`/`.rpm` packages from `packages/linux/server/ghostlink-server.nfpm.yaml`, which carry `docker save` output as `/usr/lib/ghostlink-server/image.tar.gz`.
+
+It needs Go, Docker and nfpm. The package scripts are `packages/linux/scripts/server-*.sh`, and the admin command is `packages/linux/server/ghostlink-server.sh`.
+
+Release CI installs the server `.deb` on each Ubuntu runner with `GHOSTLINK_SERVER_HOSTNAME=127.0.0.1`, then:
+- matches the served certificate against the printed pin;
+- checks that a wrong path gets `404`;
+- creates a user and a key for every protocol;
+- checks the container is running read-only, with all capabilities dropped, as an unprivileged user on host networking;
+- checks the state directory is `700 ghostlink-server`;
+- reinstalls, and confirms users and keys survive;
+- purges, and confirms the container, state and account are gone.
+
+See the [server guide](../deployment/ghostlink-server.md).
 
 ## Service flags
 
@@ -25,4 +45,4 @@ Release CI installs the `.deb` on Ubuntu 22.04 (x64 and arm64), checks that `gho
 
 The unit bounds capabilities to networking needs plus `CAP_CHOWN`, which the daemon needs to hand the control socket to `GHOSTLINK_OWNER_UID`; without it the service cannot start for a non-root owner. It grants write access only to its runtime/state paths. Verify that the target kernel exposes `/dev/net/tun` and that routing/DNS integration works under this sandbox. Ubuntu/systemd-resolved and RHEL resolver/firewall configurations differ; a successful compile is insufficient. OpenVPN's optional backend needs separately installed OpenVPN and its own resolver verification.
 
-Before packaging: run the process/real-engine tests, authorize a local privileged TUN test, compare routes/DNS/IPv6 before/during/after, test service stop/crash/restart, then build native DEB/RPM packages. No DEB/RPM is claimed produced in the current Windows environment.
+Still to verify on a real host: a privileged TUN session, routes/DNS/IPv6 before, during and after, and service stop/crash/restart. The release CI install test covers the package and service lifecycle, not full-device routing.

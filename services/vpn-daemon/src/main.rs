@@ -1,4 +1,5 @@
 mod ipc;
+mod remote;
 #[cfg(windows)]
 mod service;
 
@@ -91,6 +92,18 @@ struct StoredProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     routing_override: Option<RoutingPolicy>,
 }
+/// A Ghostlink server this device administers. The management key (URL with its secret path
+/// and the certificate pin) is sealed; only the address is kept in the clear.
+#[derive(Clone, Serialize, Deserialize)]
+struct ManagedServer {
+    sealed_key: Vec<u8>,
+    host: String,
+    port: u16,
+    server_name: String,
+    #[serde(default)]
+    version: String,
+    added_unix: u64,
+}
 #[derive(Clone, Serialize, Deserialize)]
 struct Agent {
     hash: String,
@@ -108,6 +121,8 @@ struct Store {
     fingerprint_salt: Option<String>,
     #[serde(default)]
     routing_policy: RoutingPolicy,
+    #[serde(default)]
+    managed_servers: BTreeMap<String, ManagedServer>,
 }
 #[derive(Serialize, Deserialize)]
 struct Audit {
@@ -349,6 +364,12 @@ impl Daemon {
                     name,
                     outbound,
                     policy,
+                    // Management APIs of servers administered here stay outside the tunnel.
+                    self.store
+                        .managed_servers
+                        .values()
+                        .map(|m| (m.host.clone(), m.port))
+                        .collect(),
                     self.state.clone(),
                     self.events.clone(),
                     Duration::from_secs(self.args.connection_timeout_seconds),
@@ -742,6 +763,29 @@ impl Daemon {
                     "applies": "next_connection",
                 })))
             }
+            Action::ManagedServerList => {
+                let servers: Vec<_> = self
+                    .store
+                    .managed_servers
+                    .iter()
+                    .map(|(name, managed)| managed.summary(name))
+                    .collect();
+                Ok(Response::ok(json!({"servers": servers})))
+            }
+            Action::ManagedServerRemove { name } => {
+                let mut next = self.store.clone();
+                if next.managed_servers.remove(&name).is_none() {
+                    return Ok(Response::err("not_found", "No managed server has this ID"));
+                }
+                self.commit(next)?;
+                // Only this device forgets the server; the server and its users are untouched.
+                Ok(Response::ok(json!({"removed": name})))
+            }
+            // Served by remote::handle without holding the service lock.
+            Action::ManagedServerAdd { .. } | Action::ServerCall { .. } => Ok(Response::err(
+                "internal",
+                "Server administration is handled separately",
+            )),
         }
     }
 }
@@ -861,7 +905,8 @@ async fn run(
                     let request = tokio::time::timeout(Duration::from_secs(10), ghostlink_contracts::read_frame(&mut reader)).await;
                     let response = match request {
                         Ok(Ok(bytes)) => match serde_json::from_slice::<Request>(&bytes) {
-                            Ok(request) => daemon.lock().await.handle(request).await,
+                            Ok(request) if remote::is_remote(&request.action) => remote::handle(&daemon, request).await,
+                        Ok(request) => daemon.lock().await.handle(request).await,
                             Err(_) => Response::err("invalid_request", "Invalid request; use the versioned Ghostlink contract"),
                         },
                         _ => Response::err("invalid_request", "Incomplete or oversized IPC frame"),

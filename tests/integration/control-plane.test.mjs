@@ -194,7 +194,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.2.1');
+  assert.equal((await cli(['version'])).data.version, '0.3.0');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -300,4 +300,82 @@ test('dynamic key SSRF, obsolete ciphers and plugins fail without exposing crede
     const r = await rpc({schema_version:1,action:{type:'access_key_import',name:'rejected',access_key}});
     assert.equal(r.success,false); assert.ok(!JSON.stringify(r).includes('top-secret'));
   }
+});
+test('a real Ghostlink server is managed through its pinned management key', async t => {
+  const serverBin = process.env.GHOSTLINK_TEST_SERVER || path.join(bin, `ghostlink-server${suffix}`);
+  try { await fs.access(serverBin); } catch { t.skip(`build ${serverBin} to run this test`); return; }
+  const dir = path.join(temp, 'ghostlink-server');
+  const key = execFileSync(serverBin, ['init', '--state', dir, '--hostname', '127.0.0.1'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const management = JSON.parse(key);
+  const secret = new URL(management.apiUrl).pathname.slice(1);
+  const write = async (name, text) => { const file = path.join(temp, name); await fs.writeFile(file, text, { mode: 0o600 }); return file; };
+  const keyFile = await write('management-key.json', key);
+  const server = spawn(serverBin, ['serve', '--state', dir, '--log-level', 'error'], { windowsHide: true, stdio: 'ignore' });
+  t.after(() => { if (server.exitCode === null) server.kill(); });
+  let added;
+  for (let i = 0; i < 60 && !added; i++) {
+    try { added = await cli(['server', 'add', '--name', 'home', '--key-file', keyFile]); }
+    catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+  }
+  assert.ok(added, 'the server did not come up');
+  assert.equal(added.data.endpoint, new URL(management.apiUrl).host);
+  assert.equal(added.data.protocols.amneziawg.enabled, true);
+  assert.equal((await cli(['server', 'add', '--name', 'home', '--key-file', keyFile], 2)).error.code, 'invalid_request', 'no silent overwrite');
+  const listed = await cli(['server', 'list']);
+  assert.equal(listed.data.servers[0].name, 'home');
+  assert.ok(!JSON.stringify(listed).includes(secret) && !JSON.stringify(listed).includes(management.certSha256));
+  if (windows) assert.ok(!(await fs.readFile(path.join(state, 'state.json'), 'utf8')).includes(secret));
+
+  const alice = await cli(['server', 'users', 'add', '--server', 'home', '--name', 'Alice', '--data-limit-gb', '5']);
+  assert.equal(alice.data.data_limit_bytes, 5e9);
+  const user = alice.data.id;
+  const imported = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'amneziawg', '--import', 'alice-awg']);
+  assert.equal(imported.data.imported.kind, 'amneziawg'); assert.equal(imported.data.access_key, undefined);
+  const vlessFile = path.join(temp, 'alice-vless.txt');
+  const saved = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'vless', '--output', vlessFile]);
+  assert.equal(saved.data.access_key, undefined); assert.ok((await fs.readFile(vlessFile, 'utf8')).startsWith('vless://'));
+  assert.equal((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'vless', '--output', vlessFile], 2)).error.code, 'invalid_request', 'never overwrites a file');
+  const wgFile = path.join(temp, 'alice-wg.txt');
+  await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'wireguard', '--output', wgFile]);
+  assert.ok((await fs.readFile(`${wgFile}.conf`, 'utf8')).startsWith('[Interface]'));
+  assert.equal((await cli(['profile', 'import', `${wgFile}.conf`, '--name', 'alice-wg'])).data.kind, 'wireguard');
+  const printed = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'shadowsocks']);
+  assert.ok(printed.data.access_key.startsWith('ss://') && printed.data.access_key.includes('outline=1'));
+  await cli(['key', 'add', '--name', 'alice-ss', '--file', await write('alice-ss.txt', printed.data.access_key)]);
+  assert.equal((await cli(['key', 'add', '--name', 'alice-vless', '--file', vlessFile])).data.kind, 'vless');
+  const keys = await cli(['server', 'keys', 'list', '--server', 'home', '--user', user]);
+  assert.equal(keys.data.length, 4); assert.ok(keys.data.every(k => k.access_key === undefined && k.config === undefined));
+  assert.ok((await cli(['server', 'keys', 'list', '--server', 'home', '--user', user, '--show-keys'])).data.every(k => k.access_key));
+
+  assert.deepEqual((await cli(['server', 'rules', 'set', '--server', 'home', '--block-site', '*.Example.COM', '--block-bittorrent'])).data.blocked_domains, ['example.com']);
+  await cli(['server', 'rules', 'set', '--server', 'home', '--user', user, '--block-port', '6881-6889']);
+  assert.deepEqual((await cli(['server', 'rules', 'show', '--server', 'home', '--user', user])).data.rules.blocked_ports, ['6881-6889']);
+  assert.equal((await cli(['server', 'rules', 'set', '--server', 'home', '--block-ip', 'nonsense'], 2)).error.code, 'invalid_request');
+  assert.equal((await cli(['server', 'usage', '--server', 'home'])).data.users[0].usage_bytes, 0);
+  assert.equal((await cli(['server', 'set', '--server', 'home', '--disable', 'wireguard'])).data.protocols.wireguard.enabled, false);
+  assert.ok((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'wireguard'], 2)).error.message.includes('turned off'));
+  assert.equal((await cli(['server', 'users', 'update', '--server', 'home', '--user', user, '--disable'])).data.enabled, false);
+  assert.equal((await cli(['server', 'users', 'update', '--server', 'home', '--user', '99', '--enable'], 2)).error.code, 'not_found');
+  assert.equal((await cli(['server', 'info', '--server', 'missing'], 2)).error.code, 'not_found');
+
+  // A server that cannot prove it holds the pinned certificate never receives the key.
+  const wrongPin = await cli(['server', 'add', '--name', 'evil', '--key-file', await write('wrong-pin.json', JSON.stringify({ ...management, certSha256: '00'.repeat(32) }))], 1);
+  assert.equal(wrongPin.error.code, 'server_identity_mismatch');
+  for (const bad of [{ ...management, apiUrl: management.apiUrl.replace('https:', 'http:') }, { apiUrl: management.apiUrl }, { ...management, extra: 1 }]) {
+    const refused = await cli(['server', 'add', '--name', 'bad', '--key-file', await write('bad-key.json', JSON.stringify(bad))], 2);
+    assert.equal(refused.error.code, 'invalid_request'); assert.ok(!JSON.stringify(refused).includes(secret));
+  }
+  const tokenPath = path.join(temp, 'server.token'); await cli(['agent', 'grant', '--name', 'server-agent', '--control', '--token-file', tokenPath]);
+  const token = (await fs.readFile(tokenPath, 'utf8')).trim();
+  for (const action of [{ type: 'managed_server_list' }, { type: 'server_call', server: 'home', op: { op: 'info' } }, { type: 'managed_server_add', name: 'x', management_key: key }]) {
+    assert.equal((await rpc({ schema_version: 1, agent_token: token, action })).error.code, 'permission_denied', action.type);
+  }
+  await cli(['agent', 'revoke', '--name', 'server-agent']);
+  assert.ok(!JSON.stringify(await cli(['logs', '--tail', '1000'])).includes(secret), 'audit log contains the management secret');
+
+  server.kill(); await once(server, 'exit');
+  assert.equal((await cli(['server', 'info', '--server', 'home'], 1)).error.code, 'server_unreachable');
+  assert.equal((await cli(['server', 'remove', '--name', 'home'])).data.removed, 'home');
+  assert.equal((await cli(['server', 'list'])).data.servers.length, 0);
+  for (const name of ['alice-awg', 'alice-wg', 'alice-ss', 'alice-vless']) await cli(['profile', 'remove', name]);
 });

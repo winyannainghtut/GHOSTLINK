@@ -12,4 +12,17 @@ The managed tunnel worker links upstream protocol and cryptographic libraries wi
 
 These mechanisms reduce specific failures; they do not certify the platform definition of done. Full routing, DNS/IPv6 leaks, crash recovery, network changes and installed service shutdown still require privileged network tests. A persistent kill switch, approval queue, signed update channel and verified mobile implementation are not present. IPv6 is currently routed to the Outline TUN and rejected by policy; IPv6 server transport and split/full tunnel behavior need real network verification.
 
+**Managed servers (client side).** A management key gives full control of a Ghostlink server.
+- **Storage and visibility:** it is accepted only by the owner (never agents), sealed like access keys, and never returned in lists, status or audit entries. The CLI reads it from a file or stdin only.
+- **Pinning:** the service connects with rustls, TLS 1.3 only. The certificate is checked against `certSha256` inside the handshake, and the handshake signature is still verified, so a peer that only copied the public certificate cannot pass. A test confirms that with a wrong pin the server receives no request bytes, which means the secret path is never sent.
+- **Request shape:** requests are typed operations mapped to fixed paths with decimal IDs. There are no redirects or proxies, answers are capped at 1 MiB, and calls time out after 25 s.
+- **Routing:** while a VPN connection is up, the management APIs of servers this device administers are routed around the tunnel. The Ghostlink server refuses its own API port to VPN users.
+
+**Ghostlink server.**
+- **Container:** a container with no capabilities, a read-only root and `no-new-privileges`, running as a dedicated unprivileged host account that owns only `/var/lib/ghostlink-server` (mode 0700).
+- **Networking:** it uses host networking like Outline. So every user's traffic first passes always-on blocks for loopback, private, link-local, CGNAT, metadata and multicast ranges, the API port and the server's own IP address. Names are resolved on the server before those blocks apply.
+- **Management API:** TLS 1.3 only, with a self-signed P-256 certificate. All paths sit under a random 128-bit secret prefix compared in constant time. An address is refused after 20 wrong guesses in a minute, and request bodies are strictly validated.
+- **What the server stores:** the server keeps every user's key material in its state, so keys can be shown again. Protect the host and its backups accordingly.
+- **Logs and first install:** logs contain warnings and errors only, not traffic. On first install the server may contact `api.ipify.org` and `ipv4.icanhazip.com` to learn its public IP; set the hostname yourself to avoid that.
+
 Do not commit state, PKI, access keys, token files or build tools. Keep offline CA backups encrypted and separate from server backups. The optional OpenVPN PKI bundle explicitly excludes CA and client private keys. Update CRLs on the server after revocation and before their expiry.

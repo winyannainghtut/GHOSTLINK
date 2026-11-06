@@ -17,7 +17,7 @@ const declared = {
   'apps/desktop/src-tauri/tauri.conf.json': JSON.parse(read('apps/desktop/src-tauri/tauri.conf.json')).version,
   'apps/desktop/ui/index.html': capture('apps/desktop/ui/index.html', /PERSONAL VPN · ([^<\s]+)/),
   // The daemon only runs a worker whose version line matches exactly, so these must agree.
-  'core/outline-worker/main.go': capture('core/outline-worker/main.go', /tunnel worker ([^;"]+);/),
+  'core/outline-worker/internal/version/version.go': capture('core/outline-worker/internal/version/version.go', /Ghostlink = "([^"]+)"/),
   'core/vpn-engine/src/worker_session.rs': capture('core/vpn-engine/src/worker_session.rs', /tunnel worker ([^;"]+);/),
 };
 const mismatches = Object.entries(declared).filter(([, value]) => value !== version);

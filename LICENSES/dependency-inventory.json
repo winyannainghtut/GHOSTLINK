@@ -219,6 +219,28 @@
   },
   {
     "ecosystem": "rust",
+    "name": "cfg_aliases",
+    "version": "0.2.2",
+    "license": "MIT",
+    "repository": "https://github.com/katharostech/cfg_aliases",
+    "notices": [
+      "LICENSE",
+      "NOTICES.md"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "chacha20",
+    "version": "0.10.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/RustCrypto/stream-ciphers",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "clap",
     "version": "4.6.7",
     "license": "MIT OR Apache-2.0",
@@ -298,6 +320,17 @@
     "ecosystem": "rust",
     "name": "cpufeatures",
     "version": "0.2.17",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/RustCrypto/utils",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "cpufeatures",
+    "version": "0.3.1",
     "license": "MIT OR Apache-2.0",
     "repository": "https://github.com/RustCrypto/utils",
     "notices": [
@@ -621,6 +654,18 @@
   },
   {
     "ecosystem": "rust",
+    "name": "hyper-rustls",
+    "version": "0.27.10",
+    "license": "Apache-2.0 OR ISC OR MIT",
+    "repository": "https://github.com/rustls/hyper-rustls",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-ISC",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "hyper-tls",
     "version": "0.6.0",
     "license": "MIT/Apache-2.0",
@@ -840,6 +885,18 @@
     "notices": [
       "LICENSE-APACHE",
       "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "lru-slab",
+    "version": "0.1.3",
+    "license": "MIT OR Apache-2.0 OR Zlib",
+    "repository": "https://github.com/Ralith/lru-slab",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT",
+      "LICENSE-ZLIB"
     ]
   },
   {
@@ -1139,6 +1196,39 @@
   },
   {
     "ecosystem": "rust",
+    "name": "quinn",
+    "version": "0.11.12",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/quinn-rs/quinn",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "quinn-proto",
+    "version": "0.11.19",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/quinn-rs/quinn",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "quinn-udp",
+    "version": "0.5.16",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/quinn-rs/quinn",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "quote",
     "version": "1.0.47",
     "license": "MIT OR Apache-2.0",
@@ -1160,6 +1250,17 @@
     "ecosystem": "rust",
     "name": "rand",
     "version": "0.8.8",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rust-random/rand",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "rand",
+    "version": "0.10.3",
     "license": "MIT OR Apache-2.0",
     "repository": "https://github.com/rust-random/rand",
     "notices": [
@@ -1191,6 +1292,38 @@
   },
   {
     "ecosystem": "rust",
+    "name": "rand_core",
+    "version": "0.10.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rust-random/rand_core",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "rand_pcg",
+    "version": "0.10.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rust-random/rngs",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "rcgen",
+    "version": "0.13.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rustls/rcgen",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "redox_syscall",
     "version": "0.5.18",
     "license": "MIT",
@@ -1205,6 +1338,29 @@
     "version": "0.12.28",
     "license": "MIT OR Apache-2.0",
     "repository": "https://github.com/seanmonstar/reqwest",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "ring",
+    "version": "0.17.14",
+    "license": "Apache-2.0 AND ISC",
+    "repository": "https://github.com/briansmith/ring",
+    "notices": [
+      "LICENSE",
+      "LICENSE-BoringSSL",
+      "LICENSE-other-bits"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "rustc-hash",
+    "version": "2.1.3",
+    "license": "Apache-2.0 OR MIT",
+    "repository": "https://github.com/rust-lang/rustc-hash",
     "notices": [
       "LICENSE-APACHE",
       "LICENSE-MIT"
@@ -1235,6 +1391,18 @@
   },
   {
     "ecosystem": "rust",
+    "name": "rustls",
+    "version": "0.23.46",
+    "license": "Apache-2.0 OR ISC OR MIT",
+    "repository": "https://github.com/rustls/rustls",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-ISC",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "rustls-pki-types",
     "version": "1.15.1",
     "license": "MIT OR Apache-2.0",
@@ -1242,6 +1410,16 @@
     "notices": [
       "LICENSE-APACHE",
       "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "rustls-webpki",
+    "version": "0.103.16",
+    "license": "ISC",
+    "repository": "https://github.com/rustls/webpki",
+    "notices": [
+      "LICENSE"
     ]
   },
   {
@@ -1600,6 +1778,18 @@
   },
   {
     "ecosystem": "rust",
+    "name": "tinyvec",
+    "version": "1.13.3",
+    "license": "Zlib OR Apache-2.0 OR MIT",
+    "repository": "https://github.com/Lokathor/tinyvec",
+    "notices": [
+      "LICENSE-APACHE.md",
+      "LICENSE-MIT.md",
+      "LICENSE-ZLIB.md"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "tokio",
     "version": "1.54.1",
     "license": "MIT",
@@ -1626,6 +1816,17 @@
     "repository": "https://github.com/tokio-rs/tls",
     "notices": [
       "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "tokio-rustls",
+    "version": "0.26.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rustls/tokio-rustls",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
     ]
   },
   {
@@ -1720,6 +1921,16 @@
       "LICENSE-APACHE",
       "LICENSE-MIT",
       "LICENSE-UNICODE"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "untrusted",
+    "version": "0.9.0",
+    "license": "ISC",
+    "repository": "https://github.com/briansmith/untrusted",
+    "notices": [
+      "LICENSE.txt"
     ]
   },
   {
@@ -1878,6 +2089,17 @@
   },
   {
     "ecosystem": "rust",
+    "name": "web-time",
+    "version": "1.1.0",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/daxpedda/web-time",
+    "notices": [
+      "LICENSE-APACHE",
+      "LICENSE-MIT"
+    ]
+  },
+  {
+    "ecosystem": "rust",
     "name": "widestring",
     "version": "1.2.1",
     "license": "MIT OR Apache-2.0",
@@ -1939,7 +2161,117 @@
   {
     "ecosystem": "rust",
     "name": "windows-sys",
+    "version": "0.52.0",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows-sys",
     "version": "0.61.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows-targets",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_aarch64_gnullvm",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_aarch64_msvc",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_i686_gnu",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_i686_gnullvm",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_i686_msvc",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_x86_64_gnu",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_x86_64_gnullvm",
+    "version": "0.52.6",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/microsoft/windows-rs",
+    "notices": [
+      "license-apache-2.0",
+      "license-mit"
+    ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "windows_x86_64_msvc",
+    "version": "0.52.6",
     "license": "MIT OR Apache-2.0",
     "repository": "https://github.com/microsoft/windows-rs",
     "notices": [
@@ -1967,6 +2299,14 @@
       "LICENSE-APACHE",
       "LICENSE-MIT"
     ]
+  },
+  {
+    "ecosystem": "rust",
+    "name": "yasna",
+    "version": "0.5.2",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/qnighy/yasna.rs",
+    "notices": []
   },
   {
     "ecosystem": "rust",
@@ -3901,17 +4241,6 @@
   },
   {
     "ecosystem": "rust",
-    "name": "rustc-hash",
-    "version": "2.1.3",
-    "license": "Apache-2.0 OR MIT",
-    "repository": "https://github.com/rust-lang/rustc-hash",
-    "notices": [
-      "LICENSE-APACHE",
-      "LICENSE-MIT"
-    ]
-  },
-  {
-    "ecosystem": "rust",
     "name": "rustc_version",
     "version": "0.4.1",
     "license": "MIT OR Apache-2.0",
@@ -4367,18 +4696,6 @@
   },
   {
     "ecosystem": "rust",
-    "name": "tinyvec",
-    "version": "1.13.3",
-    "license": "Zlib OR Apache-2.0 OR MIT",
-    "repository": "https://github.com/Lokathor/tinyvec",
-    "notices": [
-      "LICENSE-APACHE.md",
-      "LICENSE-MIT.md",
-      "LICENSE-ZLIB.md"
-    ]
-  },
-  {
-    "ecosystem": "rust",
     "name": "tokio-util",
     "version": "0.7.20",
     "license": "MIT",
@@ -4600,17 +4917,6 @@
     "version": "0.5.0",
     "license": "MIT OR Apache-2.0",
     "repository": "https://github.com/MattiasBuelens/wasm-streams/",
-    "notices": [
-      "LICENSE-APACHE",
-      "LICENSE-MIT"
-    ]
-  },
-  {
-    "ecosystem": "rust",
-    "name": "web-time",
-    "version": "1.1.0",
-    "license": "MIT OR Apache-2.0",
-    "repository": "https://github.com/daxpedda/web-time",
     "notices": [
       "LICENSE-APACHE",
       "LICENSE-MIT"
@@ -4990,105 +5296,48 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/smux",
-    "version": "v1.5.50-sing-box-mod.1",
+    "name": "github.com/sagernet/bbolt",
+    "version": "v0.0.0-20260915102804-500ee1e84832",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "golang.org/x/exp",
-    "version": "v0.0.0-20260410095643-746e56fc9e2f",
+    "name": "golang.org/x/net",
+    "version": "v0.62.0",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/hashicorp/yamux",
-    "version": "v0.1.2",
+    "name": "github.com/sagernet/sing-mux",
+    "version": "v0.3.10-0.20260929204512-caf09fe32475",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/gobwas/pool",
-    "version": "v0.2.1",
+    "name": "github.com/sagernet/sing-tun",
+    "version": "v0.9.7-0.20261023115432-040db71fcd33",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/logrusorgru/aurora",
-    "version": "v2.0.3+incompatible",
+    "name": "github.com/sagernet/wireguard-go",
+    "version": "v0.0.8-0.20261022215841-e4d85ef2ed38",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "golang.org/x/sync",
-    "version": "v0.24.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/miekg/dns",
-    "version": "v1.1.72",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/sing-vmess",
-    "version": "v0.2.9-0.20261019223527-a0c58542bd9d",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/andybalholm/brotli",
-    "version": "v1.2.7",
-    "notices": [
-      "LICENSE",
-      "flate/LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/go-chi/render",
-    "version": "v1.0.3",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/go-ole/go-ole",
-    "version": "v1.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/google/btree",
-    "version": "v1.1.3",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/sys",
-    "version": "v0.49.0",
+    "name": "github.com/fsnotify/fsnotify",
+    "version": "v1.9.0",
     "notices": [
       "LICENSE"
     ]
@@ -5104,80 +5353,65 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/amnezia-vpn/amneziawg-go/v3",
-    "version": "v3.1.20260828",
+    "name": "github.com/go-chi/render",
+    "version": "v1.0.3",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/database64128/tfo-go/v2",
-    "version": "v2.3.2",
+    "name": "github.com/andybalholm/brotli",
+    "version": "v1.2.7",
+    "notices": [
+      "LICENSE",
+      "flate/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/text",
+    "version": "v0.43.0",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-mux",
-    "version": "v0.3.10-0.20260929204512-caf09fe32475",
+    "name": "github.com/gofrs/uuid/v5",
+    "version": "v5.5.1",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "golang.org/x/mod",
-    "version": "v0.41.0",
+    "name": "github.com/hashicorp/yamux",
+    "version": "v0.1.2",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/bbolt",
-    "version": "v0.0.0-20260915102804-500ee1e84832",
+    "name": "go.uber.org/zap",
+    "version": "v1.27.1",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/gobwas/httphead",
-    "version": "v0.1.0",
+    "name": "github.com/go-ole/go-ole",
+    "version": "v1.3.0",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/fsnotify/fsnotify",
-    "version": "v1.9.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/ajg/form",
-    "version": "v1.5.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/sagernet/cors",
-    "version": "v1.2.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/net",
-    "version": "v0.62.0",
+    "name": "github.com/sagernet/fswatch",
+    "version": "v0.1.2",
     "notices": [
       "LICENSE"
     ]
@@ -5192,8 +5426,88 @@
   },
   {
     "ecosystem": "go",
-    "name": "lukechampine.com/blake3",
-    "version": "v1.3.0",
+    "name": "golang.org/x/sys",
+    "version": "v0.49.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "go.uber.org/multierr",
+    "version": "v1.11.0",
+    "notices": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/klauspost/cpuid/v2",
+    "version": "v2.3.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-shadowsocks2",
+    "version": "v0.2.2-0.20260929152114-a69d1086332b",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/miekg/dns",
+    "version": "v1.1.72",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/sync",
+    "version": "v0.24.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/google/btree",
+    "version": "v1.1.3",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/amnezia-vpn/amneziawg-go/v3",
+    "version": "v3.1.20260828",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/smux",
+    "version": "v1.5.50-sing-box-mod.1",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-snell",
+    "version": "v0.0.0-20260904135315-bc5a12ac736f",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/ws",
+    "version": "v0.0.0-20231204124109-acfe8907c854",
     "notices": [
       "LICENSE"
     ]
@@ -5208,26 +5522,56 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/vishvananda/netns",
-    "version": "v0.0.5",
+    "name": "github.com/database64128/tfo-go/v2",
+    "version": "v2.3.2",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing",
-    "version": "v0.9.7-0.20261023115459-5dc452e537bf",
+    "name": "github.com/sagernet/gvisor",
+    "version": "v0.0.0-20260727.0-sing-box-mod.1",
     "notices": [
-      "LICENSE",
-      "contrab/freelru/LICENSE",
-      "contrab/freelru/NOTICE"
+      "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-snell",
-    "version": "v0.0.0-20260904135315-bc5a12ac736f",
+    "name": "github.com/sagernet/sing-vmess",
+    "version": "v0.2.9-0.20261019223527-a0c58542bd9d",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/crypto",
+    "version": "v0.58.1-0.20261009181718-2f1f834330b2",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/exp",
+    "version": "v0.0.0-20260410095643-746e56fc9e2f",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/gobwas/httphead",
+    "version": "v0.1.0",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "lukechampine.com/blake3",
+    "version": "v1.3.0",
     "notices": [
       "LICENSE"
     ]
@@ -5251,22 +5595,6 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/gofrs/uuid/v5",
-    "version": "v5.5.1",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "go.uber.org/multierr",
-    "version": "v1.11.0",
-    "notices": [
-      "LICENSE.txt"
-    ]
-  },
-  {
-    "ecosystem": "go",
     "name": "github.com/go-chi/chi/v5",
     "version": "v5.3.0",
     "notices": [
@@ -5275,48 +5603,56 @@
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/gvisor",
-    "version": "v0.0.0-20260727.0-sing-box-mod.1",
+    "name": "golang.org/x/time",
+    "version": "v0.15.0",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/fswatch",
-    "version": "v0.1.2",
+    "name": "github.com/vishvananda/netns",
+    "version": "v0.0.5",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-shadowsocks2",
-    "version": "v0.2.2-0.20260929152114-a69d1086332b",
+    "name": "golang.org/x/mod",
+    "version": "v0.41.0",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/ws",
-    "version": "v0.0.0-20231204124109-acfe8907c854",
+    "name": "github.com/gobwas/pool",
+    "version": "v0.2.1",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-tun",
-    "version": "v0.9.7-0.20261023115432-040db71fcd33",
+    "name": "github.com/ajg/form",
+    "version": "v1.5.1",
     "notices": [
       "LICENSE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/wireguard-go",
-    "version": "v0.0.8-0.20261022215841-e4d85ef2ed38",
+    "name": "github.com/logrusorgru/aurora",
+    "version": "v2.0.3+incompatible",
+    "notices": [
+      "LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/sagernet/sing-shadowsocks",
+    "version": "v0.2.9-0.20260929204512-65740e0f0e3e",
     "notices": [
       "LICENSE"
     ]
@@ -5333,48 +5669,18 @@
   },
   {
     "ecosystem": "go",
-    "name": "go.uber.org/zap",
-    "version": "v1.27.1",
+    "name": "github.com/sagernet/sing",
+    "version": "v0.9.7-0.20261023115459-5dc452e537bf",
     "notices": [
-      "LICENSE"
+      "LICENSE",
+      "contrab/freelru/LICENSE",
+      "contrab/freelru/NOTICE"
     ]
   },
   {
     "ecosystem": "go",
-    "name": "github.com/sagernet/sing-shadowsocks",
-    "version": "v0.2.9-0.20260929204512-65740e0f0e3e",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/time",
-    "version": "v0.15.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/text",
-    "version": "v0.43.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "github.com/klauspost/cpuid/v2",
-    "version": "v2.3.0",
-    "notices": [
-      "LICENSE"
-    ]
-  },
-  {
-    "ecosystem": "go",
-    "name": "golang.org/x/crypto",
-    "version": "v0.58.1-0.20261009181718-2f1f834330b2",
+    "name": "github.com/sagernet/cors",
+    "version": "v1.2.1",
     "notices": [
       "LICENSE"
     ]

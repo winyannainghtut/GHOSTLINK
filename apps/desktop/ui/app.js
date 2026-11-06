@@ -188,7 +188,8 @@ $('#rename-form').addEventListener('submit', async event => { event.preventDefau
 $('#confirm-remove').addEventListener('click', async () => { const profile = appState.selected; $('#remove-dialog').close(); await mutate({type:'profile_remove',name:profile.name}); });
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active',item === button));
-  $('#servers-view').hidden = button.dataset.view !== 'servers'; $('#settings-view').hidden = button.dataset.view !== 'settings';
+  for (const view of ['servers', 'manage', 'settings']) $(`#${view}-view`).hidden = button.dataset.view !== view;
+  if (button.dataset.view === 'manage') loadManaged();
 }));
 $('#autoconnect').addEventListener('change', async event => { await mutate({type:'autoconnect',enabled:event.target.checked}); if (appState.info) event.target.checked = appState.info.autoconnect; });
 $('#split-edit').addEventListener('click', () => openSplit(null));

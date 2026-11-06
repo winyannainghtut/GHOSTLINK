@@ -112,6 +112,7 @@ async fn failed_engine_validation_removes_plaintext_configuration() {
         "invalid".into(),
         Outbound::Shadowsocks(key),
         Default::default(),
+        Vec::new(),
         shared,
         events,
         Duration::from_secs(3),

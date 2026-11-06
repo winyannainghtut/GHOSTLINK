@@ -1,6 +1,6 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.2.0** (`6f07d89`); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.3.0** (Ghostlink server and server management; v0.2.1 added Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -564,7 +564,27 @@ No successful full TUN connection, all-application routing, full/split route com
 
 ## 13. Self-hosted servers and infrastructure
 
-### Outline-compatible server — primary server path
+### Ghostlink server — primary server path (v0.3.0)
+
+`core/outline-worker/cmd/ghostlink-server` + `internal/server` (GPL, same Go module as the worker) is an Outline-style server:
+- **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg`, with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
+- **Packaging:** `.deb`/`.rpm` (`packages/linux/server/`, `scripts/build-linux-server.sh`) carry the image (`docker save`); the postinst loads it and prints the management key. The container runs with host networking, no capabilities, a read-only root and a dedicated host account.
+- **Rules:** always-on internal blocks, then per-user (`auth_user`), exempt and global rules; usage via a router `ConnectionTracker`; data limits.
+
+Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) for operation and the API.
+
+Client side:
+- **Daemon:** `ManagedServerAdd/List/Remove` and typed `ServerCall` live in `services/vpn-daemon/src/remote.rs`, and run **without the daemon lock** during network calls.
+- **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
+- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run** (`apps/desktop/ui/manage.js`).
+- **Access:** everything is owner-only and never exposed over MCP.
+
+Pitfalls found here:
+- **Fetch helper:** the test HTTP proxy uses the Host header as destination, so the server tests use CONNECT plus a Host header.
+- **Serde:** extra fields on unit variants of internally tagged enums are ignored.
+- **Close race:** amneziawg-go closes the TUN before its peers. See §17.
+
+### Outline-compatible offline server — earlier server path
 
 `server/outline/provision.py` generates a **standard Shadowsocks AEAD server configuration** and unique access keys offline. It is not a complete clone of Outline Manager, its management API or a dynamic-key hosting service.
 
@@ -742,7 +762,7 @@ No application implementation exists yet. The original requirements are:
 
 ### Approved plan in progress
 
-The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in `devjourney.md`). Phases 1–2 shipped as **v0.2.0**. Next:
+The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in `devjourney.md`). Phases 1–2 shipped as **v0.2.0**, Linux client packages as **v0.2.1**, and phases 3–4 as **v0.3.0**, as described in §13. What follows is the original plan text, kept for reference. Remaining server work: an authorized VPS deployment test, Amnezia-app import of our `vpn://` keys, RPM/Fedora install, IPv6 in tunnels, ports below 1024, and routed verification of the management bypass while connected.
 
 - **Phase 3:** `core/outline-worker/cmd/ghostlink-server` + `internal/server`. One process runs sing-box with Shadowsocks (multi-user, legacy AEAD), VLESS-REALITY, WireGuard and AmneziaWG (`internal/awg` in server mode), plus an HTTPS management API behind a secret path, pinned by `certSha256`. It renders global and per-user rules (`auth_user`), always blocks loopback/private/metadata destinations and the API port, counts usage per user via a router `ConnectionTracker`, and enforces data limits. It ships as `.deb`/`.rpm` (nfpm) with the image (`docker save`) included; `postinst` loads it and prints the management key. Upgrades keep state.
 - **Phase 4:** the daemon stores management keys sealed and makes typed, pinned HTTPS calls (`ManagedServerAdd`/`List`/`Remove`, `ServerCall`), with the CLI `ghostlink server ...` and a GUI "Servers I manage" area. Owner-only; never exposed to MCP.
@@ -778,9 +798,9 @@ Requires an authorized Windows test machine and human administrator installation
 | Network-change reconnect | Measured behavior and reliable terminal-worker recovery design; health label alone is insufficient |
 | Configurable persistent kill switch | Not implemented; needs OS-specific enforcement/recovery design and tests |
 | GUI completeness | Native narrow-window, service outage/recovery, tray actions, install/uninstall interaction checks |
-| Linux client/packages | Actual Rust/GUI build/runtime, GTK advisory resolution, resolver/SSH safety, DEB/RPM |
+| Linux client/packages | `.deb`/`.rpm` since v0.2.1 (installed as a service in CI). Remaining: GUI (GTK advisory), resolver/SSH safety and a real routed session |
 | Android and iOS | Native implementations, projects/toolchains, signing/entitlements, device tests |
-| Real self-hosted server deployment | In progress (v0.3.0): Ghostlink server packaged as `.deb`/`.rpm` with its Docker image, Outline-style management key, users/keys per protocol, global and per-user traffic rules, management from the app. Then: authorized target, firewall/service health, backup/restore/revocation tested on a host |
+| Real self-hosted server deployment | Ghostlink server (v0.3.0): packaged with its image, management key, users/keys per protocol, global and per-user rules, limits, managed from the app/CLI; tested end to end locally and by release CI on Docker runners. Remaining: an authorized internet-facing host, firewall/cloud rules, backup/restore and long-running operation |
 | Agent end-to-end VPN workflow | Authorized control through real installed service and measured routing; optional daemon approval queue if required |
 | Public release | Licensing/source review, signing, target packages, verified update/rollback/troubleshooting and release workflow |
 
@@ -798,6 +818,10 @@ Requires an authorized Windows test machine and human administrator installation
 - Do not erase existing firewall rules, default routes, SSH access or another VPN while implementing server/client setup.
 - Repackaging after code/dependency changes requires fresh binaries, notices, source bundle and checksums.
 - Do not suppress nonzero advisory results or represent a skipped test as a pass.
+- **AmneziaWG close race:** amneziawg-go closes its TUN before stopping peers, and sing-box's stack device crashes on a late `Write`. `internal/awg/tun.go` serializes `Close` against writes. Do not remove that guard; it also protects server reloads.
+- **Corresponding-source zip:** `scripts/package-worker-source.ps1` must copy the whole Go module and build from the staged copy. Before v0.3.0 it copied only top-level `.go` files, so the zip missed `internal/awg`.
+- **GUI checks:** never drive the GUI with real mouse clicks. Windows may refuse to focus the app, and the click lands on the user's own windows. Launch the debug app with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` and use the DevTools protocol (`Runtime.evaluate`, `Page.captureScreenshot`). Restore any theme or local-storage setting you change.
+- **Docker Desktop:** do not start Docker Desktop on the user's machine. Server image and package tests run in release CI, on runners that have Docker.
 
 ## 18. Definition of done and handover maintenance
 

@@ -1,6 +1,7 @@
 name: Linux package
-# Reusable: builds the headless Linux archive on the given runner and uploads it as the
-# workflow artifact "linux-<arch>". Called by release.yml.
+# Reusable: on the given runner, builds the headless client (archive, .deb, .rpm) and the
+# server (.deb, .rpm with its Docker image inside), installs both as a smoke test, and uploads
+# them as the workflow artifact "linux-<arch>". Called by release.yml.
 on:
   workflow_call:
     inputs:
@@ -15,7 +16,7 @@ permissions:
 
 jobs:
   package:
-    name: Linux ${{ inputs.arch }} (headless archive)
+    name: Linux ${{ inputs.arch }} (client and server packages)
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -74,10 +75,58 @@ jobs:
           ARCH: ${{ inputs.arch }}
         run: |
           sudo apt-get install -y rpm
-          rpm -qip artifacts/linux-$ARCH/ghostlink-*.rpm
-          rpm -qlp artifacts/linux-$ARCH/ghostlink-*.rpm | tee files.txt
+          rpm -qip artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm
+          rpm -qlp artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm | tee files.txt
           grep -qx /usr/bin/ghostlinkd files.txt && grep -qx /usr/lib/ghostlink/ghostlink-tunnel files.txt
-          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-*.rpm | grep -q ghostlinkd
+          grep -qx /usr/lib/systemd/system/ghostlinkd.service files.txt
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm | grep -q ghostlinkd
+      - name: Server image, .deb and .rpm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker version --format 'Docker {{.Server.Version}}'
+          bash scripts/build-linux-server.sh "$VERSION"
+      - name: Smoke-test the server .deb (install, API, keys, upgrade, purge)
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -eu
+          dpkg -l | grep -Ei 'moby|docker' || true
+          deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
+          # The postinst loads the bundled image, creates the server and prints its key.
+          sudo GHOSTLINK_SERVER_HOSTNAME=127.0.0.1 apt-get install -y "./$deb" | tee install.log
+          grep -q '"apiUrl":"https://127.0.0.1:' install.log
+          key=$(sudo ghostlink-server show-key | grep '^{')
+          url=$(echo "$key" | jq -r .apiUrl)
+          pin=$(echo "$key" | jq -r .certSha256)
+          address=${url#https://}; address=${address%%/*}
+          # The certificate the API presents is the one the management key pins.
+          served=$(openssl s_client -connect "$address" -tls1_3 </dev/null 2>/dev/null | openssl x509 -outform DER | sha256sum | cut -d' ' -f1 | tr a-f A-F)
+          test "$served" = "$pin"
+          test "$(curl -sk -o /dev/null -w '%{http_code}' "https://$address/not-the-secret/server")" = 404
+          curl -sk --fail "$url/server" | tee server.json
+          jq -e '.protocols.amneziawg.enabled and .protocols.vless.enabled' server.json
+          user=$(curl -sk --fail -X POST -d '{"name":"ci"}' "$url/users" | jq -r .id)
+          for protocol in amneziawg wireguard vless shadowsocks; do
+            curl -sk --fail -X POST -d "{\"protocol\":\"$protocol\"}" "$url/users/$user/keys" | jq -e '.access_key | length > 20'
+          done
+          docker inspect ghostlink-server --format '{{.State.Running}} readonly={{.HostConfig.ReadonlyRootfs}} capdrop={{.HostConfig.CapDrop}} user={{.Config.User}} net={{.HostConfig.NetworkMode}}' | tee container.txt
+          grep -q '^true readonly=true capdrop=\[ALL\] user=[0-9]*:[0-9]* net=host$' container.txt
+          sudo stat -c '%a %U' /var/lib/ghostlink-server | grep -qx '700 ghostlink-server'
+          # An upgrade (here: reinstall) keeps users and keys.
+          sudo apt-get install -y --reinstall "./$deb"
+          curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
+          sudo apt-get purge -y ghostlink-server
+          if docker ps -a --format '{{.Names}}' | grep -qx ghostlink-server; then echo "container left after purge" >&2; exit 1; fi
+          test ! -e /var/lib/ghostlink-server && ! id ghostlink-server 2>/dev/null
+      - name: Inspect the server .rpm
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          rpm -qip artifacts/linux-$ARCH/ghostlink-server-*.rpm
+          rpm -qlp artifacts/linux-$ARCH/ghostlink-server-*.rpm | tee server-files.txt
+          grep -qx /usr/sbin/ghostlink-server server-files.txt && grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-server-*.rpm | grep -q 'ghostlink-server setup'
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ inputs.arch }}

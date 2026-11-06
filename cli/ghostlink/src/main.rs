@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use ghostlink_contracts::{
-    Action, ConnectionState, Request, Response, RoutingPolicy, SplitMode, SCHEMA_VERSION,
+    Action, ConnectionState, ProtocolPatch, Request, Response, RoutingPolicy, ServerOp,
+    ServerPatch, SplitMode, TrafficRules, UserChange, SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::{
@@ -47,9 +48,15 @@ enum Command {
     Disconnect,
     Status,
     Info,
+    /// List the VPN servers saved on this device.
     Servers {
         #[command(subcommand)]
         command: ServersCommand,
+    },
+    /// Administer Ghostlink servers you run: users, keys, traffic rules and usage.
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
     },
     Switch {
         #[arg(long)]
@@ -146,6 +153,186 @@ enum ServersCommand {
     List,
 }
 #[derive(Subcommand)]
+enum ServerCommand {
+    /// Print how to install a Ghostlink server on a Linux machine.
+    InstallHelp,
+    /// Save a server's management key (from `sudo ghostlink-server show-key`).
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long, conflicts_with = "key_stdin")]
+        key_file: Option<PathBuf>,
+        #[arg(long, conflicts_with = "key_file")]
+        key_stdin: bool,
+        #[arg(long)]
+        replace: bool,
+    },
+    /// List managed servers (addresses only; keys are never shown).
+    List,
+    /// Forget a managed server on this device. The server itself is not changed.
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
+    /// Show a server's protocols, ports and settings.
+    Info {
+        #[arg(long)]
+        server: String,
+    },
+    /// Change server settings. Changes apply immediately; users reconnect automatically.
+    Set {
+        #[arg(long)]
+        server: String,
+        /// Display name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Public IP or DNS name written into new keys.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Public TLS 1.3 site whose handshake VLESS-REALITY borrows.
+        #[arg(long)]
+        reality_site: Option<String>,
+        /// Turn a protocol on (amneziawg, wireguard, vless, shadowsocks). Repeatable.
+        #[arg(long = "enable")]
+        enable: Vec<String>,
+        /// Turn a protocol off. Its keys stop working until it is turned on again. Repeatable.
+        #[arg(long = "disable")]
+        disable: Vec<String>,
+        /// PROTOCOL=PORT, e.g. vless=8443. Repeatable.
+        #[arg(long = "port")]
+        ports: Vec<String>,
+    },
+    Users {
+        #[command(subcommand)]
+        command: ServerUsersCommand,
+    },
+    Keys {
+        #[command(subcommand)]
+        command: ServerKeysCommand,
+    },
+    Rules {
+        #[command(subcommand)]
+        command: ServerRulesCommand,
+    },
+    /// Data used by each user.
+    Usage {
+        #[arg(long)]
+        server: String,
+    },
+}
+#[derive(Subcommand)]
+enum ServerUsersCommand {
+    List {
+        #[arg(long)]
+        server: String,
+    },
+    Add {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        name: String,
+        /// Data limit in gigabytes (10^9 bytes); the user is cut off when it is reached.
+        #[arg(long)]
+        data_limit_gb: Option<f64>,
+        /// Do not apply the server-wide rules to this user.
+        #[arg(long)]
+        exempt_from_global_rules: bool,
+    },
+    Update {
+        #[arg(long)]
+        server: String,
+        /// User ID (see `server users list`).
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        #[arg(long, conflicts_with = "enable")]
+        disable: bool,
+        /// Data limit in gigabytes; 0 removes the limit.
+        #[arg(long)]
+        data_limit_gb: Option<f64>,
+        #[arg(long, value_parser = clap::value_parser!(bool))]
+        exempt_from_global_rules: Option<bool>,
+        /// Start counting this user's data from zero again.
+        #[arg(long)]
+        reset_usage: bool,
+    },
+    Remove {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+    },
+}
+#[derive(Subcommand)]
+enum ServerKeysCommand {
+    /// List a user's keys. Key material is hidden unless --show-keys is given.
+    List {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        show_keys: bool,
+    },
+    /// Create a key. It is printed unless --output or --import is given.
+    Create {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long, value_parser = ["amneziawg", "wireguard", "vless", "shadowsocks"])]
+        protocol: String,
+        /// Also save it as a VPN server on this device with this ID.
+        #[arg(long = "import")]
+        import_as: Option<String>,
+        /// Write the key to this NEW private file (WireGuard/AmneziaWG also get FILE.conf).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    Remove {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        key: String,
+    },
+}
+#[derive(Subcommand)]
+enum ServerRulesCommand {
+    /// Show the server-wide rules, or one user's rules.
+    Show {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: Option<String>,
+    },
+    /// Replace the server-wide rules, or one user's rules, with exactly these blocks.
+    Set {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: Option<String>,
+        /// Block a site and its subdomains. Repeatable.
+        #[arg(long = "block-site")]
+        sites: Vec<String>,
+        /// Block an IP address or CIDR range. Repeatable.
+        #[arg(long = "block-ip")]
+        ips: Vec<String>,
+        /// Block a port or range, e.g. 25 or 6881-6889. Repeatable.
+        #[arg(long = "block-port")]
+        ports: Vec<String>,
+        #[arg(long)]
+        block_bittorrent: bool,
+        /// Block outgoing mail (port 25).
+        #[arg(long)]
+        block_smtp: bool,
+    },
+}
+#[derive(Subcommand)]
 enum Toggle {
     Enable,
     Disable,
@@ -225,43 +412,11 @@ async fn run(args: &Args) -> Response {
                     replace,
                 },
         } => {
-            let content = if let Some(file) = file {
-                match std::fs::metadata(file).and_then(|m| {
-                    if m.len() <= 16384 {
-                        std::fs::read_to_string(file)
-                    } else {
-                        Err(std::io::Error::other("Key too large"))
-                    }
-                }) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return Response::err(
-                            "invalid_profile",
-                            "Cannot read access key file (maximum 16 KiB)",
-                        )
-                    }
-                }
-            } else if *stdin {
-                use std::io::{IsTerminal, Read};
-                if std::io::stdin().is_terminal() {
-                    return Response::err("invalid_request", "Pipe the key to stdin or use --file; interactive terminal entry is disabled to avoid echoing credentials");
-                }
-                let mut value = String::new();
-                if std::io::stdin()
-                    .take(16385)
-                    .read_to_string(&mut value)
-                    .is_err()
-                    || value.len() > 16384
-                {
-                    return Response::err("invalid_profile", "Cannot read access key from stdin");
-                }
-                value
-            } else {
-                return Response::err(
-                    "invalid_request",
-                    "Choose --stdin or --file for the access key",
-                );
-            };
+            let content =
+                match read_secret(file.as_ref(), *stdin, "access key", "--file", "--stdin") {
+                    Ok(content) => content,
+                    Err(response) => return response,
+                };
             Action::AccessKeyImport {
                 name: name.clone(),
                 access_key: content,
@@ -310,6 +465,13 @@ async fn run(args: &Args) -> Response {
         Command::Status => Action::Status,
         Command::Info => Action::Info,
         Command::Servers { .. } => Action::ServersList,
+        Command::Server {
+            command: ServerCommand::InstallHelp,
+        } => return Response::ok(json!({ "help_text": install_help() })),
+        Command::Server { command } => match server_action(command) {
+            Ok(action) => action,
+            Err(response) => return response,
+        },
         Command::Switch { profile, .. } => Action::Switch {
             profile: profile.clone(),
         },
@@ -409,6 +571,13 @@ async fn run(args: &Args) -> Response {
             response.data.as_mut().unwrap()["token_saved"] = json!(true);
         }
     }
+    if let Command::Server { command } = &args.command {
+        if response.success {
+            if let Err(error) = finish_server_response(command, &mut response) {
+                return error;
+            }
+        }
+    }
     let wait = matches!(
         args.command,
         Command::Connect { no_wait: false, .. } | Command::Switch { no_wait: false, .. }
@@ -458,6 +627,10 @@ fn print(response: &Response, json_output: bool) {
         return;
     }
     let data = response.data.as_ref().unwrap();
+    if let Some(text) = data.get("help_text").and_then(|t| t.as_str()) {
+        println!("{text}");
+        return;
+    }
     if let Ok(status) = serde_json::from_value::<ghostlink_contracts::Status>(data.clone()) {
         println!(
             "{}",
@@ -497,4 +670,373 @@ fn print(response: &Response, json_output: bool) {
     } else {
         println!("{}", serde_json::to_string_pretty(data).unwrap());
     }
+}
+
+/// Reads a credential from a file or a pipe, never from an argument or an interactive terminal.
+fn read_secret(
+    file: Option<&PathBuf>,
+    stdin: bool,
+    what: &str,
+    file_flag: &str,
+    stdin_flag: &str,
+) -> Result<String, Response> {
+    const LIMIT: u64 = 16384;
+    if let Some(file) = file {
+        return std::fs::metadata(file)
+            .and_then(|m| {
+                if m.len() <= LIMIT {
+                    std::fs::read_to_string(file)
+                } else {
+                    Err(std::io::Error::other("too large"))
+                }
+            })
+            .map_err(|_| {
+                Response::err(
+                    "invalid_profile",
+                    &format!("Cannot read the {what} file (maximum 16 KiB)"),
+                )
+            });
+    }
+    if stdin {
+        use std::io::{IsTerminal, Read};
+        if std::io::stdin().is_terminal() {
+            return Err(Response::err("invalid_request", &format!("Pipe the {what} to stdin or use {file_flag}; interactive terminal entry is disabled to avoid echoing credentials")));
+        }
+        let mut value = String::new();
+        if std::io::stdin()
+            .take(LIMIT + 1)
+            .read_to_string(&mut value)
+            .is_err()
+            || value.len() as u64 > LIMIT
+        {
+            return Err(Response::err(
+                "invalid_profile",
+                &format!("Cannot read the {what} from stdin"),
+            ));
+        }
+        return Ok(value);
+    }
+    Err(Response::err(
+        "invalid_request",
+        &format!("Choose {stdin_flag} or {file_flag} for the {what}"),
+    ))
+}
+
+fn install_help() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    format!(
+        "Set up a Ghostlink server on a Linux machine with Docker (Debian/Ubuntu or Fedora/RHEL):
+
+  1. Download from the Ghostlink {version} release:
+       ghostlink-server_{version}-1_amd64.deb   (or _arm64.deb)
+       ghostlink-server-{version}-1.x86_64.rpm  (or .aarch64.rpm)
+  2. Install it; this loads the bundled container image and starts the server:
+       sudo apt install ./ghostlink-server_{version}-1_amd64.deb
+       sudo dnf install ./ghostlink-server-{version}-1.x86_64.rpm
+  3. Copy the management key it prints (show it again: sudo ghostlink-server show-key)
+     into a private file on this device, then:
+       ghostlink server add --name myserver --key-file management-key.json
+  4. Allow the server's ports in its firewall / cloud security group
+     (sudo ghostlink-server status lists them).
+
+The management key gives full control of the server. Keep it private."
+    )
+}
+
+fn gigabytes(value: f64) -> Result<u64, Response> {
+    if !value.is_finite() || !(0.0..=1.0e9).contains(&value) {
+        return Err(Response::err(
+            "invalid_request",
+            "Data limits must be between 0 and 1,000,000,000 GB",
+        ));
+    }
+    Ok((value * 1.0e9).round() as u64)
+}
+
+fn call(server: &str, op: ServerOp) -> Action {
+    Action::ServerCall {
+        server: server.into(),
+        op,
+    }
+}
+
+fn server_action(command: &ServerCommand) -> Result<Action, Response> {
+    Ok(match command {
+        ServerCommand::InstallHelp => unreachable!("answered locally"),
+        ServerCommand::Add {
+            name,
+            key_file,
+            key_stdin,
+            replace,
+        } => Action::ManagedServerAdd {
+            name: name.clone(),
+            management_key: read_secret(
+                key_file.as_ref(),
+                *key_stdin,
+                "management key",
+                "--key-file",
+                "--key-stdin",
+            )?,
+            replace: *replace,
+        },
+        ServerCommand::List => Action::ManagedServerList,
+        ServerCommand::Remove { name } => Action::ManagedServerRemove { name: name.clone() },
+        ServerCommand::Info { server } => call(server, ServerOp::Info),
+        ServerCommand::Set {
+            server,
+            name,
+            hostname,
+            reality_site,
+            enable,
+            disable,
+            ports,
+        } => {
+            let mut protocols = std::collections::BTreeMap::<String, ProtocolPatch>::new();
+            for protocol in enable {
+                protocols.entry(protocol.clone()).or_default().enabled = Some(true);
+            }
+            for protocol in disable {
+                protocols.entry(protocol.clone()).or_default().enabled = Some(false);
+            }
+            for entry in ports {
+                let (protocol, port) = entry
+                    .split_once('=')
+                    .and_then(|(p, n)| n.parse::<u16>().ok().map(|n| (p, n)))
+                    .ok_or_else(|| {
+                        Response::err(
+                            "invalid_request",
+                            "Use --port PROTOCOL=PORT, e.g. vless=8443",
+                        )
+                    })?;
+                protocols.entry(protocol.into()).or_default().port = Some(port);
+            }
+            call(
+                server,
+                ServerOp::Update {
+                    patch: ServerPatch {
+                        name: name.clone(),
+                        hostname: hostname.clone(),
+                        vless_handshake: reality_site.clone(),
+                        protocols: (!protocols.is_empty()).then_some(protocols),
+                    },
+                },
+            )
+        }
+        ServerCommand::Users { command } => match command {
+            ServerUsersCommand::List { server } => call(server, ServerOp::UsersList),
+            ServerUsersCommand::Add {
+                server,
+                name,
+                data_limit_gb,
+                exempt_from_global_rules,
+            } => call(
+                server,
+                ServerOp::UserCreate {
+                    change: UserChange {
+                        name: Some(name.clone()),
+                        data_limit_bytes: data_limit_gb.map(gigabytes).transpose()?,
+                        exempt_from_global_rules: Some(*exempt_from_global_rules),
+                        ..Default::default()
+                    },
+                },
+            ),
+            ServerUsersCommand::Update {
+                server,
+                user,
+                name,
+                enable,
+                disable,
+                data_limit_gb,
+                exempt_from_global_rules,
+                reset_usage,
+            } => call(
+                server,
+                ServerOp::UserUpdate {
+                    user: user.clone(),
+                    change: UserChange {
+                        name: name.clone(),
+                        enabled: if *enable {
+                            Some(true)
+                        } else if *disable {
+                            Some(false)
+                        } else {
+                            None
+                        },
+                        data_limit_bytes: data_limit_gb.map(gigabytes).transpose()?,
+                        exempt_from_global_rules: *exempt_from_global_rules,
+                        rules: None,
+                        reset_usage: *reset_usage,
+                    },
+                },
+            ),
+            ServerUsersCommand::Remove { server, user } => {
+                call(server, ServerOp::UserDelete { user: user.clone() })
+            }
+        },
+        ServerCommand::Keys { command } => match command {
+            ServerKeysCommand::List { server, user, .. } => {
+                call(server, ServerOp::KeysList { user: user.clone() })
+            }
+            ServerKeysCommand::Create {
+                server,
+                user,
+                protocol,
+                import_as,
+                output,
+            } => {
+                if output.as_ref().is_some_and(|path| path.exists()) {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "--output must name a new file; it will not overwrite an existing one",
+                    ));
+                }
+                call(
+                    server,
+                    ServerOp::KeyCreate {
+                        user: user.clone(),
+                        protocol: protocol.clone(),
+                        import_as: import_as.clone(),
+                    },
+                )
+            }
+            ServerKeysCommand::Remove { server, user, key } => call(
+                server,
+                ServerOp::KeyDelete {
+                    user: user.clone(),
+                    key: key.clone(),
+                },
+            ),
+        },
+        ServerCommand::Rules { command } => match command {
+            ServerRulesCommand::Show { server, user: None } => call(server, ServerOp::RulesGet),
+            // One user's rules come from the user list.
+            ServerRulesCommand::Show {
+                server,
+                user: Some(_),
+            } => call(server, ServerOp::UsersList),
+            ServerRulesCommand::Set {
+                server,
+                user,
+                sites,
+                ips,
+                ports,
+                block_bittorrent,
+                block_smtp,
+            } => {
+                let rules = TrafficRules {
+                    blocked_domains: sites.clone(),
+                    blocked_ips: ips.clone(),
+                    blocked_ports: ports.clone(),
+                    block_bittorrent: *block_bittorrent,
+                    block_smtp: *block_smtp,
+                };
+                match user {
+                    None => call(server, ServerOp::RulesSet { rules }),
+                    Some(user) => call(
+                        server,
+                        ServerOp::UserUpdate {
+                            user: user.clone(),
+                            change: UserChange {
+                                rules: Some(rules),
+                                ..Default::default()
+                            },
+                        },
+                    ),
+                }
+            }
+        },
+        ServerCommand::Usage { server } => call(server, ServerOp::Metrics),
+    })
+}
+
+/// Writes `content` to a NEW file only this user can read.
+fn write_private(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(windows)]
+    ghostlink_engine::storage::restrict_acl(path)
+        .map_err(|_| std::io::Error::other("Cannot protect the file"))?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
+fn finish_server_response(
+    command: &ServerCommand,
+    response: &mut Response,
+) -> Result<(), Response> {
+    let Some(data) = response.data.as_mut() else {
+        return Ok(());
+    };
+    match command {
+        ServerCommand::Keys {
+            command: ServerKeysCommand::List {
+                show_keys: false, ..
+            },
+        } => {
+            for key in data.as_array_mut().into_iter().flatten() {
+                if let Some(key) = key.as_object_mut() {
+                    key.remove("access_key");
+                    key.remove("config");
+                }
+            }
+        }
+        ServerCommand::Keys {
+            command: ServerKeysCommand::Create {
+                output, import_as, ..
+            },
+        } => {
+            if let Some(path) = output {
+                let access_key = data["access_key"].as_str().unwrap_or_default().to_string();
+                if write_private(path, &format!("{access_key}\n")).is_err() {
+                    return Err(Response::err("permission_denied", "The key was created on the server, but the NEW private --output file could not be written; list it with server keys list --show-keys"));
+                }
+                if let Some(config) = data["config"].as_str().filter(|c| !c.is_empty()) {
+                    let mut conf = path.clone().into_os_string();
+                    conf.push(".conf");
+                    let conf = PathBuf::from(conf);
+                    if write_private(&conf, config).is_err() {
+                        return Err(Response::err(
+                            "permission_denied",
+                            "The key was saved, but the .conf file next to it could not be written",
+                        ));
+                    }
+                    data["config_saved_to"] = json!(conf.display().to_string());
+                }
+                data["saved_to"] = json!(path.display().to_string());
+            }
+            if output.is_some() || import_as.is_some() {
+                if let Some(key) = data.as_object_mut() {
+                    key.remove("access_key");
+                    key.remove("config");
+                }
+            }
+        }
+        ServerCommand::Rules {
+            command: ServerRulesCommand::Show {
+                user: Some(user), ..
+            },
+        } => {
+            let found = data
+                .as_array()
+                .and_then(|users| users.iter().find(|u| u["id"] == json!(user)))
+                .map(|u| json!({"user": u["id"], "name": u["name"], "rules": u["rules"], "exempt_from_global_rules": u["exempt_from_global_rules"]}));
+            match found {
+                Some(found) => *data = found,
+                None => {
+                    return Err(Response::err(
+                        "not_found",
+                        "No user with this ID on the server",
+                    ))
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
