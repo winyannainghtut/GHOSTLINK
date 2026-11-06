@@ -87,7 +87,10 @@ func (a *Agent) Serve(ctx context.Context) error {
 	backoff := time.Second
 	quietUntil := time.Time{}
 	for ctx.Err() == nil {
-		resp, err := a.client.Sync(a.Node.Secret, a.report())
+		resp, err := a.client.Sync(ctx, a.Node.Secret, a.report())
+		if ctx.Err() != nil {
+			return nil // stopping: the deferred teardown cleans up
+		}
 		switch {
 		case errors.Is(err, ErrRemoved):
 			a.Log.Printf("this node was removed from the mesh; cleaning up")

@@ -8,6 +8,7 @@
 package meshagent
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -143,9 +144,9 @@ func NewClient(url, pin string) *Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
-func (c *Client) post(path, secret string, body, out any) error {
+func (c *Client) post(ctx context.Context, path, secret string, body, out any) error {
 	data, _ := json.Marshal(body)
-	request, err := http.NewRequest(http.MethodPost, c.url+path, strings.NewReader(string(data)))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+path, strings.NewReader(string(data)))
 	if err != nil {
 		return err
 	}
@@ -183,18 +184,18 @@ func (c *Client) post(path, secret string, body, out any) error {
 // Join registers the node with an invite token.
 func (c *Client) Join(r meshproto.JoinRequest) (meshproto.JoinResponse, error) {
 	var out meshproto.JoinResponse
-	return out, c.post("/v1/join", "", r, &out)
+	return out, c.post(context.Background(), "/v1/join", "", r, &out)
 }
 
 // Sync reports state and waits (up to about 10 s) for configuration changes.
-func (c *Client) Sync(secret string, r meshproto.SyncRequest) (meshproto.SyncResponse, error) {
+func (c *Client) Sync(ctx context.Context, secret string, r meshproto.SyncRequest) (meshproto.SyncResponse, error) {
 	var out meshproto.SyncResponse
-	return out, c.post("/v1/sync", secret, r, &out)
+	return out, c.post(ctx, "/v1/sync", secret, r, &out)
 }
 
 // Leave removes the node from the mesh.
 func (c *Client) Leave(secret string) error {
-	return c.post("/v1/leave", secret, map[string]string{}, nil)
+	return c.post(context.Background(), "/v1/leave", secret, map[string]string{}, nil)
 }
 
 // LocalEndpoints lists addresses other nodes may reach this machine at: the configured public
