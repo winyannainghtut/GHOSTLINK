@@ -349,6 +349,11 @@ command=${1:-}
 case "$command" in
     users | user | key | keys | rules | usage | stats | clients | top | settings | set | site-stats | dashboard)
         admin "$command" "$@" ;;
+    --json) # machine-readable output: ghostlink-server --json users
+        case "${1:-}" in
+            users | user | key | keys | rules | usage | stats | clients | settings | set | site-stats | dashboard) admin --json "$@" ;;
+            *) die "--json works with: users, user, key, keys, rules, usage, stats, clients, settings, set, site-stats, dashboard" ;;
+        esac ;;
     kit) need_root kit; kit "$@" ;;
     profile) need_root profile; profile "$@" ;;
     ipsec) ipsec_command "$@" ;;
