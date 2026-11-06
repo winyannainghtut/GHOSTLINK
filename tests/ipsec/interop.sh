@@ -136,6 +136,7 @@ wait_applied() {
     fail "the agent did not apply the new settings"
 }
 
+wait_applied
 for spec in ikev2-eap:10.79.0.1 ikev2-cert:10.79.0.1 ipsec-cert:10.80.0.1 ipsec-psk:10.80.0.1; do
     IFS=: read -r name gateway <<<"$spec"
     step "Connect with $name"

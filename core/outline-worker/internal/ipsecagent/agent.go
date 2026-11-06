@@ -42,7 +42,10 @@ type Agent struct {
 	allowed    map[string]bool
 	conns      map[string]bool
 	plugins    []string
-	problem    string
+	problem    string // why the last settings were not applied
+	listing    string // why sessions could not be listed
+	stamp      string // modification time and size of the settings last read
+	failedAt   time.Time
 	conf       string
 	gateways   []string
 	onLoopback bool
@@ -95,10 +98,13 @@ func (a *Agent) Serve(ctx context.Context) error {
 		return err
 	}
 	a.Log.Printf("running: charon started, firewall backend iptables-%s", a.FW.Backend)
-	ticker := time.NewTicker(5 * time.Second)
+	// Settings are picked up within a second of the server writing them; sessions are
+	// listed and the status written every 5 seconds.
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	for {
-		a.cycle(ctx)
+	a.stamp = "unread"
+	for ticks := 0; ; ticks++ {
+		a.cycle(ctx, ticks%5 == 0)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -284,7 +290,7 @@ func (a *Agent) listSAs(ctx context.Context) ([]ipsecproto.SA, error) {
 func (a *Agent) enforce(ctx context.Context) []ipsecproto.SA {
 	sas, err := a.listSAs(ctx)
 	if err != nil {
-		a.problem = "cannot list connections: " + err.Error()
+		a.listing = "cannot list connections: " + err.Error()
 		return nil
 	}
 	if a.allowed == nil {
@@ -311,29 +317,53 @@ func (a *Agent) enforce(ctx context.Context) []ipsecproto.SA {
 	return kept
 }
 
-func (a *Agent) cycle(ctx context.Context) {
-	a.problem = ""
-	d, err := a.readDesired()
-	switch {
-	case err != nil:
-		a.problem = err.Error()
-	case d.Generation != a.applied:
-		if err := a.apply(ctx, d); err != nil {
+// settingsStamp changes whenever the server replaces its settings file.
+func (a *Agent) settingsStamp() string {
+	info, err := os.Stat(filepath.Join(a.Dir, ipsecproto.DesiredFile))
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprint(info.ModTime().UnixNano(), "/", info.Size())
+}
+
+func (a *Agent) cycle(ctx context.Context, full bool) {
+	stamp := a.settingsStamp()
+	retry := !a.failedAt.IsZero() && time.Since(a.failedAt) > 30*time.Second
+	if stamp != a.stamp || retry {
+		a.stamp, a.failedAt, a.problem = stamp, time.Time{}, ""
+		d, err := a.readDesired()
+		switch {
+		case err != nil:
 			a.problem = err.Error()
-			a.Log.Printf("could not apply settings: %v", err)
-		} else {
-			a.applied = d.Generation
-			a.Log.Printf("applied settings %d: %d identities", d.Generation, len(d.Allowed))
+		case d.Generation != a.applied:
+			if err := a.apply(ctx, d); err != nil {
+				a.problem, a.failedAt = err.Error(), time.Now()
+				a.Log.Printf("could not apply settings: %v", err)
+			} else {
+				a.applied = d.Generation
+				a.Log.Printf("applied settings %d: %d identities", d.Generation, len(d.Allowed))
+			}
 		}
+		full = true
+	}
+	if !full {
+		return
 	}
 	if a.applied != 0 && time.Since(a.lastJumps) > 30*time.Second {
 		if err := a.FW.EnsureJumps(ctx); err != nil {
-			a.problem = err.Error()
+			a.Log.Printf("could not restore firewall jumps: %v", err)
 		}
 		a.lastJumps = time.Now()
 	}
+	a.listing = ""
 	sas := a.enforce(ctx)
-	a.writeStatusWith(true, a.problem, sas)
+	problems := []string{}
+	for _, p := range []string{a.problem, a.listing} {
+		if p != "" {
+			problems = append(problems, p)
+		}
+	}
+	a.writeStatusWith(true, strings.Join(problems, "; "), sas)
 }
 
 func (a *Agent) writeStatus(running bool, problem string) { a.writeStatusWith(running, problem, nil) }
