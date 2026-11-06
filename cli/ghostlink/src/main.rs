@@ -192,7 +192,7 @@ enum ServerCommand {
         /// Public TLS 1.3 site whose handshake VLESS-REALITY borrows.
         #[arg(long)]
         reality_site: Option<String>,
-        /// Turn a protocol on (amneziawg, wireguard, vless, shadowsocks). Repeatable.
+        /// Turn a protocol on (amneziawg, wireguard, vless, shadowsocks, ikev2, ipsec). Repeatable.
         #[arg(long = "enable")]
         enable: Vec<String>,
         /// Turn a protocol off. Its keys stop working until it is turned on again. Repeatable.
@@ -213,6 +213,9 @@ enum ServerCommand {
         /// Size limit for recorded history, in MB.
         #[arg(long)]
         history_max_mb: Option<u32>,
+        /// Replace the IPsec group key (every IPsec PSK profile must be installed again).
+        #[arg(long)]
+        rotate_ipsec_psk: bool,
     },
     /// Live speed per user, online users and server health.
     Live {
@@ -316,7 +319,8 @@ enum ServerKeysCommand {
         server: String,
         #[arg(long)]
         user: String,
-        #[arg(long, value_parser = ["amneziawg", "wireguard", "vless", "shadowsocks"])]
+        /// ikev2 and ipsec are the built-in VPN of iPhone, iPad and Mac (save with keys profile).
+        #[arg(long, value_parser = ["amneziawg", "wireguard", "vless", "shadowsocks", "ikev2", "ipsec"])]
         protocol: String,
         /// Also save it as a VPN server on this device with this ID.
         #[arg(long = "import")]
@@ -324,6 +328,35 @@ enum ServerKeysCommand {
         /// Write the key to this NEW private file (WireGuard/AmneziaWG also get FILE.conf).
         #[arg(long)]
         output: Option<PathBuf>,
+        /// IKEv2: eap (username and password, default) or certificate. IPsec: certificate (default) or psk.
+        #[arg(long, value_parser = ["eap", "certificate", "psk"])]
+        auth: Option<String>,
+        /// IKEv2/IPsec: the address the device connects to (default: the server's address).
+        #[arg(long)]
+        server_address: Option<String>,
+        /// IKEv2: the server identity the device expects (added to the server certificate).
+        #[arg(long)]
+        remote_id: Option<String>,
+        /// IKEv2/IPsec: the device's identity and user name (default: NAME-ID@ghostlink).
+        #[arg(long)]
+        local_id: Option<String>,
+    },
+    /// Save an IKEv2/IPsec key as an Apple profile (.mobileconfig) in a NEW private file.
+    Profile {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        output: PathBuf,
+        /// Leave the certificate password out of the file; the device asks for it.
+        #[arg(long)]
+        prompt_password: bool,
+        /// Connect automatically whenever the device is online.
+        #[arg(long)]
+        on_demand: bool,
     },
     Remove {
         #[arg(long)]
@@ -848,6 +881,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             history_days,
             site_days,
             history_max_mb,
+            rotate_ipsec_psk,
         } => {
             let mut protocols = std::collections::BTreeMap::<String, ProtocolPatch>::new();
             for protocol in enable {
@@ -880,6 +914,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         history_days: *history_days,
                         site_days: *site_days,
                         history_max_mb: *history_max_mb,
+                        rotate_ipsec_psk: rotate_ipsec_psk.then_some(true),
                     },
                 },
             )
@@ -945,11 +980,21 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                 protocol,
                 import_as,
                 output,
+                auth,
+                server_address,
+                remote_id,
+                local_id,
             } => {
                 if output.as_ref().is_some_and(|path| path.exists()) {
                     return Err(Response::err(
                         "invalid_request",
                         "--output must name a new file; it will not overwrite an existing one",
+                    ));
+                }
+                if output.is_some() && (protocol == "ikev2" || protocol == "ipsec") {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "IKEv2 and IPsec keys are saved as a profile: ghostlink server keys profile --output FILE",
                     ));
                 }
                 call(
@@ -958,6 +1003,34 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         user: user.clone(),
                         protocol: protocol.clone(),
                         import_as: import_as.clone(),
+                        auth: auth.clone(),
+                        server_address: server_address.clone(),
+                        remote_identifier: remote_id.clone(),
+                        local_identifier: local_id.clone(),
+                    },
+                )
+            }
+            ServerKeysCommand::Profile {
+                server,
+                user,
+                key,
+                output,
+                prompt_password,
+                on_demand,
+            } => {
+                if output.exists() {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "--output must name a new file; it will not overwrite an existing one",
+                    ));
+                }
+                call(
+                    server,
+                    ServerOp::KeyProfile {
+                        user: user.clone(),
+                        key: key.clone(),
+                        prompt_password: *prompt_password,
+                        on_demand: *on_demand,
                     },
                 )
             }
@@ -1087,8 +1160,30 @@ fn finish_server_response(
                 if let Some(key) = key.as_object_mut() {
                     key.remove("access_key");
                     key.remove("config");
+                    key.remove("certificate_password");
                 }
             }
+        }
+        ServerCommand::Keys {
+            command: ServerKeysCommand::Profile { output, .. },
+        } => {
+            let profile = data.as_str().unwrap_or_default().to_string();
+            if !profile.contains("com.apple.vpn.managed") {
+                return Err(Response::err(
+                    "invalid_response",
+                    "The server did not return an Apple profile",
+                ));
+            }
+            if write_private(output, &profile).is_err() {
+                return Err(Response::err(
+                    "permission_denied",
+                    "Could not write the NEW private --output file",
+                ));
+            }
+            *data = json!({
+                "saved_to": output.display().to_string(),
+                "help_text": "Send this file privately (AirDrop, Mail or Files). Opening it on the iPhone, iPad or Mac installs the VPN: Settings > General > VPN & Device Management."
+            });
         }
         ServerCommand::Keys {
             command: ServerKeysCommand::Create {

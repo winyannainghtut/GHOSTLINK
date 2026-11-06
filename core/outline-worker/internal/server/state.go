@@ -34,6 +34,21 @@ const (
 
 var Protocols = []string{AmneziaWG, WireGuard, VLESS, Shadowsocks}
 
+// Apple's built-in VPN protocols, served by the optional IPsec component (strongSwan).
+const (
+	IKEv2 = "ikev2"
+	IPsec = "ipsec" // IKEv1 "Cisco IPsec"
+)
+
+var AppleProtocols = []string{IKEv2, IPsec}
+
+// Authentication methods for IKEv2 and IPsec keys.
+const (
+	AuthEAP         = "eap"         // IKEv2 username/password (EAP-MSCHAPv2)
+	AuthCertificate = "certificate" // a client certificate from the server's own CA
+	AuthPSK         = "psk"         // IKEv1 shared group key + per-user XAuth password
+)
+
 type APIConfig struct {
 	Port    uint16 `json:"port"`
 	Secret  string `json:"secret"`
@@ -125,6 +140,18 @@ type Key struct {
 	PublicKey    string `json:"public_key,omitempty"`
 	PresharedKey string `json:"preshared_key,omitempty"`
 	Address      string `json:"address,omitempty"`
+	// IKEv2 / IPsec
+	Auth string `json:"auth,omitempty"`
+	// Secret is the EAP or XAuth password.
+	Secret      string `json:"secret,omitempty"`
+	CertPEM     string `json:"cert_pem,omitempty"`
+	CertKeyPEM  string `json:"cert_key_pem,omitempty"`
+	CertSerial  int64  `json:"cert_serial,omitempty"`
+	P12Password string `json:"p12_password,omitempty"`
+	// Optional overrides for Apple profiles.
+	ServerAddress string `json:"server_address,omitempty"`
+	RemoteID      string `json:"remote_id,omitempty"`
+	LocalID       string `json:"local_id,omitempty"`
 }
 
 type User struct {
@@ -156,12 +183,47 @@ type State struct {
 	VLESS         VLESSServer       `json:"vless"`
 	WireGuard     WireGuardServer   `json:"wireguard"`
 	AmneziaWG     AmneziaWGServer   `json:"amneziawg"`
+	IPsec         IPsecServer       `json:"ipsec"`
 	Rules         Rules             `json:"rules"`
 	Monitor       MonitorSettings   `json:"monitor"`
 	Dashboard     DashboardConfig   `json:"dashboard"`
 	Users         []*User           `json:"users"`
 	NextID        int               `json:"next_id"`
 }
+
+// IPsecServer is the optional IKEv2/IPsec service for Apple's built-in VPN. The server holds
+// its CA and credentials; the privileged IPsec agent applies them to strongSwan.
+type IPsecServer struct {
+	IKEv2Enabled bool   `json:"ikev2_enabled"`
+	IPsecEnabled bool   `json:"ipsec_enabled"`
+	CAPEM        string `json:"ca_pem,omitempty"`
+	CAKeyPEM     string `json:"ca_key_pem,omitempty"`
+	ServerPEM    string `json:"server_pem,omitempty"`
+	ServerKeyPEM string `json:"server_key_pem,omitempty"`
+	// ServerFor is the address the server certificate was issued for (renewed on change).
+	ServerFor string `json:"server_for,omitempty"`
+	// PSK is the IKEv1 group key for PSK keys; GroupName is the group identifier.
+	PSK       string `json:"psk,omitempty"`
+	GroupName string `json:"group_name,omitempty"`
+	// DNSPort is where the server answers IPsec clients' DNS (the agent forwards port 53).
+	DNSPort    uint16          `json:"dns_port,omitempty"`
+	NextSerial int64           `json:"next_serial,omitempty"`
+	Revoked    []RevokedSerial `json:"revoked,omitempty"`
+}
+
+type RevokedSerial struct {
+	Serial int64 `json:"serial"`
+	At     int64 `json:"at_unix"`
+}
+
+const (
+	ikev2Pool     = "10.79.0.0/20"
+	ipsecPool     = "10.80.0.0/20"
+	ikev2Gateway  = "10.79.0.1"
+	ipsecGateway  = "10.80.0.1"
+	defaultGroup  = "ghostlink"
+	maxRevocation = 4096
+)
 
 // MonitorSettings control what the server records about traffic and for how long.
 type MonitorSettings struct {
@@ -298,9 +360,16 @@ func Load(dir string) (*Store, error) {
 }
 
 // writeFile replaces path atomically with mode 0600.
-func writeFile(path string, data []byte) error {
+func writeFile(path string, data []byte) error { return writeFileMode(path, data, 0o600) }
+
+// writeFileMode replaces path atomically with a new file of the given mode.
+func writeFileMode(path string, data []byte, mode os.FileMode) error {
 	temporary := path + ".pending"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+	_ = os.Remove(temporary)
+	if err := os.WriteFile(temporary, data, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, mode); err != nil {
 		return err
 	}
 	file, err := os.Open(temporary)

@@ -25,6 +25,9 @@ type object = map[string]any
 // listenAddress is where inbounds listen; tests use loopback so no firewall prompt appears.
 var listenAddress = "::"
 
+// ipsecDNSSources may use the IPsec DNS listener: the pools (tests add loopback).
+var ipsecDNSSources = []string{ikev2Pool, ipsecPool}
+
 // testInternalPort lets package tests reach one loopback port; it is never set otherwise.
 var testInternalPort uint16
 
@@ -98,6 +101,10 @@ func (s *State) inbounds() []any {
 				},
 			},
 		})
+	}
+	// IPsec clients ask the pool gateway for DNS; the agent forwards gateway:53 here.
+	if s.appleEnabled() && s.IPsec.DNSPort != 0 {
+		inbounds = append(inbounds, object{"type": "direct", "tag": ipsecDNSTag, "listen": listenAddress, "listen_port": s.IPsec.DNSPort})
 	}
 	return inbounds
 }
@@ -195,7 +202,14 @@ func dnsBlockRule(domains []string, scope object) []any {
 }
 
 func (s *State) routeRules() ([]any, []any) {
-	rules := []any{
+	rules := []any{}
+	if s.appleEnabled() && s.IPsec.DNSPort != 0 {
+		// Only the IPsec pools may use their DNS listener, and only for DNS.
+		rules = append(rules,
+			object{"inbound": []string{ipsecDNSTag}, "source_ip_cidr": ipsecDNSSources, "action": "hijack-dns"},
+			object{"inbound": []string{ipsecDNSTag}, "action": "reject"})
+	}
+	rules = append(rules,
 		object{"action": "sniff"},
 		// All DNS goes to the server's resolver so site blocks cannot be skipped with another resolver.
 		object{"type": "logical", "mode": "or", "rules": []any{object{"protocol": []string{"dns"}}, object{"port": []int{53}}}, "action": "hijack-dns"},
@@ -204,7 +218,7 @@ func (s *State) routeRules() ([]any, []any) {
 		internalBlock(object{"ip_is_private": true}),
 		internalBlock(object{"ip_cidr": internalRanges}),
 		object{"port": []uint16{s.API.Port}, "action": "reject"},
-	}
+	)
 	if addr, err := netip.ParseAddr(s.Hostname); err == nil {
 		rules = append(rules, internalBlock(object{"ip_cidr": []string{netip.PrefixFrom(addr, addr.BitLen()).String()}}))
 	}
@@ -271,6 +285,13 @@ func (s *State) Listening() map[string]string {
 	if s.AmneziaWG.Enabled {
 		ports[AmneziaWG] = "udp/" + strconv.Itoa(int(s.AmneziaWG.Port))
 	}
+	if s.appleEnabled() {
+		// strongSwan owns 500 and 4500 (iOS cannot use other ports); the DNS listener is ours.
+		ports["ipsec-ike"], ports["ipsec-natt"] = "udp/500", "udp/4500"
+		if s.IPsec.DNSPort != 0 {
+			ports[ipsecDNSTag] = "tcp+udp/" + strconv.Itoa(int(s.IPsec.DNSPort))
+		}
+	}
 	return ports
 }
 
@@ -291,7 +312,7 @@ func (s *State) CheckPorts() error {
 	if s.Dashboard.Port != 0 && (s.Dashboard.Port < 1024 || s.Dashboard.Port == 443) {
 		return fmt.Errorf("the dashboard needs its own port from 1024 to 65535 (not 443)")
 	}
-	names := []string{"api", "dashboard", Shadowsocks, VLESS, WireGuard, AmneziaWG}
+	names := []string{"api", "dashboard", Shadowsocks, VLESS, WireGuard, AmneziaWG, "ipsec-ike", "ipsec-natt", ipsecDNSTag}
 	for i, a := range names {
 		for _, b := range names[i+1:] {
 			pa, okA := ports[a]

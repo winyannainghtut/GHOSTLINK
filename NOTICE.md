@@ -8,6 +8,13 @@ The Rust control plane and original Tauri UI use the repository MIT license. The
 
 The **ghostlink-server** program (same Go module, GPL-3.0-or-later) is shipped inside a container image built on Google's distroless `static-debian12` base (Apache-2.0, carrying Debian's `base-files`, `netbase`, `tzdata` and `ca-certificates` under their own terms). The server packages include the GPL text and dependency notices, and point to the corresponding source published with the same release.
 
+The server packages also carry the optional **IPsec component** image: `ghostlink-ipsec-agent` (same Go module, GPL-3.0-or-later) and unmodified files from Alpine Linux 3.24 packages:
+- strongSwan (GPL-2.0-or-later with the OpenSSL exception);
+- iptables (GPL-2.0-or-later) with libnftnl (GPL-2.0-or-later) and libmnl (LGPL-2.1-or-later);
+- OpenSSL (Apache-2.0), musl (MIT) and the other libraries they link.
+
+The image lists them with exact versions in `/usr/share/doc/ghostlink-ipsec/packages.txt`. Each release publishes their complete corresponding source, the Alpine recipes plus the checksum-verified upstream sources, as `Ghostlink-<version>-ipsec-component-source-<arch>.tar.gz`. strongSwan is a trademark of the strongSwan project. Ghostlink is not affiliated with it, or with Apple, whose built-in VPN it configures through standard configuration profiles.
+
 OpenVPN 2 is an optional separately installed engine; Ghostlink does not bundle its executable or OpenVPN 3 Core. OpenVPN's COPYING and other applicable notices remain relevant if a future package bundles those components. The Outline Apps and SDK repositories informed compatibility/design; their source is not embedded in the original Ghostlink UI or key parser.
 
 `LICENSES/` contains upstream texts and generated dependency notices. `scripts/collect-licenses.py` inventories actual locked Rust dependencies and Go modules used by the worker. Review the resulting inventory and the embedded Wintun driver terms before public redistribution. No unreviewed distribution strategy is represented as legally guaranteed.

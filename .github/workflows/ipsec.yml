@@ -1,0 +1,51 @@
+name: IPsec interop
+# Builds the server package with its IPsec component and runs tests/ipsec/interop.sh: a real
+# strongSwan client connects with each Apple profile's parameters (IKEv2 EAP, IKEv2 certificate,
+# IPsec certificate + XAuth, IPsec PSK + XAuth). Also builds the component's GPL source bundle.
+on:
+  push:
+    paths:
+      - 'core/outline-worker/**'
+      - 'packages/linux/server/**'
+      - 'tests/ipsec/**'
+      - 'scripts/build-linux-server.sh'
+      - 'scripts/ipsec-source.sh'
+      - '.github/workflows/ipsec.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    name: IKEv2/IPsec with a strongSwan client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: core/outline-worker/go.sum
+      - name: Install nfpm (pinned)
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Server packages with the IPsec image
+        id: build
+        run: |
+          version=$(node scripts/release-version.mjs)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          bash scripts/build-linux-server.sh "$version"
+          cat artifacts/linux-x64/ipsec-packages-x64.txt
+      - name: Interop test
+        run: sudo bash tests/ipsec/interop.sh artifacts/linux-x64/ghostlink-server_*.deb
+      - name: GPL source of the IPsec component
+        env:
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          bash scripts/ipsec-source.sh "$VERSION" x64 artifacts/linux-x64/ipsec-packages-x64.txt
+          tar -tzf artifacts/source/Ghostlink-*-ipsec-component-source-x64.tar.gz | grep -E '/(strongswan|iptables)/APKBUILD$'
+          tar -tzf artifacts/source/Ghostlink-*-ipsec-component-source-x64.tar.gz | grep -E '/strongswan/upstream/strongswan-.*\.tar\.bz2$'

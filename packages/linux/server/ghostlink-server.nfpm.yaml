@@ -12,15 +12,19 @@ priority: optional
 maintainer: Ghostlink contributors <ghostlink@users.noreply.github.com>
 vendor: Ghostlink
 homepage: https://github.com/winyannainghtut/GHOSTLINK
-license: GPL-3.0-or-later
+license: GPL-3.0-or-later AND GPL-2.0-or-later
 description: |-
   Self-hosted Ghostlink VPN server in a Docker container: AmneziaWG, WireGuard,
-  VLESS-REALITY and Shadowsocks (Outline-compatible), with users, per-user and global
-  traffic rules and data limits. Installing prints a management key for the Ghostlink app.
+  VLESS-REALITY and Shadowsocks (Outline-compatible), optional IKEv2/IPsec for the built-in
+  VPN of iPhone, iPad and Mac, with users, per-user and global traffic rules and data limits.
+  Installing prints a management key for the Ghostlink app.
 
 contents:
   - src: @PKG@/image.tar.gz
     dst: /usr/lib/ghostlink-server/image.tar.gz
+    file_info: {mode: 0644}
+  - src: @PKG@/ipsec-image.tar.gz
+    dst: /usr/lib/ghostlink-server/ipsec-image.tar.gz
     file_info: {mode: 0644}
   - src: @PKG@/image.env
     dst: /usr/lib/ghostlink-server/image.env

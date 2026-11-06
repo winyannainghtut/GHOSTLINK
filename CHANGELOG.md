@@ -4,6 +4,31 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
+### Added
+
+- **iPhone, iPad and Mac with no app:** the server can serve Apple's built-in VPN types and hand out configuration profiles (`.mobileconfig`):
+  - **IKEv2** (`NEVPNProtocolIKEv2`) with username and password (EAP-MSCHAPv2) or a certificate;
+  - **IPsec** (`NEVPNProtocolIPSec`, IKEv1) with a certificate or a shared group key, plus an XAuth password. Certificates are the default; group keys come with a warning.
+  - Per key: server address, remote identifier and local identifier.
+  - Profiles install in Settings and keep credentials in the Keychain. They can leave out the certificate password (`--prompt-password`) or connect on demand.
+- **IPsec component** (`sudo ghostlink-server ipsec enable|disable|status|logs`): strongSwan 6 in a second container shipped inside the server package.
+  - **Isolation:** the main server stays unprivileged and writes validated settings for `ghostlink-ipsec-agent`, which runs with only the network capabilities IPsec needs and applies them to strongSwan, its own firewall chains and a gateway interface.
+  - **Limits:** data limits, usage, live speed, online state and "connected from" work for IKEv2/IPsec users. Disabled, removed and over-limit users are cut off within seconds, and their certificates are put on hold or revoked.
+  - **Rules:** blocked addresses and ports, mail blocking, always-blocked internal ranges and DNS-based site blocks apply.
+- **Internal CA** per server (RSA 3072) with automatic server-certificate renewal and a CRL.
+- **Everywhere you manage the server:**
+  - IKEv2/IPsec keys and profile saving in the app (**Save iPhone/Mac profile**), the CLI (`ghostlink server keys create --protocol ikev2 …`, `keys profile`), the dashboard and server commands (`key add NAME ikev2 …`, `profile NAME ID --output FILE`);
+  - `set --rotate-ipsec-psk` everywhere;
+  - connection kits explain how to install profiles.
+- **Corresponding source** for the IPsec component's GPL packages (Alpine recipes and upstream sources) is published with each release.
+
+### Fixed
+
+- A QR-decoding test could fail at random on synthetic images. It now falls back to reading the clean bitmap directly.
+- The dependency notice inventory missed Go modules only the Linux server links (netlink, nftables, nfqueue, dbus); it is now generated for Linux too, and the server images carry those notices.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

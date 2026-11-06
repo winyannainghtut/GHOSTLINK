@@ -233,6 +233,12 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
   user limit NAME 50GB|none
   user exempt NAME on|off              skip the rules for everyone
   key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks
+  key add NAME ikev2|ipsec [--auth eap|certificate|psk] [--address HOST]
+          [--remote-id ID] [--local-id ID]
+                                       built-in VPN of iPhone, iPad and Mac (needs the
+                                       IPsec component: sudo ghostlink-server ipsec enable)
+  profile NAME ID [--output FILE] [--prompt-password] [--on-demand]
+                                       Apple profile (.mobileconfig) of an IKEv2/IPsec key
   keys NAME [--show]                   list keys (key text only with --show)
   key qr NAME ID [--content key|conf]  show a key's QR code again
   key remove NAME ID
@@ -246,7 +252,7 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
   top [--once]                         live speed per user (Ctrl+C to quit)
   settings
   set [--name N] [--hostname H] [--reality-site S] [--enable P] [--disable P] [--port P=N]
-      [--history-days N] [--site-days N] [--history-max-mb N]
+      [--history-days N] [--site-days N] [--history-max-mb N] [--rotate-ipsec-psk]
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
 
@@ -334,7 +340,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		}
 		if !*show {
 			for i := range keys {
-				keys[i].AccessKey, keys[i].Config = "", ""
+				keys[i].AccessKey, keys[i].Config, keys[i].CertificatePassword = "", "", ""
 			}
 		}
 		return print(keys, func() {
@@ -343,7 +349,14 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				return
 			}
 			for _, k := range keys {
-				fmt.Fprintf(out, "%s  %-22s created %s\n", k.ID, protocolTitles[k.Protocol], time.Unix(k.CreatedUnix, 0).Format("2006-01-02"))
+				title := protocolTitles[k.Protocol]
+				if k.Auth != "" {
+					title += " · " + k.Auth
+				}
+				fmt.Fprintf(out, "%s  %-34s created %s\n", k.ID, title, time.Unix(k.CreatedUnix, 0).Format("2006-01-02"))
+				if k.Identity != "" {
+					fmt.Fprintf(out, "    identity %s; profile: sudo ghostlink-server profile %s %s --output %s.mobileconfig\n", k.Identity, u.Name, k.ID, strings.ToLower(identityLabel(u.Name)))
+				}
 				if *show {
 					fmt.Fprintf(out, "    %s\n", k.AccessKey)
 				}
@@ -367,6 +380,34 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 			return err
 		}
 		_, err = io.WriteString(out, page)
+		return err
+	case "profile":
+		flags := flag.NewFlagSet("profile", flag.ContinueOnError)
+		_ = flags.String("output", "", "") // the host command turns --output into a redirect
+		prompt := flags.Bool("prompt-password", false, "")
+		onDemand := flags.Bool("on-demand", false, "")
+		if len(rest) < 2 {
+			return errors.New("usage: profile NAME ID [--output FILE] [--prompt-password] [--on-demand]")
+		}
+		if err := flags.Parse(rest[2:]); err != nil {
+			return err
+		}
+		u, err := c.findUser(rest[0])
+		if err != nil {
+			return err
+		}
+		query := url.Values{}
+		if *prompt {
+			query.Set("prompt_password", "1")
+		}
+		if *onDemand {
+			query.Set("on_demand", "1")
+		}
+		profile, err := c.Text("/users/" + u.ID + "/keys/" + url.PathEscape(rest[1]) + "/profile?" + query.Encode())
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(out, profile)
 		return err
 	case "rules":
 		return c.rulesCommand(rest, out, print)
@@ -441,6 +482,13 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				}
 				rows = append(rows, []string{protocolTitles[p], state, strconv.Itoa(int(v.Port))})
 			}
+			for _, p := range AppleProtocols {
+				state := "off"
+				if info.Protocols[p].Enabled {
+					state = "on"
+				}
+				rows = append(rows, []string{protocolTitles[p], state, "UDP 500, 4500"})
+			}
 			rows = append(rows, []string{"Management API", "on", strconv.Itoa(int(info.APIPort))})
 			mode := "private (SSH tunnel)"
 			if info.DashboardPublic {
@@ -448,6 +496,15 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 			}
 			rows = append(rows, []string{"Dashboard", mode, strconv.Itoa(int(info.DashboardPort))})
 			table("SERVICE\tSTATE\tPORT", rows)
+			component := info.IPsecComponent
+			switch {
+			case component.Running && component.Error != "":
+				fmt.Fprintf(out, "\nIPsec component: running, with a problem: %s\n", component.Error)
+			case component.Running:
+				fmt.Fprintf(out, "\nIPsec component: running, %d connected\n", component.Online)
+			default:
+				fmt.Fprintln(out, "\nIPsec component (IKEv2/IPsec for iPhone, iPad, Mac): not running; start it with: sudo ghostlink-server ipsec enable")
+			}
 			sites := "off"
 			if info.SiteStats {
 				sites = "on"
@@ -561,19 +618,45 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 	switch action {
 	case "add":
 		if len(rest) < 1 {
-			return errors.New("usage: key add NAME amneziawg|wireguard|vless|shadowsocks [--no-qr]")
+			return errors.New("usage: key add NAME amneziawg|wireguard|vless|shadowsocks|ikev2|ipsec [--no-qr]")
 		}
 		flags := flag.NewFlagSet("key add", flag.ContinueOnError)
 		noQR := flags.Bool("no-qr", false, "")
+		auth := flags.String("auth", "", "")
+		address := flags.String("address", "", "")
+		remoteID := flags.String("remote-id", "", "")
+		localID := flags.String("local-id", "", "")
 		if err := flags.Parse(rest[1:]); err != nil {
 			return err
 		}
+		request := map[string]string{"protocol": rest[0]}
+		for field, value := range map[string]string{"auth": *auth, "server_address": *address, "remote_identifier": *remoteID, "local_identifier": *localID} {
+			if value != "" {
+				request[field] = value
+			}
+		}
 		var key keyView
-		if err := c.Do(http.MethodPost, "/users/"+u.ID+"/keys", map[string]string{"protocol": rest[0]}, &key); err != nil {
+		if err := c.Do(http.MethodPost, "/users/"+u.ID+"/keys", request, &key); err != nil {
 			return err
 		}
 		if asJSON {
 			return json.NewEncoder(out).Encode(key)
+		}
+		if key.Protocol == IKEv2 || key.Protocol == IPsec {
+			file := strings.ToLower(identityLabel(u.Name)) + ".mobileconfig"
+			fmt.Fprintf(out, "%s key for %s (id %s), %s authentication\n  server address  %s\n", protocolTitles[key.Protocol], u.Name, key.ID, key.Auth, key.Address)
+			if key.RemoteID != "" {
+				fmt.Fprintf(out, "  remote id       %s\n", key.RemoteID)
+			}
+			fmt.Fprintf(out, "  identity        %s\n", key.Identity)
+			if key.CertificatePassword != "" {
+				fmt.Fprintf(out, "  cert password   %s (asked only by profiles saved with --prompt-password)\n", key.CertificatePassword)
+			}
+			if key.Warning != "" {
+				fmt.Fprintf(out, "\nWarning: %s\n", key.Warning)
+			}
+			fmt.Fprintf(out, "\nSave the iPhone/iPad/Mac profile and send it privately to %s (AirDrop, Mail or Files):\n  sudo ghostlink-server profile %s %s --output %s\n", u.Name, u.Name, key.ID, file)
+			return nil
 		}
 		fmt.Fprintf(out, "%s key for %s (id %s):\n\n%s\n", protocolTitles[key.Protocol], u.Name, key.ID, key.AccessKey)
 		if key.Config != "" {
@@ -823,10 +906,14 @@ func (c *AdminClient) setCommand(args []string, out io.Writer) error {
 	historyDays := flags.Int("history-days", 0, "")
 	siteDays := flags.Int("site-days", 0, "")
 	historyMB := flags.Int("history-max-mb", 0, "")
+	rotatePSK := flags.Bool("rotate-ipsec-psk", false, "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	patch := map[string]any{}
+	if *rotatePSK {
+		patch["rotate_ipsec_psk"] = true
+	}
 	for key, value := range map[string]string{"name": *name, "hostname": *hostname, "vless_handshake": *reality} {
 		if value != "" {
 			patch[key] = value
@@ -868,6 +955,9 @@ func (c *AdminClient) setCommand(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(out, "Saved. Users reconnect automatically.")
+	if *rotatePSK {
+		fmt.Fprintln(out, "The IPsec group key changed: export and reinstall every IPsec PSK profile (sudo ghostlink-server profile NAME ID --output FILE).")
+	}
 	if *hostname != "" {
 		fmt.Fprintln(out, "New keys use the new address; keys you already shared keep the old one. The management key changed: sudo ghostlink-server show-key")
 	}

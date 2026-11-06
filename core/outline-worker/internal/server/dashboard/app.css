@@ -23,6 +23,7 @@ label.check{display:flex;gap:8px;align-items:center;font-weight:500}label.check 
 .notice{background:var(--wash);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:16px}.notice.bad,.error{color:var(--error)}.notice.bad{background:var(--warn)}
 dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);padding:22px;width:min(560px,94vw)}dialog.wide{width:min(900px,96vw)}dialog.narrow{width:min(420px,94vw)}dialog::backdrop{background:#0006}
 .key{border:1px solid var(--line);border-radius:7px;padding:10px 12px;margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.key .what{flex:1;min-width:150px}.key .what small{display:block;color:var(--muted)}.key button{padding:6px 10px;font-size:12px}
+.apple{flex-basis:100%}.apple label{margin:8px 0}
 .qr{width:100%;max-width:320px;display:block;margin:6px auto;background:#fff;border-radius:6px}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500}
 @media(max-width:820px){#app{flex-direction:column}.rail{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center}.brand{margin:0}nav{display:flex;flex-wrap:wrap}#signout{margin:0}.cards{grid-template-columns:1fr 1fr}.grid2,.row3{grid-template-columns:1fr}main{padding:20px}.bar{grid-template-columns:110px 1fr 70px}}

@@ -80,6 +80,9 @@ func QRText(text string) (string, error) {
 // qrContent picks what a key's QR code should carry: WireGuard-family apps scan the .conf,
 // everything else scans the access key.
 func qrContent(key IssuedKey, content string) (string, error) {
+	if key.Protocol == IKEv2 || key.Protocol == IPsec {
+		return "", InputError{errors.New("IKEv2 and IPsec keys are installed with an Apple profile, not a QR code")}
+	}
 	switch content {
 	case "", "auto":
 		if key.Config != "" {

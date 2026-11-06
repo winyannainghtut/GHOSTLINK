@@ -3,8 +3,11 @@
 const $ = s => document.querySelector(s);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
 const svgEl = (tag, attrs) => { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v); return n; };
-const PROTOCOLS = { amneziawg: 'AmneziaWG', wireguard: 'WireGuard', vless: 'VLESS with REALITY', shadowsocks: 'Shadowsocks (Outline)' };
+const PROTOCOLS = { amneziawg: 'AmneziaWG', wireguard: 'WireGuard', vless: 'VLESS with REALITY', shadowsocks: 'Shadowsocks (Outline)', ikev2: 'IKEv2 (iPhone, iPad, Mac)', ipsec: 'IPsec (iPhone, iPad, Mac; legacy)' };
 const ORDER = ['amneziawg', 'wireguard', 'vless', 'shadowsocks'];
+const APPLE = ['ikev2', 'ipsec'];
+const AUTH = { ikev2: [['eap', 'Username and password (EAP)'], ['certificate', 'Certificate']], ipsec: [['certificate', 'Certificate'], ['psk', 'Shared group key (weak)']] };
+const AUTH_TITLES = { eap: 'username and password', certificate: 'certificate', psk: 'shared group key' };
 const state = { server: null, users: [], live: {}, view: 'overview', editing: null, keysUser: null, statsUser: null, rulesUser: null, confirm: null };
 
 function data(bytes) { bytes = Number(bytes) || 0; if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB'; if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB'; if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB'; if (bytes >= 1e3) return Math.round(bytes / 1e3) + ' KB'; return bytes + ' B'; }
@@ -136,7 +139,11 @@ $('#user-form').addEventListener('submit', async event => {
 });
 
 // --- keys ---
-async function openKeys(user) { state.keysUser = user; $('#keys-heading').textContent = `Keys for ${user.name}`; $('#keys-error').hidden = true; $('#key-list').replaceChildren(); $('#keys-dialog').showModal(); await loadKeys(); }
+async function openKeys(user) {
+  state.keysUser = user; $('#keys-heading').textContent = `Keys for ${user.name}`; $('#keys-error').hidden = true; $('#key-list').replaceChildren();
+  for (const id of ['#key-address', '#key-local-id', '#key-remote-id']) $(id).value = '';
+  keyOptionsChanged(); $('#keys-dialog').showModal(); await loadKeys();
+}
 async function loadKeys() {
   const user = state.keysUser; const list = $('#key-list'); list.replaceChildren();
   try {
@@ -145,16 +152,47 @@ async function loadKeys() {
     for (const key of keys) {
       const row = el('div', 'key'); const what = el('div', 'what', PROTOCOLS[key.protocol] || key.protocol);
       what.append(el('small', '', 'Created ' + new Date(key.created_unix * 1000).toLocaleDateString())); row.append(what);
-      const buttons = [['QR code', () => showQR(user, key, key.config ? 'conf' : 'key')]];
-      if (key.config) buttons.push(['QR (vpn://)', () => showQR(user, key, 'key')]);
-      buttons.push(['Copy key', () => copy(key.access_key, 'Key copied.')]);
-      if (key.config) buttons.push(['Copy .conf', () => copy(key.config, '.conf copied.')]);
+      const buttons = [];
+      if (APPLE.includes(key.protocol)) {
+        what.append(el('small', '', `${AUTH_TITLES[key.auth] || key.auth} · ${key.identity} · ${key.server_address}`));
+        buttons.push(['Download profile', () => downloadProfile(user, key, false)]);
+        if (key.auth === 'certificate') buttons.push(['Profile (ask for password)', () => downloadProfile(user, key, true)]);
+      } else {
+        buttons.push(['QR code', () => showQR(user, key, key.config ? 'conf' : 'key')]);
+        if (key.config) buttons.push(['QR (vpn://)', () => showQR(user, key, 'key')]);
+        buttons.push(['Copy key', () => copy(key.access_key, 'Key copied.')]);
+        if (key.config) buttons.push(['Copy .conf', () => copy(key.config, '.conf copied.')]);
+      }
       buttons.push(['Remove', () => { $('#keys-dialog').close(); confirmAction('Remove this key?', 'Anyone using it is disconnected.', 'Remove key', () => api('DELETE', `/users/${user.id}/keys/${key.id}`)); }]);
       for (const [label, fn] of buttons) { const b = el('button', 'secondary', label); b.type = 'button'; b.addEventListener('click', async () => { try { await fn(); } catch (e) { $('#keys-error').textContent = e.message; $('#keys-error').hidden = false; } }); row.append(b); }
       list.append(row);
     }
   } catch (error) { $('#keys-error').textContent = error.message; $('#keys-error').hidden = false; }
 }
+function saveBlob(blob, name) {
+  const link = el('a'); link.href = URL.createObjectURL(blob); link.download = name; document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+}
+// An Apple configuration profile installs the VPN in Settings on iPhone, iPad and Mac.
+async function downloadProfile(user, key, prompt) {
+  const blob = await api('GET', `/users/${user.id}/keys/${key.id}/profile${prompt ? '?prompt_password=1' : ''}`, undefined, true);
+  saveBlob(blob, `${user.name.replace(/[^\w.-]+/g, '-')}-${key.protocol}-${key.id}.mobileconfig`);
+  notice(prompt
+    ? `Profile saved without the certificate password. Give ${user.name} the password separately; the device asks for it when installing: ${key.certificate_password}`
+    : 'Profile saved. Send it privately (AirDrop, Mail or Files); opening it on the device installs the VPN.');
+}
+function keyOptionsChanged() {
+  const protocol = $('#key-protocol').value; const apple = APPLE.includes(protocol);
+  $('#key-apple').hidden = !apple;
+  if (!apple) return;
+  const auth = $('#key-auth'); const previous = auth.value; auth.replaceChildren();
+  for (const [value, label] of AUTH[protocol]) { const o = el('option', '', label); o.value = value; auth.append(o); }
+  if (AUTH[protocol].some(([value]) => value === previous)) auth.value = previous;
+  $('#key-remote-id').closest('label').hidden = protocol !== 'ikev2';
+  $('#key-psk-warning').hidden = auth.value !== 'psk';
+}
+$('#key-protocol').addEventListener('change', keyOptionsChanged);
+$('#key-auth').addEventListener('change', keyOptionsChanged);
 async function copy(text, message) { await navigator.clipboard.writeText(text); notice(message); }
 async function showQR(user, key, content) {
   const blob = await api('GET', `/users/${user.id}/keys/${key.id}/qr?format=svg&content=${content}`, undefined, true);
@@ -165,14 +203,20 @@ async function showQR(user, key, content) {
 }
 $('#key-form').addEventListener('submit', async event => {
   event.preventDefault(); $('#keys-error').hidden = true;
-  try { await api('POST', `/users/${state.keysUser.id}/keys`, { protocol: $('#key-protocol').value }); await loadKeys(); }
+  const request = { protocol: $('#key-protocol').value };
+  if (APPLE.includes(request.protocol)) {
+    request.auth = $('#key-auth').value;
+    for (const [field, id] of [['server_address', '#key-address'], ['local_identifier', '#key-local-id'], ['remote_identifier', '#key-remote-id']]) {
+      const value = $(id).value.trim(); if (value && !(field === 'remote_identifier' && request.protocol !== 'ikev2')) request[field] = value;
+    }
+  }
+  try { const key = await api('POST', `/users/${state.keysUser.id}/keys`, request); if (key.warning) notice(key.warning, true); await loadKeys(); }
   catch (error) { $('#keys-error').textContent = error.message; $('#keys-error').hidden = false; }
 });
 $('#kit-download').addEventListener('click', async () => {
   try {
     const user = state.keysUser; const blob = await api('GET', `/users/${user.id}/kit`, undefined, true);
-    const link = el('a'); link.href = URL.createObjectURL(blob); link.download = `${user.name.replace(/[^\w.-]+/g, '-')}-vpn.html`; document.body.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    saveBlob(blob, `${user.name.replace(/[^\w.-]+/g, '-')}-vpn.html`);
   } catch (error) { $('#keys-error').textContent = error.message; $('#keys-error').hidden = false; }
 });
 $('#keys-dialog').addEventListener('close', () => { $('#key-list').replaceChildren(); loadUsers().catch(() => {}); });
@@ -225,6 +269,11 @@ async function loadSettings() {
   $('#set-name').value = s.name; $('#set-hostname').value = s.hostname; $('#set-reality').value = s.vless_handshake;
   const grid = $('#set-protocols'); grid.replaceChildren();
   for (const p of ORDER) { const v = s.protocols[p]; const l = el('label', 'check'); const c = el('input'); c.type = 'checkbox'; c.checked = v.enabled; c.dataset.protocol = p; l.append(c, document.createTextNode(' ' + PROTOCOLS[p])); const port = el('input'); port.type = 'number'; port.min = 1; port.max = 65535; port.value = v.port; port.dataset.port = p; port.setAttribute('aria-label', PROTOCOLS[p] + ' port'); grid.append(l, port); }
+  for (const p of APPLE) { const v = s.protocols[p] || { enabled: false }; const l = el('label', 'check'); const c = el('input'); c.type = 'checkbox'; c.checked = v.enabled; c.dataset.apple = p; l.append(c, document.createTextNode(' ' + PROTOCOLS[p])); grid.append(l, el('span', 'hint', 'UDP 500 and 4500')); }
+  const component = s.ipsec_component || {};
+  $('#set-ipsec').textContent = component.running
+    ? `IPsec component running, ${component.connections || 0} connected.` + (component.error ? ` Problem: ${component.error}` : '')
+    : 'The IPsec component for iPhone, iPad and Mac (IKEv2/IPsec) is not running. Start it on the server with: sudo ghostlink-server ipsec enable';
   $('#set-sites').checked = s.site_stats; $('#set-history-days').value = s.history_days; $('#set-site-days').value = s.site_days; $('#set-history-mb').value = s.history_max_mb;
   $('#set-history-info').textContent = 'Older records are deleted automatically, and the history file never grows past the size limit (oldest site totals go first, daily totals last).';
   $('#set-dashboard').textContent = `This dashboard uses port ${s.dashboard_port} (${s.dashboard_public ? 'public HTTPS' : 'private, SSH tunnel only'}). Change it on the server with: sudo ghostlink-server dashboard --port N` + (s.dashboard_public ? ' · --private to go back to tunnel-only' : '');
@@ -233,6 +282,7 @@ $('#settings-form').addEventListener('submit', async event => {
   event.preventDefault(); const s = state.server; const patch = {}; const protocols = {};
   for (const [key, id] of [['name', '#set-name'], ['hostname', '#set-hostname'], ['vless_handshake', '#set-reality']]) { const v = $(id).value.trim(); if (v !== s[key]) patch[key] = v; }
   for (const p of ORDER) { const enabled = document.querySelector(`[data-protocol="${p}"]`).checked; const port = Number(document.querySelector(`[data-port="${p}"]`).value); const change = {}; if (enabled !== s.protocols[p].enabled) change.enabled = enabled; if (port !== s.protocols[p].port) change.port = port; if (Object.keys(change).length) protocols[p] = change; }
+  for (const p of APPLE) { const enabled = document.querySelector(`[data-apple="${p}"]`).checked; if (enabled !== Boolean((s.protocols[p] || {}).enabled)) protocols[p] = { enabled }; }
   if (Object.keys(protocols).length) patch.protocols = protocols;
   const sites = $('#set-sites').checked; if (sites !== s.site_stats) patch.site_stats = sites;
   for (const [key, id] of [['history_days', '#set-history-days'], ['site_days', '#set-site-days'], ['history_max_mb', '#set-history-mb']]) { const v = Number($(id).value); if (v && v !== s[key]) patch[key] = v; }
