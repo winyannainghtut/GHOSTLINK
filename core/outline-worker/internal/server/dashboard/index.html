@@ -63,7 +63,7 @@
         <label>Name<input id="set-name" maxlength="64" required></label>
         <label>Address in new keys <small>public IP or DNS name</small><input id="set-hostname" required spellcheck="false"></label>
         <label>REALITY site <small>public TLS 1.3 site VLESS imitates</small><input id="set-reality" spellcheck="false"></label>
-        <h2>Protocols</h2><div id="set-protocols" class="protocols"></div>
+        <h2>Protocols</h2><div id="set-protocols" class="protocols"></div><p class="hint" id="set-ipsec"></p>
         <h2>Monitoring</h2>
         <label class="check"><input type="checkbox" id="set-sites"> Record top sites and services per user</label>
         <p class="hint">Off by default. When on, the server keeps per-user totals per service (for example "YouTube 4 GB"), never a timestamped list of pages, and deletes them after the retention below. Turning it off deletes every recorded site at once.</p>
@@ -97,9 +97,19 @@
   <p class="hint">Share a key only with the person it belongs to.</p>
   <div id="key-list"></div>
   <form id="key-form" class="inline">
-    <select id="key-protocol" aria-label="Protocol"><option value="amneziawg">AmneziaWG</option><option value="wireguard">WireGuard</option><option value="vless">VLESS with REALITY</option><option value="shadowsocks">Shadowsocks (Outline)</option></select>
+    <select id="key-protocol" aria-label="Protocol"><option value="amneziawg">AmneziaWG</option><option value="wireguard">WireGuard</option><option value="vless">VLESS with REALITY</option><option value="shadowsocks">Shadowsocks (Outline)</option><option value="ikev2">IKEv2 (iPhone, iPad, Mac)</option><option value="ipsec">IPsec (iPhone, iPad, Mac; legacy)</option></select>
     <button class="primary" type="submit">Create key</button>
     <button class="secondary" type="button" id="kit-download">Download connection kit</button>
+    <div id="key-apple" class="apple" hidden>
+      <label>Sign-in method<select id="key-auth"></select></label>
+      <p class="error" id="key-psk-warning" hidden>A shared group key is weak: everyone with the group key can pretend to be this server to other IPsec users, and its handshake can be guessed offline. Prefer a certificate or IKEv2.</p>
+      <div class="row3">
+        <label>Server address <small>optional</small><input id="key-address" spellcheck="false" placeholder="this server's address"></label>
+        <label>Remote identifier <small>IKEv2, optional</small><input id="key-remote-id" spellcheck="false" placeholder="this server's address"></label>
+        <label>Local identifier <small>optional</small><input id="key-local-id" spellcheck="false" placeholder="name-ID@ghostlink"></label>
+      </div>
+      <p class="hint">The device installs these with a profile (.mobileconfig) and keeps the password or certificate in its Keychain. A different remote identifier is added to the server certificate.</p>
+    </div>
   </form>
   <p class="error" id="keys-error" hidden></p>
   <div class="actions"><button type="button" class="primary" data-close>Done</button></div>

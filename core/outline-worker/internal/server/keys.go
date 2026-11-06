@@ -115,11 +115,40 @@ func (p AWGParams) conf() string {
 
 // NewKey creates key material for one protocol on a user.
 func (s *State) NewKey(user *User, protocol string) (*Key, error) {
+	return s.NewKeyWith(user, protocol, KeyOptions{})
+}
+
+// NewKeyWith also takes the IKEv2/IPsec authentication method and identifiers.
+func (s *State) NewKeyWith(user *User, protocol string, options KeyOptions) (*Key, error) {
 	if len(user.Keys) >= MaxKeysPerUser {
 		return nil, fmt.Errorf("a user can have at most %d keys", MaxKeysPerUser)
 	}
-	key := &Key{ID: s.newID(), Protocol: protocol, CreatedUnix: time.Now().Unix()}
+	options, err := options.validate(protocol)
+	if err != nil {
+		return nil, err
+	}
+	key := &Key{ID: s.newID(), Protocol: protocol, CreatedUnix: time.Now().Unix(), Auth: options.Auth,
+		ServerAddress: options.ServerAddress, RemoteID: options.RemoteID, LocalID: options.LocalID}
 	switch protocol {
+	case IKEv2, IPsec:
+		if s.IPsec.CAPEM == "" {
+			return nil, errIPsecNotRunning
+		}
+		if options.LocalID != "" {
+			for _, u := range s.Users {
+				for _, k := range u.Keys {
+					if k.isApple() && strings.EqualFold(k.localIdentity(u), options.LocalID) {
+						return nil, fmt.Errorf("identifier %q is already used by another key", options.LocalID)
+					}
+				}
+			}
+		}
+		key.Secret = base64.RawURLEncoding.EncodeToString(random(15))
+		if key.Auth == AuthCertificate {
+			if err := s.issueClientCert(user, key, time.Now()); err != nil {
+				return nil, err
+			}
+		}
 	case Shadowsocks:
 		key.Password = base64.RawURLEncoding.EncodeToString(random(24))
 	case VLESS:
@@ -146,6 +175,14 @@ func (s *State) NewKey(user *User, protocol string) (*Key, error) {
 type IssuedKey struct {
 	ID       string `json:"id"`
 	Protocol string `json:"protocol"`
+	// IKEv2/IPsec keys are installed with an Apple profile (GET …/profile) instead of a key.
+	Auth     string `json:"auth,omitempty"`
+	Identity string `json:"identity,omitempty"`
+	Address  string `json:"server_address,omitempty"`
+	RemoteID string `json:"remote_identifier,omitempty"`
+	Warning  string `json:"warning,omitempty"`
+	// CertificatePassword opens the certificate in a profile saved with prompt_password=1.
+	CertificatePassword string `json:"certificate_password,omitempty"`
 	// Single-line key for Ghostlink (ss://, vless:// or Amnezia-compatible vpn://).
 	AccessKey string `json:"access_key"`
 	// Native configuration for WireGuard/AmneziaWG apps.
@@ -257,6 +294,21 @@ func (s *State) Render(user *User, key *Key) (IssuedKey, error) {
 			return IssuedKey{}, err
 		}
 		result.AccessKey = encoded
+	case IKEv2, IPsec:
+		result.Auth, result.Identity = key.Auth, key.localIdentity(user)
+		result.Address, result.RemoteID = key.ServerAddress, key.RemoteID
+		if result.Address == "" {
+			result.Address = s.Hostname
+		}
+		if result.RemoteID == "" && key.Protocol == IKEv2 {
+			result.RemoteID = s.serverIdentity()
+		}
+		if key.Auth == AuthPSK {
+			result.Warning = pskWarning
+		}
+		if key.Auth == AuthCertificate {
+			result.CertificatePassword = key.P12Password
+		}
 	default:
 		return IssuedKey{}, errors.New("unknown protocol")
 	}

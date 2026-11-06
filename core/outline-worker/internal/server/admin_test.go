@@ -79,6 +79,24 @@ func TestAdminCommands(t *testing.T) {
 	}
 	refused("not 443", "dashboard", "--port", "443")
 	must("signed out", "dashboard", "--reset-token")
+	// IKEv2/IPsec need the component; then keys come with an Apple profile.
+	must("not running", "settings")
+	refused("ipsec enable", "set", "--enable", "ikev2")
+	fakeAgent(t, server, nil)
+	must("Saved", "set", "--enable", "ikev2", "--enable", "ipsec")
+	must("IPsec component: running", "settings")
+	apple := must("profile Alice", "key", "add", "Alice", "ikev2", "--auth", "certificate", "--remote-id", "vpn.example.test")
+	if !strings.Contains(apple, "remote id       vpn.example.test") || strings.ContainsAny(apple, "▀▄█") {
+		t.Fatalf("IKEv2 key add output:\n%s", apple)
+	}
+	appleID := regexp.MustCompile(`\(id (\d+)\)`).FindStringSubmatch(apple)[1]
+	must("Warning: IPsec with a pre-shared key is weak", "key", "add", "Alice", "ipsec", "--auth", "psk")
+	refused("IKEv2 keys use auth", "key", "add", "Alice", "ikev2", "--auth", "psk")
+	must("IKEv2 (iPhone, iPad, Mac) · certificate", "keys", "Alice")
+	if profile := must("com.apple.vpn.managed", "profile", "Alice", appleID, "--on-demand"); !strings.Contains(profile, "OnDemandEnabled") {
+		t.Fatal("profile --on-demand did not turn on demand on")
+	}
+	must("reinstall every IPsec PSK profile", "set", "--rotate-ipsec-psk")
 	must("Saved", "set", "--disable", "wireguard", "--history-days", "60")
 	refused("site_days cannot be longer", "set", "--site-days", "90")
 	must("Updated Alice", "user", "limit", "Alice", "none")

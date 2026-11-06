@@ -4,7 +4,11 @@
 'use strict';
 const PROTOCOL_ORDER = ['amneziawg', 'wireguard', 'vless', 'shadowsocks'];
 const protocolsInOrder = protocols => PROTOCOL_ORDER.filter(protocol => protocols[protocol]).map(protocol => [protocol, protocols[protocol]]);
-const PROTOCOL_NAMES = { amneziawg: 'AmneziaWG', wireguard: 'WireGuard', vless: 'VLESS with REALITY', shadowsocks: 'Shadowsocks (Outline)' };
+const PROTOCOL_NAMES = { amneziawg: 'AmneziaWG', wireguard: 'WireGuard', vless: 'VLESS with REALITY', shadowsocks: 'Shadowsocks (Outline)', ikev2: 'IKEv2 (iPhone, iPad, Mac)', ipsec: 'IPsec (iPhone, iPad, Mac; legacy)' };
+// Apple's built-in VPN types: installed with a configuration profile, never used on this device.
+const APPLE_PROTOCOLS = ['ikev2', 'ipsec'];
+const AUTH_METHODS = { ikev2: [['eap', 'Username and password'], ['certificate', 'Certificate']], ipsec: [['certificate', 'Certificate'], ['psk', 'Shared group key (weak)']] };
+const AUTH_NAMES = { eap: 'username and password', certificate: 'certificate', psk: 'shared group key' };
 const manageState = { servers: [], current: null, info: null, users: [], rules: null, editingUser: null, keysUser: null, rulesUser: null, confirm: null, live: {}, statsUser: null, polling: false };
 const serverCall = op => request({ type: 'server_call', server: manageState.current, op });
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -73,7 +77,8 @@ function renderManaged() {
   const { info, users, rules } = manageState;
   $('#managed-title').textContent = info.name;
   $('#managed-endpoint').textContent = `${info.hostname} · VERSION ${info.version}`.toUpperCase();
-  $('#managed-protocols').textContent = protocolsInOrder(info.protocols).map(([protocol, value]) => `${PROTOCOL_NAMES[protocol] || protocol}: ${value.enabled ? `port ${value.port}` : 'off'}`).join(' · ');
+  const apple = APPLE_PROTOCOLS.filter(protocol => info.protocols[protocol] && info.protocols[protocol].enabled).map(protocol => `${PROTOCOL_NAMES[protocol]}: UDP 500/4500`);
+  $('#managed-protocols').textContent = [...protocolsInOrder(info.protocols).map(([protocol, value]) => `${PROTOCOL_NAMES[protocol] || protocol}: ${value.enabled ? `port ${value.port}` : 'off'}`), ...apple].join(' · ');
   $('#global-rules-summary').textContent = rulesSummary(rules);
   $('#user-count').textContent = users.length;
   $('#usage-total').textContent = `${formatData(users.reduce((total, user) => total + user.usage_bytes, 0))} used in total`;
@@ -185,6 +190,8 @@ async function openKeys(user) {
   manageState.keysUser = user;
   $('#keys-heading').textContent = `Keys for ${user.name}`;
   $('#key-here').checked = false; formError('#keys-error');
+  for (const id of ['#key-address', '#key-local-id', '#key-remote-id']) $(id).value = '';
+  keyFormChanged();
   $('#key-list').replaceChildren(el('p', 'quiet', 'Loading keys…'));
   $('#keys-dialog').showModal();
   await loadKeys();
@@ -206,11 +213,18 @@ function renderKeys(keys) {
     const what = el('div', 'what', PROTOCOL_NAMES[key.protocol] || key.protocol);
     what.append(el('small', '', `Created ${new Date(key.created_unix * 1000).toLocaleDateString()}`));
     row.append(what);
-    const buttons = [['QR code', () => showQR(user, key, key.config ? 'conf' : 'key')]];
-    if (key.config) buttons.push(['QR (vpn://)', () => showQR(user, key, 'key')]);
-    buttons.push(['Copy key', () => navigator.clipboard.writeText(key.access_key).then(() => notice('Key copied. Share it only with the person it belongs to.', true))]);
-    if (key.config) buttons.push(['Copy .conf', () => navigator.clipboard.writeText(key.config).then(() => notice('Configuration copied for WireGuard or AmneziaWG apps.', true))]);
-    buttons.push(['Use on this device', async () => { await useHere(user, key); await refresh(); notice('Saved under My servers on this device.', true); }]);
+    const buttons = [];
+    if (APPLE_PROTOCOLS.includes(key.protocol)) {
+      what.append(el('small', '', `${AUTH_NAMES[key.auth] || key.auth} · ${key.identity} · ${key.server_address}`));
+      buttons.push(['Save iPhone/Mac profile', () => saveProfile(user, key, false)]);
+      if (key.auth === 'certificate') buttons.push(['Profile without password', () => saveProfile(user, key, true)]);
+    } else {
+      buttons.push(['QR code', () => showQR(user, key, key.config ? 'conf' : 'key')]);
+      if (key.config) buttons.push(['QR (vpn://)', () => showQR(user, key, 'key')]);
+      buttons.push(['Copy key', () => navigator.clipboard.writeText(key.access_key).then(() => notice('Key copied. Share it only with the person it belongs to.', true))]);
+      if (key.config) buttons.push(['Copy .conf', () => navigator.clipboard.writeText(key.config).then(() => notice('Configuration copied for WireGuard or AmneziaWG apps.', true))]);
+      buttons.push(['Use on this device', async () => { await useHere(user, key); await refresh(); notice('Saved under My servers on this device.', true); }]);
+    }
     buttons.push(['Remove', () => { $('#keys-dialog').close(); confirmAction(`Remove this ${PROTOCOL_NAMES[key.protocol] || key.protocol} key?`, 'Anyone using it is disconnected and cannot reconnect.', 'Remove key', () => serverCall({ op: 'key_delete', user: user.id, key: key.id })); }]);
     for (const [label, handler] of buttons) {
       const button = el('button', 'secondary', label); button.type = 'button';
@@ -221,14 +235,35 @@ function renderKeys(keys) {
   }
 }
 $('#keys-dialog').addEventListener('close', () => { $('#key-list').replaceChildren(); reloadManaged(); });
+// Protocol-specific fields for IKEv2/IPsec keys.
+function keyFormChanged() {
+  const protocol = $('#key-protocol').value; const apple = APPLE_PROTOCOLS.includes(protocol);
+  $('#key-apple').hidden = !apple;
+  $('#key-here').closest('label').hidden = apple;
+  if (!apple) return;
+  const auth = $('#key-auth'); const previous = auth.value; auth.replaceChildren();
+  for (const [value, label] of AUTH_METHODS[protocol]) { const option = el('option', '', label); option.value = value; auth.append(option); }
+  if (AUTH_METHODS[protocol].some(([value]) => value === previous)) auth.value = previous;
+  $('#key-remote-id').closest('label').hidden = protocol !== 'ikev2';
+  $('#key-psk-warning').hidden = auth.value !== 'psk';
+}
+$('#key-protocol').addEventListener('change', keyFormChanged);
+$('#key-auth').addEventListener('change', keyFormChanged);
 $('#key-create-form').addEventListener('submit', async event => {
   event.preventDefault();
   const user = manageState.keysUser; const protocol = $('#key-protocol').value;
   const op = { op: 'key_create', user: user.id, protocol };
-  if ($('#key-here').checked) op.import_as = uniqueName(slug(`${user.name}-${protocol}`));
+  if (APPLE_PROTOCOLS.includes(protocol)) {
+    op.auth = $('#key-auth').value;
+    for (const [field, id] of [['server_address', '#key-address'], ['local_identifier', '#key-local-id'], ['remote_identifier', '#key-remote-id']]) {
+      const value = $(id).value.trim();
+      if (value && !(field === 'remote_identifier' && protocol !== 'ikev2')) op[field] = value;
+    }
+  } else if ($('#key-here').checked) op.import_as = uniqueName(slug(`${user.name}-${protocol}`));
   formError('#keys-error');
   try {
     const created = await serverCall(op);
+    if (created.warning) notice(created.warning);
     if (created.import_error) formError('#keys-error', new Error(`The key was created, but saving it here failed: ${created.import_error}`));
     else if (created.imported) { notice('Key created and saved under My servers on this device.', true); await refresh(); }
     await loadKeys();
@@ -270,6 +305,15 @@ $('#managed-settings').addEventListener('click', () => {
     port.setAttribute('aria-label', `${PROTOCOL_NAMES[protocol] || protocol} port`);
     grid.append(label, port);
   }
+  for (const protocol of APPLE_PROTOCOLS.filter(protocol => info.protocols[protocol])) {
+    const label = el('label', 'check'); const box = el('input'); box.type = 'checkbox'; box.checked = info.protocols[protocol].enabled; box.dataset.apple = protocol;
+    label.append(box, document.createTextNode(` ${PROTOCOL_NAMES[protocol]}`));
+    grid.append(label, el('span', 'hint', 'UDP 500, 4500'));
+  }
+  const component = info.ipsec_component || {};
+  $('#settings-ipsec').textContent = component.running
+    ? `IPsec component running, ${component.connections || 0} connected.${component.error ? ` Problem: ${component.error}` : ''}`
+    : 'IKEv2/IPsec (built-in VPN of iPhone, iPad and Mac) needs the IPsec component. Start it on the server with: sudo ghostlink-server ipsec enable';
   formError('#settings-error'); $('#server-settings-dialog').showModal();
 });
 $('#server-settings-form').addEventListener('submit', async event => {
@@ -292,6 +336,10 @@ $('#server-settings-form').addEventListener('submit', async event => {
     if (enabled !== value.enabled) change.enabled = enabled;
     if (port !== value.port) change.port = port;
     if (Object.keys(change).length) protocols[protocol] = change;
+  }
+  for (const protocol of APPLE_PROTOCOLS.filter(protocol => info.protocols[protocol])) {
+    const enabled = document.querySelector(`[data-apple="${protocol}"]`).checked;
+    if (enabled !== info.protocols[protocol].enabled) protocols[protocol] = { enabled };
   }
   if (Object.keys(protocols).length) patch.protocols = protocols;
   try {
@@ -424,6 +472,15 @@ async function showQR(user, key, content) {
   $('#qr-dialog').showModal();
 }
 $('#qr-dialog').addEventListener('close', () => $('#qr-image').removeAttribute('src'));
+// Apple configuration profiles install IKEv2/IPsec in Settings and keep the password or
+// certificate in the device's Keychain.
+async function saveProfile(user, key, promptPassword) {
+  const profile = await serverCall({ op: 'key_profile', user: user.id, key: key.id, prompt_password: promptPassword, on_demand: false });
+  const saved = await nativeInvoke('save_download', { name: `${user.name}-${key.protocol}-${key.id}`, content: profile, extension: 'mobileconfig' });
+  notice(promptPassword
+    ? `Profile saved as ${saved}, without the certificate password. Give ${user.name} the password separately; the device asks for it when installing: ${key.certificate_password}`
+    : `Profile saved as ${saved}. Send it privately (AirDrop, Mail or Files); opening it on the iPhone, iPad or Mac installs the VPN.`, true);
+}
 $('#kit-save').addEventListener('click', async () => {
   const user = manageState.keysUser; formError('#keys-error');
   try {

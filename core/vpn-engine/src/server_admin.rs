@@ -28,6 +28,26 @@ use std::{
 
 const MAX_RESPONSE: usize = 1024 * 1024;
 const PROTOCOLS: [&str; 4] = ["amneziawg", "wireguard", "vless", "shadowsocks"];
+/// Apple's built-in VPN types, installed with a configuration profile.
+const APPLE_PROTOCOLS: [&str; 2] = ["ikev2", "ipsec"];
+
+/// Identifiers and addresses for IKEv2/IPsec keys; the server validates them precisely.
+fn identifier(value: &Option<String>, what: &str) -> Result<(), AdminError> {
+    match value {
+        Some(v)
+            if v.is_empty()
+                || v.len() > 253
+                || !v
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-_@:".contains(&b)) =>
+        {
+            Err(AdminError::Invalid(format!(
+                "{what} may only use letters, digits and . - _ @ :"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -244,17 +264,68 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             format!("/users/{}/keys", numeric_id(user)?),
             None,
         ),
-        ServerOp::KeyCreate { user, protocol, .. } => {
-            if !PROTOCOLS.contains(&protocol.as_str()) {
+        ServerOp::KeyCreate {
+            user,
+            protocol,
+            import_as,
+            auth,
+            server_address,
+            remote_identifier,
+            local_identifier,
+        } => {
+            let apple = APPLE_PROTOCOLS.contains(&protocol.as_str());
+            if !apple && !PROTOCOLS.contains(&protocol.as_str()) {
                 return Err(AdminError::Invalid(format!(
-                    "Protocol must be one of {}",
-                    PROTOCOLS.join(", ")
+                    "Protocol must be one of {}, {}",
+                    PROTOCOLS.join(", "),
+                    APPLE_PROTOCOLS.join(", ")
                 )));
+            }
+            let options = auth.is_some()
+                || server_address.is_some()
+                || remote_identifier.is_some()
+                || local_identifier.is_some();
+            if !apple && options {
+                return Err(AdminError::Invalid(
+                    "Only IKEv2 and IPsec keys take sign-in options".into(),
+                ));
+            }
+            if apple && import_as.is_some() {
+                return Err(AdminError::Invalid(
+                    "IKEv2 and IPsec keys are for the built-in VPN of iPhone, iPad and Mac; save their profile instead of importing them".into(),
+                ));
+            }
+            let methods: &[&str] = match protocol.as_str() {
+                "ikev2" => &["eap", "certificate"],
+                "ipsec" => &["certificate", "psk"],
+                _ => &[],
+            };
+            if let Some(auth) = auth {
+                if !methods.contains(&auth.as_str()) {
+                    return Err(AdminError::Invalid(format!(
+                        "{protocol} keys use auth {}",
+                        methods.join(" or ")
+                    )));
+                }
+            }
+            identifier(server_address, "The server address")?;
+            identifier(remote_identifier, "The remote identifier")?;
+            identifier(local_identifier, "The local identifier")?;
+            let mut request = json!({ "protocol": protocol });
+            for (field, value) in [
+                ("auth", auth),
+                ("server_address", server_address),
+                ("remote_identifier", remote_identifier),
+                ("local_identifier", local_identifier),
+            ] {
+                if let Some(value) = value {
+                    request[field] = json!(value);
+                }
             }
             (
                 Method::POST,
                 format!("/users/{}/keys", numeric_id(user)?),
-                Some(json!({ "protocol": protocol })),
+                Some(request),
             )
         }
         ServerOp::KeyDelete { user, key } => (
@@ -312,6 +383,22 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
         ServerOp::Kit { user } => (
             Method::GET,
             format!("/users/{}/kit", numeric_id(user)?),
+            None,
+        ),
+        ServerOp::KeyProfile {
+            user,
+            key,
+            prompt_password,
+            on_demand,
+        } => (
+            Method::GET,
+            format!(
+                "/users/{}/keys/{}/profile?prompt_password={}&on_demand={}",
+                numeric_id(user)?,
+                numeric_id(key)?,
+                u8::from(*prompt_password),
+                u8::from(*on_demand)
+            ),
             None,
         ),
     })
@@ -399,9 +486,9 @@ async fn send_with(
     let mut request = client
         .request(method, format!("{}{}", key.api_url, path))
         .header(
-            "Accept",
-            "application/json, image/svg+xml, text/plain, text/html",
-        );
+        "Accept",
+        "application/json, image/svg+xml, text/plain, text/html, application/x-apple-aspen-config",
+    );
     if let Some(body) = body {
         request = request.json(&body);
     }
@@ -417,7 +504,11 @@ async fn send_with(
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|t| t.starts_with("text/") || t.starts_with("image/svg+xml"));
+        .is_some_and(|t| {
+            t.starts_with("text/")
+                || t.starts_with("image/svg+xml")
+                || t.starts_with("application/x-apple-aspen-config")
+        });
     let mut data = Vec::new();
     loop {
         match response.chunk().await {
@@ -637,19 +728,59 @@ mod tests {
             key: "2".into(),
         };
         assert!(request(&op).is_err());
-        let op = ServerOp::KeyCreate {
-            user: "12".into(),
-            protocol: "openvpn".into(),
-            import_as: None,
-        };
-        assert!(request(&op).is_err());
-        let (method, path, body) = request(&ServerOp::KeyCreate {
-            user: "12".into(),
-            protocol: "amneziawg".into(),
-            import_as: Some("home".into()),
-        })
-        .unwrap();
+        let create =
+            |protocol: &str, auth: Option<&str>, import: Option<&str>, local: Option<&str>| {
+                request(&ServerOp::KeyCreate {
+                    user: "12".into(),
+                    protocol: protocol.into(),
+                    import_as: import.map(Into::into),
+                    auth: auth.map(Into::into),
+                    server_address: None,
+                    remote_identifier: None,
+                    local_identifier: local.map(Into::into),
+                })
+            };
+        assert!(create("openvpn", None, None, None).is_err());
+        let (method, path, body) = create("amneziawg", None, Some("home"), None).unwrap();
         assert_eq!((method, path.as_str()), (Method::POST, "/users/12/keys"));
         assert_eq!(body.unwrap(), json!({"protocol":"amneziawg"}));
+        // IKEv2/IPsec: allowlisted methods, no import, no options for other protocols.
+        let (_, _, body) = create(
+            "ikev2",
+            Some("certificate"),
+            None,
+            Some("phone@example.com"),
+        )
+        .unwrap();
+        assert_eq!(
+            body.unwrap(),
+            json!({"protocol":"ikev2","auth":"certificate","local_identifier":"phone@example.com"})
+        );
+        assert!(create("ikev2", Some("psk"), None, None).is_err());
+        assert!(create("ipsec", Some("eap"), None, None).is_err());
+        assert!(create("ipsec", None, Some("home"), None).is_err());
+        assert!(create("vless", Some("eap"), None, None).is_err());
+        assert!(create("ikev2", None, None, Some("a\nb")).is_err());
+        let (method, path, _) = request(&ServerOp::KeyProfile {
+            user: "3".into(),
+            key: "4".into(),
+            prompt_password: true,
+            on_demand: false,
+        })
+        .unwrap();
+        assert_eq!(
+            (method, path.as_str()),
+            (
+                Method::GET,
+                "/users/3/keys/4/profile?prompt_password=1&on_demand=0"
+            )
+        );
+        assert!(request(&ServerOp::KeyProfile {
+            user: "3".into(),
+            key: "../x".into(),
+            prompt_password: false,
+            on_demand: false,
+        })
+        .is_err());
     }
 }

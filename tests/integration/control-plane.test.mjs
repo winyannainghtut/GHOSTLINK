@@ -373,9 +373,30 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   assert.ok(kit.includes('<!doctype html>') && kit.includes('vless://') && kit.includes('<svg'));
   assert.equal((await cli(['server', 'set', '--server', 'home', '--site-stats', 'on', '--history-days', '60'])).data.site_stats, true);
   assert.equal((await cli(['server', 'info', '--server', 'home'])).data.history_days, 60);
-  for (const op of [{ op: 'live' }, { op: 'kit', user }]) {
+  for (const op of [{ op: 'live' }, { op: 'kit', user }, { op: 'key_profile', user, key: '1' }]) {
     assert.equal((await rpc({ schema_version: 1, agent_token: 'x'.repeat(64), action: { type: 'server_call', server: 'home', op } })).error.code, 'permission_denied');
   }
+
+  // IKEv2/IPsec (built-in VPN of iPhone, iPad and Mac) need the IPsec component; their keys are
+  // saved as Apple profiles. A fresh status file stands in for the component here.
+  assert.ok((await cli(['server', 'set', '--server', 'home', '--enable', 'ikev2'], 2)).error.message.includes('ipsec enable'));
+  await fs.mkdir(path.join(dir, 'ipsec'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'ipsec', 'status.json'), JSON.stringify({ version: 1, updated_unix: Math.floor(Date.now() / 1000), running: true, sas: [] }));
+  const appleOn = await cli(['server', 'set', '--server', 'home', '--enable', 'ikev2', '--enable', 'ipsec']);
+  assert.ok(appleOn.data.protocols.ikev2.enabled && appleOn.data.protocols.ipsec.enabled && appleOn.data.ipsec_component.running);
+  const ikev2 = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'ikev2', '--auth', 'certificate', '--remote-id', 'vpn.example.test']);
+  assert.equal(ikev2.data.auth, 'certificate'); assert.equal(ikev2.data.remote_identifier, 'vpn.example.test'); assert.ok(!ikev2.data.access_key, 'no access key, only a profile');
+  assert.equal((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'ipsec', '--import', 'phone'], 2)).error.code, 'invalid_request', 'IKEv2/IPsec keys are never imported here');
+  assert.equal((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'ikev2', '--auth', 'psk'], 2)).error.code, 'invalid_request');
+  assert.ok((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'ipsec', '--auth', 'psk'])).data.warning.includes('weak'));
+  const profileFile = path.join(temp, 'alice.mobileconfig');
+  const profileArgs = ['server', 'keys', 'profile', '--server', 'home', '--user', user, '--key', ikev2.data.id, '--output', profileFile];
+  assert.equal((await cli(profileArgs)).data.saved_to, profileFile);
+  const profile = await fs.readFile(profileFile, 'utf8');
+  assert.ok(profile.includes('com.apple.vpn.managed') && profile.includes('com.apple.security.pkcs12') && profile.includes('<string>vpn.example.test</string>'));
+  assert.equal((await cli(profileArgs, 2)).error.code, 'invalid_request', 'never overwrites a file');
+  assert.ok((await cli(['server', 'keys', 'list', '--server', 'home', '--user', user])).data.every(k => k.certificate_password === undefined));
+  await cli(['server', 'set', '--server', 'home', '--rotate-ipsec-psk']);
 
   // A server that cannot prove it holds the pinned certificate never receives the key.
   const wrongPin = await cli(['server', 'add', '--name', 'evil', '--key-file', await write('wrong-pin.json', JSON.stringify({ ...management, certSha256: '00'.repeat(32) }))], 1);

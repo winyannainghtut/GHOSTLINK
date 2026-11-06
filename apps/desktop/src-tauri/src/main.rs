@@ -37,11 +37,22 @@ async fn vpn_request(action: Action) -> Response {
     .await
 }
 
-/// Saves a connection kit page in the user's Downloads folder. WebView2 cannot download blob:
-/// links from the app's custom scheme, so the shell writes the file itself: an HTML name built
-/// from safe characters, never overwriting an existing file, at most 4 MiB.
+/// Saves a connection kit page or an Apple VPN profile in the user's Downloads folder. WebView2
+/// cannot download blob: links from the app's custom scheme, so the shell writes the file
+/// itself: a name built from safe characters with an allowlisted extension (html or
+/// mobileconfig), never overwriting an existing file, at most 4 MiB.
 #[tauri::command]
-fn save_download(app: tauri::AppHandle, name: String, content: String) -> Result<String, String> {
+fn save_download(
+    app: tauri::AppHandle,
+    name: String,
+    content: String,
+    extension: Option<String>,
+) -> Result<String, String> {
+    let extension = match extension.as_deref() {
+        None | Some("html") => "html",
+        Some("mobileconfig") => "mobileconfig",
+        Some(_) => return Err("This kind of file cannot be saved".into()),
+    };
     use std::io::Write;
     if content.len() > 4 << 20 {
         return Err("The file is too large".into());
@@ -62,9 +73,9 @@ fn save_download(app: tauri::AppHandle, name: String, content: String) -> Result
         .map_err(|_| "Could not find your Downloads folder".to_string())?;
     for n in 0..100 {
         let file_name = if n == 0 {
-            format!("{stem}.html")
+            format!("{stem}.{extension}")
         } else {
-            format!("{stem} ({n}).html")
+            format!("{stem} ({n}).{extension}")
         };
         let path = dir.join(file_name);
         match std::fs::OpenOptions::new()

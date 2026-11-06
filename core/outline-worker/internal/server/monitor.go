@@ -344,6 +344,26 @@ func (m *Monitor) SetSiteStats(on bool) {
 	m.historyMu.Unlock()
 }
 
+// AddExternal records traffic counted outside sing-box (the IPsec component's SAs). It is not
+// inspected, so it has no traffic type beyond "IPsec (not inspected)" and no site statistics.
+func (m *Monitor) AddExternal(tag, protocol string, up, down uint64, remote string, at time.Time) {
+	u := m.user(tag)
+	u.up.Add(int64(up))
+	u.down.Add(int64(down))
+	u.pending.Add(int64(up + down))
+	u.lastActive.Store(at.Unix())
+	if m.detailPaused.Load() {
+		return
+	}
+	if up+down > 0 {
+		m.detailCounter(detailKey{tag, "type", "IPsec (not inspected)"}).Add(int64(up + down))
+		m.detailCounter(detailKey{tag, "protocol", protocol}).Add(int64(up + down))
+	}
+	if addr, err := netip.ParseAddr(remote); err == nil {
+		m.sawClient(tag, addr, protocol, at)
+	}
+}
+
 // PeerSeen records WireGuard/AmneziaWG peers' real addresses and handshakes.
 func (m *Monitor) PeerSeen(user, protocol string, endpoint netip.AddrPort, handshake time.Time) {
 	if !handshake.IsZero() {

@@ -41,25 +41,26 @@ func NewAPI(service *Service, version string) *API {
 	a := &API{service: service, version: version, mux: http.NewServeMux(), limiter: newFailureLimiter()}
 	service.Read(func(s *State) { a.secret = s.API.Secret })
 	routes := map[string]func(*http.Request) (int, any, error){
-		"GET /server":                     a.getServer,
-		"PATCH /server":                   a.patchServer,
-		"GET /users":                      a.listUsers,
-		"POST /users":                     a.createUser,
-		"GET /users/{id}":                 a.getUser,
-		"PATCH /users/{id}":               a.patchUser,
-		"DELETE /users/{id}":              a.deleteUser,
-		"GET /users/{id}/keys":            a.listKeys,
-		"POST /users/{id}/keys":           a.createKey,
-		"DELETE /users/{id}/keys/{keyID}": a.deleteKey,
-		"GET /rules":                      a.getRules,
-		"PUT /rules":                      a.putRules,
-		"GET /metrics":                    a.metrics,
-		"GET /live":                       a.live,
-		"GET /stats":                      a.stats,
-		"GET /clients":                    a.clients,
-		"GET /users/{id}/keys/{keyID}/qr": a.keyQR,
-		"GET /users/{id}/kit":             a.kit,
-		"GET /dashboard":                  a.dashboardInfo,
+		"GET /server":                          a.getServer,
+		"PATCH /server":                        a.patchServer,
+		"GET /users":                           a.listUsers,
+		"POST /users":                          a.createUser,
+		"GET /users/{id}":                      a.getUser,
+		"PATCH /users/{id}":                    a.patchUser,
+		"DELETE /users/{id}":                   a.deleteUser,
+		"GET /users/{id}/keys":                 a.listKeys,
+		"POST /users/{id}/keys":                a.createKey,
+		"DELETE /users/{id}/keys/{keyID}":      a.deleteKey,
+		"GET /rules":                           a.getRules,
+		"PUT /rules":                           a.putRules,
+		"GET /metrics":                         a.metrics,
+		"GET /live":                            a.live,
+		"GET /stats":                           a.stats,
+		"GET /clients":                         a.clients,
+		"GET /users/{id}/keys/{keyID}/qr":      a.keyQR,
+		"GET /users/{id}/kit":                  a.kit,
+		"GET /users/{id}/keys/{keyID}/profile": a.keyProfile,
+		"GET /dashboard":                       a.dashboardInfo,
 	}
 	for pattern, handler := range routes {
 		a.mux.HandleFunc(pattern, a.wrap(handler))
@@ -180,6 +181,7 @@ type serverInfo struct {
 	HistoryMaxMB      int                     `json:"history_max_mb"`
 	DashboardPort     uint16                  `json:"dashboard_port"`
 	DashboardPublic   bool                    `json:"dashboard_public"`
+	IPsecComponent    ipsecComponent          `json:"ipsec_component"`
 }
 
 // rawBody is a non-JSON answer (SVG, terminal text, HTML).
@@ -193,7 +195,10 @@ func (a *API) serverInfo(s *State) serverInfo {
 			WireGuard:   {s.WireGuard.Enabled, s.WireGuard.Port},
 			VLESS:       {s.VLESS.Enabled, s.VLESS.Port},
 			Shadowsocks: {s.Shadowsocks.Enabled, s.Shadowsocks.Port},
+			IKEv2:       {s.IPsec.IKEv2Enabled, 500},
+			IPsec:       {s.IPsec.IPsecEnabled, 500},
 		},
+		IPsecComponent: a.service.ipsecComponent(time.Now()),
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
 		SiteStats: s.Monitor.SiteStats, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
 		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
@@ -225,6 +230,8 @@ type serverPatch struct {
 	DashboardPort       *uint16 `json:"dashboard_port"`
 	DashboardPublic     *bool   `json:"dashboard_public"`
 	ResetDashboardToken bool    `json:"reset_dashboard_token"`
+	// RotateIPsecPSK replaces the IPsec group key; every IPsec PSK profile must be reinstalled.
+	RotateIPsecPSK bool `json:"rotate_ipsec_psk"`
 }
 
 func (s *State) protocolSettings(protocol string) (*bool, *uint16) {
@@ -237,6 +244,10 @@ func (s *State) protocolSettings(protocol string) (*bool, *uint16) {
 		return &s.WireGuard.Enabled, &s.WireGuard.Port
 	case AmneziaWG:
 		return &s.AmneziaWG.Enabled, &s.AmneziaWG.Port
+	case IKEv2:
+		return &s.IPsec.IKEv2Enabled, nil
+	case IPsec:
+		return &s.IPsec.IPsecEnabled, nil
 	}
 	return nil, nil
 }
@@ -307,13 +318,33 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 				return InputError{fmt.Errorf("unknown protocol %q", protocol)}
 			}
 			if change.Enabled != nil {
+				if *change.Enabled && !*enabled && (protocol == IKEv2 || protocol == IPsec) {
+					if _, running := a.service.IPsecStatus(time.Now()); !running {
+						return InputError{errIPsecNotRunning}
+					}
+					if err := s.ensureIPsecPKI(time.Now(), portFree); err != nil {
+						return err
+					}
+				}
 				*enabled = *change.Enabled
 			}
 			if change.Port != nil {
+				if port == nil {
+					return InputError{errors.New("IKEv2 and IPsec use the fixed ports UDP 500 and 4500")}
+				}
 				if *change.Port == 0 {
 					return InputError{errors.New("port must be 1-65535")}
 				}
 				*port = *change.Port
+			}
+		}
+		if patch.RotateIPsecPSK {
+			s.IPsec.PSK = base64.RawURLEncoding.EncodeToString(random(32))
+		}
+		// A new address needs a new server certificate for IKEv2/IPsec.
+		if hostnameChanged && s.IPsec.CAPEM != "" {
+			if err := s.ensureIPsecPKI(time.Now(), portFree); err != nil {
+				return err
 			}
 		}
 		info = a.serverInfo(s)
@@ -339,6 +370,8 @@ type keySummary struct {
 	ID          string `json:"id"`
 	Protocol    string `json:"protocol"`
 	CreatedUnix int64  `json:"created_unix"`
+	// Auth is the IKEv2/IPsec method (eap, certificate or psk).
+	Auth string `json:"auth,omitempty"`
 }
 
 type userView struct {
@@ -357,7 +390,7 @@ type userView struct {
 func viewUser(u *User) userView {
 	keys := []keySummary{}
 	for _, k := range u.Keys {
-		keys = append(keys, keySummary{k.ID, k.Protocol, k.CreatedUnix})
+		keys = append(keys, keySummary{k.ID, k.Protocol, k.CreatedUnix, k.Auth})
 	}
 	return userView{u.ID, u.Name, u.CreatedUnix, u.Enabled, u.DataLimitBytes, u.UsageBytes, u.OverLimit,
 		u.ExemptFromGlobalRules, u.Rules, keys}
@@ -497,6 +530,9 @@ func (a *API) deleteUser(r *http.Request) (int, any, error) {
 		if index < 0 {
 			return fmt.Errorf("user %w", errNotFound)
 		}
+		for _, k := range s.Users[index].Keys {
+			s.revoke(k, time.Now())
+		}
 		s.Users = slices.Delete(s.Users, index, index+1)
 		return nil
 	})
@@ -543,11 +579,16 @@ func (a *API) listKeys(r *http.Request) (int, any, error) {
 
 func (a *API) createKey(r *http.Request) (int, any, error) {
 	var request struct {
-		Protocol string `json:"protocol"`
+		Protocol         string `json:"protocol"`
+		Auth             string `json:"auth"`
+		ServerAddress    string `json:"server_address"`
+		RemoteIdentifier string `json:"remote_identifier"`
+		LocalIdentifier  string `json:"local_identifier"`
 	}
 	if err := decode(r, &request); err != nil {
 		return 0, nil, err
 	}
+	options := KeyOptions{Auth: request.Auth, ServerAddress: request.ServerAddress, RemoteID: request.RemoteIdentifier, LocalID: request.LocalIdentifier}
 	var view keyView
 	err := a.service.Change(func(s *State) error {
 		u := s.User(r.PathValue("id"))
@@ -556,16 +597,22 @@ func (a *API) createKey(r *http.Request) (int, any, error) {
 		}
 		enabled, _ := s.protocolSettings(request.Protocol)
 		if enabled == nil {
-			return InputError{fmt.Errorf("protocol must be one of %s", strings.Join(Protocols, ", "))}
+			return InputError{fmt.Errorf("protocol must be one of %s", strings.Join(append(append([]string{}, Protocols...), AppleProtocols...), ", "))}
 		}
 		if !*enabled {
 			return InputError{fmt.Errorf("%s is turned off on this server", request.Protocol)}
 		}
-		key, err := s.NewKey(u, request.Protocol)
+		key, err := s.NewKeyWith(u, request.Protocol, options)
 		if err != nil {
 			return InputError{err}
 		}
 		u.Keys = append(u.Keys, key)
+		if key.RemoteID != "" {
+			// The server certificate must also carry this identifier.
+			if err := s.ensureIPsecPKI(time.Now(), portFree); err != nil {
+				return err
+			}
+		}
 		rendered, err := s.Render(u, key)
 		if err != nil {
 			return err
@@ -590,6 +637,7 @@ func (a *API) deleteKey(r *http.Request) (int, any, error) {
 		if index < 0 {
 			return fmt.Errorf("key %w", errNotFound)
 		}
+		s.revoke(u.Keys[index], time.Now())
 		u.Keys = slices.Delete(u.Keys, index, index+1)
 		return nil
 	})
@@ -796,6 +844,33 @@ func (a *API) kit(r *http.Request) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, rawBody{"text/html; charset=utf-8", page}, nil
+}
+
+// keyProfile answers with the Apple configuration profile of an IKEv2 or IPsec key.
+func (a *API) keyProfile(r *http.Request) (int, any, error) {
+	options := ProfileOptions{PromptPassword: r.URL.Query().Get("prompt_password") == "1", OnDemand: r.URL.Query().Get("on_demand") == "1"}
+	var profile string
+	var err error
+	found := false
+	a.service.Read(func(s *State) {
+		u := s.User(r.PathValue("id"))
+		if u == nil {
+			return
+		}
+		for _, k := range u.Keys {
+			if k.ID == r.PathValue("keyID") {
+				found = true
+				profile, err = s.AppleProfile(u, k, options)
+			}
+		}
+	})
+	if !found {
+		return 0, nil, fmt.Errorf("key %w", errNotFound)
+	}
+	if err != nil {
+		return 0, nil, InputError{err}
+	}
+	return http.StatusOK, rawBody{"application/x-apple-aspen-config", profile}, nil
 }
 
 // dashboardInfo gives the administrator what is needed to open the dashboard.

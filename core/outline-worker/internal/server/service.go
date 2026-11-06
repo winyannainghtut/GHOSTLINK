@@ -25,11 +25,22 @@ type Service struct {
 	hooks        []func(previous, next *State)
 	historyBytes atomic.Int64
 	report       func(string, error)
+	// ipsecSeen holds the agent's last byte counters per SA child (touched by Run only).
+	ipsecSeen map[string][2]uint64
 }
 
 func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
-	return &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
-		report: func(string, error) {}}
+	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
+		report: func(string, error) {}, ipsecSeen: map[string][2]uint64{}}
+	// The IPsec agent follows every saved change.
+	service.OnChange(func(previous, next *State) {
+		if previous.appleEnabled() || next.appleEnabled() {
+			if err := service.WriteIPsecDesired(time.Now()); err != nil {
+				service.report("ipsec", err)
+			}
+		}
+	})
+	return service
 }
 
 // OnChange registers fn to run after every saved change, outside the state lock.
@@ -61,7 +72,33 @@ func (s *Service) Start() error {
 	s.store.Lock()
 	defer s.store.Unlock()
 	s.monitor.SetSiteStats(s.store.State.Monitor.SiteStats)
-	return s.engine.Apply(s.store.State)
+	if err := s.engine.Apply(s.store.State); err != nil {
+		return err
+	}
+	if s.store.State.appleEnabled() {
+		go func() {
+			if err := s.WriteIPsecDesired(time.Now()); err != nil {
+				s.report("ipsec", err)
+			}
+		}()
+	}
+	return nil
+}
+
+// RenewIPsec reissues the server certificate when it nears expiry or the address changed, and
+// rewrites the agent's configuration so its CRL stays current.
+func (s *Service) RenewIPsec(now time.Time) {
+	enabled := false
+	s.Read(func(state *State) { enabled = state.appleEnabled() })
+	if !enabled {
+		return
+	}
+	if err := s.Change(func(state *State) error { return state.ensureIPsecPKI(now, portFree) }); err != nil {
+		s.report("ipsec", err)
+	}
+	if err := s.WriteIPsecDesired(now); err != nil {
+		s.report("ipsec", err)
+	}
 }
 
 // Read runs fn with the current state; fn must not modify it.
@@ -237,6 +274,10 @@ func (s *Service) Run(ctx context.Context) {
 			s.monitor.Sample(now)
 			if ticks%5 == 0 {
 				s.health.Sample(now)
+				s.recordIPsec(now)
+			}
+			if ticks%86400 == 0 {
+				s.RenewIPsec(now)
 			}
 			if ticks%30 == 0 {
 				if err := s.Account(); err != nil {

@@ -27,10 +27,20 @@ var appHelp = map[string][]string{
 		"AmneziaWG app: tap +, then Scan from QR code (or import the .conf file).",
 		"AmneziaVPN: paste the vpn:// key. Ghostlink: Add access key with the vpn:// key.",
 	},
+	IKEv2: {
+		"iPhone, iPad or Mac, with no app: open the .mobileconfig file you were sent (AirDrop, Mail or Files).",
+		"iPhone/iPad: Settings shows Profile Downloaded; tap it, then Install (on iOS 16 and later: Settings > General > VPN & Device Management). Mac: double-click the file, then System Settings > Privacy & Security > Profiles.",
+		"Then turn the VPN on in Settings > VPN.",
+	},
+	IPsec: {
+		"iPhone, iPad or Mac, with no app: open the .mobileconfig file you were sent and install it as for IKEv2.",
+		"This is the older IPsec (IKEv1) type; prefer the IKEv2 profile when you have both.",
+	},
 }
 
 var protocolTitles = map[string]string{
 	AmneziaWG: "AmneziaWG", WireGuard: "WireGuard", VLESS: "VLESS with REALITY", Shadowsocks: "Shadowsocks (Outline)",
+	IKEv2: "IKEv2 (iPhone, iPad, Mac)", IPsec: "IPsec (iPhone, iPad, Mac; legacy)",
 }
 
 var kitTemplate = template.Must(template.New("kit").Parse(`<!doctype html>
@@ -54,7 +64,7 @@ small{color:#647571}
 <h2>{{.Title}}</h2>
 <ul>{{range .Help}}<li>{{.}}</li>{{end}}</ul>
 {{if .QR}}<div class="qr">{{.QR}}</div><small>{{.QRNote}}</small>{{end}}
-<p><strong>Key</strong></p><textarea rows="3" readonly>{{.AccessKey}}</textarea>
+{{if .AccessKey}}<p><strong>Key</strong></p><textarea rows="3" readonly>{{.AccessKey}}</textarea>{{else}}<p><strong>Install with the .mobileconfig file</strong> sent with this page (identity <code>{{.Identity}}</code>).</p>{{end}}
 {{if .Config}}<p><strong>.conf file</strong> <small>(save as {{.ConfName}})</small></p><textarea rows="9" readonly>{{.Config}}</textarea>{{end}}
 </section>{{end}}
 <p><small>Created {{.Created}} by Ghostlink server.</small></p>
@@ -62,9 +72,9 @@ small{color:#647571}
 `))
 
 type kitKey struct {
-	Title, AccessKey, Config, ConfName, QRNote string
-	Help                                       []string
-	QR                                         template.HTML
+	Title, AccessKey, Config, ConfName, QRNote, Identity string
+	Help                                                 []string
+	QR                                                   template.HTML
 }
 
 // Kit renders a self-contained HTML page with all of a user's keys, QR codes and app help.
@@ -78,7 +88,7 @@ func (s *State) Kit(user *User) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		entry := kitKey{Title: protocolTitles[key.Protocol], AccessKey: issued.AccessKey, Config: issued.Config, Help: appHelp[key.Protocol]}
+		entry := kitKey{Title: protocolTitles[key.Protocol], AccessKey: issued.AccessKey, Config: issued.Config, Help: appHelp[key.Protocol], Identity: issued.Identity}
 		if issued.Config != "" {
 			entry.ConfName = "ghostlink-" + key.Protocol + ".conf"
 			entry.QRNote = "This code carries the .conf for the WireGuard or AmneziaWG app."
