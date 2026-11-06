@@ -13,6 +13,18 @@ Wintun is a separate signed binary embedded by the pinned sing-tun module. Its s
 - **What the package carries:** its `.deb`/`.rpm` contains a container image made of the pinned `gcr.io/distroless/static-debian12:nonroot` base, the static binary, and the GPL text, sing-box notice and Go dependency notices under `/usr/share/doc/ghostlink-server/`. The base is Apache-2.0 and carries Debian's `base-files`, `netbase`, `tzdata` and `ca-certificates` with their own notices in the image. The package's `SOURCE.txt` points to the corresponding source published with the same release.
 - **Corresponding-source zip:** it now contains the whole Go module (the worker, the server command and every internal package), and the script builds every command from the staged copy before zipping. The zips first attached to the v0.2.0 and v0.2.1 drafts did not include `internal/awg` and could not build. v0.2.1's was replaced with a complete one before publication.
 
+**IPsec component (v0.5.0).**
+- **Contents:** the server packages also contain the `ghostlink-ipsec` image.
+  - `ghostlink-ipsec-agent`: GPL-3.0-or-later, from the same Go module, with source in the corresponding-source zip.
+  - **From Alpine Linux 3.24:** `charon`, `swanctl` and the strongSwan plugins it loads, the iptables multi-binaries and extensions, and their shared libraries. Nothing else: there is no shell, busybox or apk.
+- **Package list:** `packages/linux/server/ipsec-collect.sh` records the Alpine package of every file in `/usr/share/doc/ghostlink-ipsec/packages.txt`, with version, origin and license.
+- **Source bundle:** `scripts/ipsec-source.sh` reads that list in CI. For every package under a copyleft license (GPL, LGPL, MPL, including dual-licensed ones such as libcap), it fetches the Alpine recipe (APKBUILD and patches) at the exact installed version and the upstream sources, verified by Alpine's own `abuild verify`. It publishes them as `Ghostlink-<version>-ipsec-component-source-<arch>.tar.gz`, and the job fails if a recipe version differs from the image.
+- **Licenses:**
+  - strongSwan is GPL-2.0-or-later with an OpenSSL linking exception;
+  - iptables and libnftnl are GPL-2.0-or-later, and libmnl is LGPL-2.1-or-later;
+  - the agent runs them as separate programs, so no GPL-2.0-only code is linked into the GPL-3.0 agent.
+- **New Go modules:** `github.com/strongswan/govici` (MIT) and `software.sslmate.com/src/go-pkcs12` (BSD-3-Clause). `github.com/sagernet/netlink` (Apache-2.0) was already in the module graph.
+
 OpenVPN 2 is optional and separately installed. If bundled in future, preserve GPLv2/source obligations and its stated linking exceptions plus all driver/dependency terms. OpenVPN 3 Core was inspected but is not linked or distributed; its MPL/AGPL alternatives do not grant unrelated mobile/App Store distribution rights. Outline Apps/SDK were reference material and are not embedded components.
 
 The WebView2 Rust bindings' MIT text is preserved from their published source revision `edc2caf886175ccaebe86078c9cfe1ae2a187328`. Their static loader matched the x64 library in Microsoft's official WebView2 SDK 1.0.3800.47 package byte for byte (SHA256 `89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8`). Its separate SDK license and notices are included. The WebView2 Runtime remains an installed prerequisite; it is not bundled.

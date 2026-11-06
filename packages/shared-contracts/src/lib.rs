@@ -121,11 +121,22 @@ pub enum ServerOp {
         user: String,
     },
     /// With `import_as`, the new key is also saved on this device under that server ID.
+    /// IKEv2 and IPsec keys (iPhone, iPad, Mac) take an `auth` method (IKEv2: eap or
+    /// certificate; IPsec: certificate or psk) and optional identifiers; they are installed with
+    /// an Apple profile (`KeyProfile`), never imported.
     KeyCreate {
         user: String,
         protocol: String,
         #[serde(default)]
         import_as: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_identifier: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_identifier: Option<String>,
     },
     KeyDelete {
         user: String,
@@ -161,6 +172,17 @@ pub enum ServerOp {
     Kit {
         user: String,
     },
+    /// An IKEv2/IPsec key's Apple configuration profile (.mobileconfig) as text.
+    KeyProfile {
+        user: String,
+        key: String,
+        /// Leave the certificate password out; the device asks for it when installing.
+        #[serde(default)]
+        prompt_password: bool,
+        /// Connect automatically whenever the device is online.
+        #[serde(default)]
+        on_demand: bool,
+    },
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -184,6 +206,9 @@ pub struct ServerPatch {
     pub site_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_max_mb: Option<u32>,
+    /// Replace the IPsec group key; every IPsec PSK profile must be installed again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_ipsec_psk: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -326,6 +351,7 @@ impl ServerOp {
             Self::Clients { .. } => "server_clients",
             Self::KeyQr { .. } => "server_key_qr",
             Self::Kit { .. } => "server_kit",
+            Self::KeyProfile { .. } => "server_key_profile",
         }
     }
 }
@@ -637,6 +663,15 @@ mod tests {
             Action::ServerCall {
                 server: "x".into(),
                 op: ServerOp::Kit { user: "1".into() },
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::KeyProfile {
+                    user: "1".into(),
+                    key: "2".into(),
+                    prompt_password: false,
+                    on_demand: false,
+                },
             },
         ];
         for action in actions {

@@ -1,6 +1,6 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.4.0** (server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.5.0** (IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -573,6 +573,21 @@ No successful full TUN connection, all-application routing, full/split route com
 
 Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) for operation and the API.
 
+**IKEv2/IPsec for Apple devices (v0.5.0).**
+- **Server code:**
+  - `internal/server/ipsec_ca.go`: RSA-3072 CA, server and client certificates, a CRL with holds for inactive users, NT hashes, PKCS#12 (LegacyDES).
+  - `apple.go`: `.mobileconfig` profiles (`com.apple.vpn.managed`, `.security.root`, `.security.pkcs12`).
+  - `ipsec.go`: `desired.json` for the agent, `recordIPsec` accounting by CHILD_SA unique ID, `KeyOptions`.
+- **Contract:** `internal/ipsecproto` defines the server↔agent files and their validation.
+- **Agent:** `internal/ipsecagent` and `cmd/ghostlink-ipsec-agent`.
+  - It supervises charon, renders `swanctl.conf` with fixed algorithms, and writes iptables chains `GHOSTLINK-IPSEC-*` through `iptables-<nft|legacy>-restore --noflush`, with the gateway dummy `glipsec0` created over netlink.
+  - It terminates disallowed SAs, writes `status.json`, and reports final counters from `ike-updown`/`child-updown`/`child-rekey` events.
+- **Image:** `packages/linux/server/ipsec.Dockerfile` with `ipsec-collect.sh` is a `FROM scratch` image with only the needed Alpine 3.24 files, no shell.
+- **Host script:** `ghostlink-server ipsec enable|disable|status|logs` and `profile NAME ID --output`. The component runs as `--user 0:<server gid>`, with caps NET_ADMIN/NET_RAW/NET_BIND_SERVICE, read-only and `no-new-privileges`; the `ipsec/` directory is 0770.
+- **Tests:**
+  - `tests/ipsec/interop.sh` (CI `ipsec.yml` and the release's `linux-package.yml`) installs the `.deb` and connects a strongSwan client built from each downloaded profile;
+  - `scripts/ipsec-source.sh` builds the GPL source bundle from the image's `packages.txt`.
+
 Client side:
 - **Daemon:** `ManagedServerAdd/List/Remove` and typed `ServerCall` live in `services/vpn-daemon/src/remote.rs`, and run **without the daemon lock** during network calls.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
@@ -826,6 +841,15 @@ Requires an authorized Windows test machine and human administrator installation
 - **Downloads in the app:** WebView2 cannot download `blob:` links from the app's custom scheme. The app saves files with its `save_download` command instead.
 - **Headless Edge:** never use headless Edge with a fresh profile for checks. On this machine Windows signs it in to the user's Microsoft account and starts sync. That happened once; the instance was stopped and its profile deleted. To view web pages (for example the dashboard), point the debug app's isolated WebView2 at them over DevTools.
 - **Docker Desktop:** do not start Docker Desktop on the user's machine. Server image and package tests run in release CI, on runners that have Docker.
+- **IPsec iteration happens on CI:** the IPsec component needs Linux, Docker and xfrm, so work on it is iterated on a feature branch whose pushes run `ipsec.yml`. Those pushes are about 4 minutes each. `main` gets the squashed result.
+- **strongSwan:**
+  - `charon.load` marks critical plugins with a trailing `!`, and a critical plugin also demands its optional features (for example DSA in `pem`), so Ghostlink loads plugins plainly and the agent checks the loaded list over vici.
+  - Daemon start-up messages are `dmn`/`lib` level 1; a filelog `default = 0` hides why charon exits with 66.
+  - Run charon as `user = root` and `group = root` in strongswan.conf, because the container has no CAP_SETUID/SETGID.
+- **Agent timing:** it applies `desired.json` within a second (it polls the file's mtime), and lists sessions every 5 s. Tests must wait for `status.json` `applied_generation` to equal the desired `generation` before connecting.
+- **Alpine sources:** `gitlab.alpinelinux.org` answers automated downloads with HTTP 418. Use the official GitHub mirror `alpinelinux/aports` (sparse, shallow clone). When sourcing an APKBUILD, use `set +u`, and give `abuild` `</dev/null` inside loops.
+- **License inventory:** `collect-licenses.py` must also list Go modules for `GOOS=linux`. Run on Windows, it previously missed the Linux-only dependencies of the server (netlink, nftables, nfqueue, dbus).
+- **Scripts with heredocs:** a node script written through a Bash heredoc ends at its first line that is exactly `EOF`, and the rest runs as shell. Write edit scripts with the Write tool.
 
 ## 18. Definition of done and handover maintenance
 

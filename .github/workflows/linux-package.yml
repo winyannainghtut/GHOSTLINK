@@ -1,6 +1,7 @@
 name: Linux package
 # Reusable: on the given runner, builds the headless client (archive, .deb, .rpm) and the
-# server (.deb, .rpm with its Docker image inside), installs both as a smoke test, and uploads
+# server (.deb, .rpm with its Docker images inside), installs both as a smoke test, runs the
+# IKEv2/IPsec interop test, builds the IPsec component's GPL source, and uploads
 # them as the workflow artifact "linux-<arch>". Called by release.yml.
 on:
   workflow_call:
@@ -146,7 +147,19 @@ jobs:
           rpm -qip artifacts/linux-$ARCH/ghostlink-server-*.rpm
           rpm -qlp artifacts/linux-$ARCH/ghostlink-server-*.rpm | tee server-files.txt
           grep -qx /usr/sbin/ghostlink-server server-files.txt && grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
+          grep -qx /usr/lib/ghostlink-server/ipsec-image.tar.gz server-files.txt
           rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-server-*.rpm | grep -q 'ghostlink-server setup'
+      - name: IKEv2/IPsec interop (strongSwan client, all four sign-in methods)
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: sudo bash tests/ipsec/interop.sh artifacts/linux-$ARCH/ghostlink-server_*.deb
+      - name: GPL source of the IPsec component
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          bash scripts/ipsec-source.sh "$VERSION" "$ARCH" "artifacts/linux-$ARCH/ipsec-packages-$ARCH.txt"
+          tar -tzf "artifacts/source/Ghostlink-$VERSION-ipsec-component-source-$ARCH.tar.gz" | grep -E '/strongswan/upstream/strongswan-.*\.tar\.bz2$'
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ inputs.arch }}
@@ -155,3 +168,4 @@ jobs:
             artifacts/linux-${{ inputs.arch }}/*.tar.gz
             artifacts/linux-${{ inputs.arch }}/*.deb
             artifacts/linux-${{ inputs.arch }}/*.rpm
+            artifacts/source/*-ipsec-component-source-*.tar.gz
