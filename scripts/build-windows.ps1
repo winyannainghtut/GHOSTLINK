@@ -15,7 +15,7 @@ if (-not $SkipCompile) {
     & "$PSScriptRoot\cargo.ps1" build --release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
     Assert-Success 'Desktop release build'
     Push-Location core/outline-worker
-    try { & go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor -ldflags '-s -w' -o '..\..\target\release\ghostlink-tunnel.exe' .; Assert-Success 'Managed tunnel worker build' }
+    try { & go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags '-s -w' -o '..\..\target\release\ghostlink-tunnel.exe' .; Assert-Success 'Managed tunnel worker build' }
     finally { Pop-Location }
 }
 $stage = Join-Path $repository 'artifacts\windows-x64\Ghostlink'

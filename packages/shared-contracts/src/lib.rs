@@ -66,6 +66,51 @@ pub enum Action {
     AgentRevoke {
         name: String,
     },
+    /// Without `profile`, the global policy; with it, that server's override (if any).
+    RoutingPolicyGet {
+        #[serde(default)]
+        profile: Option<String>,
+    },
+    /// `policy: None` clears a server override, or resets the global policy to full tunnel.
+    RoutingPolicySet {
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        policy: Option<RoutingPolicy>,
+    },
+}
+
+/// Client split tunneling. Applied by the managed worker at the next connection; OpenVPN
+/// profiles ignore it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingPolicy {
+    #[serde(default)]
+    pub mode: SplitMode,
+    /// Sites matched with their subdomains, e.g. `example.com`.
+    #[serde(default)]
+    pub domains: Vec<String>,
+    /// IPv4/IPv6 CIDR ranges.
+    #[serde(default)]
+    pub ip_ranges: Vec<String>,
+    /// Executable names (`chrome.exe`) or absolute paths.
+    #[serde(default)]
+    pub apps: Vec<String>,
+    /// Keep private-network destinations (LAN, printers) off the tunnel.
+    #[serde(default)]
+    pub lan_direct: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitMode {
+    /// Everything uses the VPN.
+    #[default]
+    Full,
+    /// Listed sites, ranges and apps go direct; everything else uses the VPN.
+    Bypass,
+    /// Only listed sites, ranges and apps use the VPN.
+    Only,
 }
 
 impl Action {
@@ -88,6 +133,8 @@ impl Action {
             Self::Doctor => "doctor",
             Self::AgentGrant { .. } => "agent_grant",
             Self::AgentRevoke { .. } => "agent_revoke",
+            Self::RoutingPolicyGet { .. } => "routing_policy_get",
+            Self::RoutingPolicySet { .. } => "routing_policy_set",
         }
     }
     pub fn agent_allowed(&self, control: bool) -> bool {

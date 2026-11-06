@@ -1,10 +1,12 @@
 use crate::{
+    access::Outbound,
     management::{Session, Shared, Snapshot},
-    outline::AccessKey,
-    storage,
+    split, storage,
+    vless::Security,
 };
 use anyhow::{ensure, Result};
 use ghostlink_contracts::ConnectionState;
+use ghostlink_contracts::RoutingPolicy;
 use rand::{rngs::OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -19,7 +21,11 @@ use tokio::{
     sync::mpsc,
 };
 
-pub const WORKER_VERSION: &str = "Ghostlink tunnel worker 0.1.0; sing-box 1.14.4";
+pub const WORKER_VERSION: &str =
+    "Ghostlink tunnel worker 0.2.0; sing-box 1.14.4; amneziawg-go 3.1.20260828";
+
+/// Tag of the tunnel outbound or endpoint in every generated configuration.
+pub const PROXY_TAG: &str = "proxy";
 
 pub async fn worker_available(executable: &Path) -> bool {
     if !executable.is_absolute() || !executable.is_file() {
@@ -33,34 +39,132 @@ pub async fn worker_available(executable: &Path) -> bool {
         Ok(Ok(output)) if output.status.success() && output.stdout == format!("{WORKER_VERSION}\n").as_bytes())
 }
 
+/// The sing-box outbound (Shadowsocks, VLESS) or endpoint (WireGuard, AmneziaWG) for a credential.
+fn proxy(outbound: &Outbound) -> (Option<Value>, Option<Value>) {
+    match outbound {
+        Outbound::Shadowsocks(key) => (
+            Some(
+                json!({"type":"shadowsocks","tag":PROXY_TAG,"server":key.server,"server_port":key.port,"method":key.method,"password":key.password}),
+            ),
+            None,
+        ),
+        Outbound::Vless(key) => {
+            let mut tls = json!({"enabled":true,"server_name":key.server_name,"utls":{"enabled":true,"fingerprint":key.fingerprint}});
+            if let Security::Reality {
+                public_key,
+                short_id,
+            } = &key.security
+            {
+                tls["reality"] =
+                    json!({"enabled":true,"public_key":public_key,"short_id":short_id});
+            }
+            let mut vless = json!({"type":"vless","tag":PROXY_TAG,"server":key.server,"server_port":key.port,"uuid":key.uuid,"tls":tls});
+            if !key.flow.is_empty() {
+                vless["flow"] = json!(key.flow);
+            }
+            (Some(vless), None)
+        }
+        Outbound::WireGuard(config) => {
+            let peer = &config.peer;
+            let default_mtu = if config.is_amnezia() { 1376 } else { 1420 };
+            let mut endpoint = json!({"tag":PROXY_TAG,"address":config.addresses,"private_key":config.private_key,"mtu":config.mtu.unwrap_or(default_mtu)});
+            let mut peer_json = json!({"address":peer.host,"port":peer.port,"public_key":peer.public_key,"allowed_ips":peer.allowed_ips});
+            if let Some(psk) = &peer.preshared_key {
+                peer_json["pre_shared_key"] = json!(psk);
+            }
+            if config.is_amnezia() {
+                endpoint["type"] = json!("amneziawg");
+                endpoint["obfuscation"] = json!(config.obfuscation);
+                if let Some(keepalive) = &peer.keepalive {
+                    peer_json["persistent_keepalive"] = json!(keepalive);
+                }
+            } else {
+                endpoint["type"] = json!("wireguard");
+                // The native endpoint takes one interval; use the lower bound of a range.
+                if let Some(seconds) = peer
+                    .keepalive
+                    .as_deref()
+                    .and_then(|k| k.split('-').next())
+                    .and_then(|k| k.parse::<u16>().ok())
+                {
+                    peer_json["persistent_keepalive_interval"] = json!(seconds);
+                }
+            }
+            endpoint["peers"] = json!([peer_json]);
+            (None, Some(endpoint))
+        }
+    }
+}
+
+/// `policy` must already be validated with `split::validate`.
 pub fn config(
-    key: &AccessKey,
+    outbound: &Outbound,
     proxy_port: u16,
     api_port: u16,
     secret: &str,
     tunnel: bool,
+    policy: &RoutingPolicy,
 ) -> Value {
     let mut inbounds = vec![
         json!({"type":"mixed","tag":"health-proxy","listen":"127.0.0.1","listen_port":proxy_port,"users":[{"username":"ghostlink","password":secret}]}),
     ];
     if tunnel {
-        inbounds.push(json!({"type":"tun","tag":"ghostlink-tun","interface_name":"Ghostlink","address":["172.28.85.1/30","fdfe:85:85::1/126"],"auto_route":true,"strict_route":true,"dns_mode":"hijack","mtu":1500,"stack":"mixed"}));
+        let mut tun = json!({"type":"tun","tag":"ghostlink-tun","interface_name":"Ghostlink","address":["172.28.85.1/30","fdfe:85:85::1/126"],"auto_route":true,"strict_route":true,"dns_mode":"hijack","mtu":1500,"stack":"mixed"});
+        // A WireGuard profile with limited AllowedIPs routes only those prefixes into the TUN.
+        if let Outbound::WireGuard(config) = outbound {
+            if !config.full_tunnel() {
+                tun["route_address"] = json!(config.peer.allowed_ips);
+            }
+        }
+        inbounds.push(tun);
     }
-    json!({
+    // WireGuard profiles name their resolver; otherwise DNS-over-HTTPS through the tunnel.
+    let vpn_dns = match outbound {
+        Outbound::WireGuard(config) if !config.dns.is_empty() => {
+            json!({"type":"udp","tag":"vpn-dns","server":config.dns[0].to_string(),"detour":PROXY_TAG})
+        }
+        _ => {
+            json!({"type":"https","tag":"vpn-dns","server":"1.1.1.1","path":"/dns-query","tls":{"enabled":true,"server_name":"cloudflare-dns.com"},"detour":PROXY_TAG})
+        }
+    };
+    let (outbound_json, endpoint_json) = proxy(outbound);
+    let split = split::render(policy, PROXY_TAG);
+    let mut outbounds: Vec<Value> = outbound_json.into_iter().collect();
+    if split.needs_direct {
+        // Bound to the physical interface by auto_detect_interface, like the tunnel's own sockets.
+        outbounds.push(json!({"type":"direct","tag":"direct"}));
+    }
+    let mut rules = vec![
+        // Learn site names (TLS SNI, HTTP Host, QUIC) and DNS for the rules below.
+        json!({"action":"sniff"}),
+        // The health probe must always test the tunnel, even when "only" mode sends the
+        // rest of the traffic direct; otherwise a dead tunnel could be reported as connected.
+        json!({"inbound":"health-proxy","outbound":PROXY_TAG}),
+        json!({"inbound":"ghostlink-tun","ip_version":6,"action":"reject"}),
+        json!({"protocol":"dns","action":"hijack-dns"}),
+    ];
+    rules.extend(split.route_rules);
+    let mut document = json!({
         "log":{"level":"info","timestamp":false,"disabled":false},
-        "dns":{"servers":[{"type":"https","tag":"vpn-dns","server":"1.1.1.1","path":"/dns-query","tls":{"enabled":true,"server_name":"cloudflare-dns.com"},"detour":"outline"},{"type":"local","tag":"bootstrap"}],"final":"vpn-dns","strategy":"ipv4_only"},
+        "dns":{"servers":[vpn_dns,{"type":"local","tag":"bootstrap"}],"rules":split.dns_rules,"final":split.dns_final,"strategy":"ipv4_only"},
         "inbounds":inbounds,
-        "outbounds":[{"type":"shadowsocks","tag":"outline","server":key.server,"server_port":key.port,"method":key.method,"password":key.password}],
-        "route":{"auto_detect_interface":tunnel,"default_domain_resolver":{"server":"bootstrap","strategy":"ipv4_only"},"rules":[{"inbound":"ghostlink-tun","ip_version":6,"action":"reject"},{"protocol":"dns","action":"hijack-dns"}],"final":"outline"},
+        "outbounds":outbounds,
+        "route":{"auto_detect_interface":tunnel,"default_domain_resolver":{"server":"bootstrap","strategy":"ipv4_only"},"rules":rules,"final":split.route_final,"find_process":split.find_process},
         "experimental":{"clash_api":{"external_controller":format!("127.0.0.1:{api_port}"),"secret":secret,"access_control_allow_origin":["http://ghostlink.invalid"],"access_control_allow_private_network":false}}
-    })
+    });
+    if let Some(endpoint) = endpoint_json {
+        document["endpoints"] = json!([endpoint]);
+    }
+    document
 }
 
+#[allow(clippy::too_many_arguments)] // One call site; a struct would only rename these.
 pub async fn start(
     executable: &Path,
     run_dir: &Path,
     name: String,
-    key: AccessKey,
+    outbound: Outbound,
+    policy: RoutingPolicy,
     shared: Shared,
     events: mpsc::Sender<&'static str>,
     timeout: Duration,
@@ -80,7 +184,9 @@ pub async fn start(
     let path = run_dir.join("outline.json");
     let config_guard = storage::PrivateConfig::write(
         &path,
-        &serde_json::to_vec(&config(&key, proxy_port, api_port, &secret, true))?,
+        &serde_json::to_vec(&config(
+            &outbound, proxy_port, api_port, &secret, true, &policy,
+        ))?,
     )?;
     let mut check = Command::new(executable);
     check.args(["check", "-c"]).arg(&path).kill_on_drop(true);
@@ -89,7 +195,7 @@ pub async fn start(
     let checked = tokio::time::timeout(Duration::from_secs(10), check.output()).await??;
     ensure!(
         checked.status.success(),
-        "Managed Outline engine rejected configuration"
+        "Managed tunnel engine rejected configuration"
     );
     let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))?
         .basic_auth("ghostlink", &secret);
@@ -117,7 +223,7 @@ pub async fn start(
     let mut child = command.spawn()?;
     let pid = child
         .id()
-        .ok_or_else(|| anyhow::anyhow!("Outline worker did not start"))?;
+        .ok_or_else(|| anyhow::anyhow!("Tunnel worker did not start"))?;
     let mut control = child
         .stdin
         .take()
@@ -125,14 +231,14 @@ pub async fn start(
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| anyhow::anyhow!("Cannot monitor Outline engine"))?;
+        .ok_or_else(|| anyhow::anyhow!("Cannot monitor tunnel engine"))?;
     {
         let mut snapshot = shared.write().await;
         *snapshot = Snapshot::default();
         snapshot.status.status = ConnectionState::Connecting;
         snapshot.status.profile = Some(name);
-        snapshot.status.protocol = Some("shadowsocks".into());
-        snapshot.status.server = Some(key.server);
+        snapshot.status.protocol = Some(outbound.protocol().into());
+        snapshot.status.server = Some(outbound.server().0.to_string());
     }
     let (stop, mut stop_rx) = mpsc::channel(1);
     let task = tokio::spawn(async move {

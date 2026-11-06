@@ -51,9 +51,30 @@ Adding a key or profile under an ID that already exists fails unless you pass `-
 
 - Standard modern-AEAD Shadowsocks `ss://` keys compatible with Outline: SIP002 credentials, legacy base64 keys, percent-encoded plain credentials, named fragments and IPv4/IPv6 endpoints.
 - `ssconf://` dynamic HTTPS sources containing a static key or legacy JSON. Private/loopback metadata destinations and redirects are blocked. Advanced YAML transports, prefixes and plugins are explicitly unsupported.
+- **WireGuard** and **AmneziaWG** (obfuscated WireGuard, legacy and 2.0 parameters) `.conf` files: `ghostlink profile import home.conf --name home`, or **Import a file…** in the app. One peer per file. Script hooks (`PostUp` and friends), `Table`, `FwMark` and unknown settings are rejected. A limited `AllowedIPs` list becomes a split tunnel.
+- **VLESS** `vless://` links over REALITY (or TLS), including XTLS Vision. Plaintext VLESS, insecure TLS and the `xhttp`/`mKCP` transports are refused.
+- **Amnezia** `vpn://` connection keys for the AmneziaWG, WireGuard and XRay protocols. "Full access" keys that contain the server's SSH login are refused; ask the server owner for a connection key.
 - Optional inline-certificate OpenVPN profiles via `ghostlink profile import file.ovpn`. OpenVPN Community is separately installed. Scripts, plugins, external file references, weak options, password-auth profiles and encrypted-key profiles without a supported vault workflow are rejected.
 
-The managed Outline-compatible worker links pinned, unmodified sing-box libraries. It uses the standard Shadowsocks protocol; Ghostlink implements no new encryption protocol. The worker receives a stop over a private inherited pipe and calls the engine's graceful close. Parent-pipe EOF also closes it. Native interface observation and a successful proxied HTTPS health request are required before the daemon reports `connected`. This does not independently certify all application routes or leak prevention.
+The managed worker links pinned, unmodified sing-box 1.14.4 and amneziawg-go libraries and implements no new encryption protocol. The worker receives a stop over a private inherited pipe and calls the engine's graceful close. Parent-pipe EOF also closes it. Native interface observation and a successful proxied HTTPS health request are required before the daemon reports `connected`. This does not independently certify all application routes or leak prevention.
+
+## Split tunneling
+
+Choose what uses the VPN in **Settings → Split tunneling**, or per server from its **⋮** menu.
+
+- **Everything uses the VPN** (default).
+- **Bypass**: listed sites (with their subdomains), IP ranges and apps go direct; everything else uses the VPN.
+- **Only listed items use the VPN**: the reverse.
+- **Keep local network devices off the VPN** for printers, NAS boxes and the like.
+
+```powershell
+ghostlink split set --mode bypass --site netflix.com --ip 192.168.1.0/24 --app steam.exe --lan-direct
+ghostlink split set --profile office --mode only --site intranet.example
+ghostlink split show [--profile office]
+ghostlink split clear [--profile office]
+```
+
+Changes apply at the next connection. Sites are matched by name (TLS/HTTP/QUIC sniffing and DNS), so an app that hides the name, for example with ECH or hardcoded IPs, can still use the VPN. Bypassed traffic deliberately leaves the tunnel. OpenVPN profiles ignore split tunneling.
 
 ## Build and test
 
@@ -63,7 +84,7 @@ Windows requirements: Rust 1.92+, MSVC C++ Build Tools and Windows SDK, Go (the 
 ./scripts/bootstrap-windows.ps1 -IncludeSdk
 ./scripts/cargo.ps1 build --locked --workspace
 Push-Location core/outline-worker
-go build -mod=readonly -trimpath -tags with_gvisor -o ..\..\target\debug\ghostlink-tunnel.exe .
+go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ..\..\target\debug\ghostlink-tunnel.exe .
 Pop-Location
 ./scripts/cargo.ps1 test --locked --workspace
 npm test

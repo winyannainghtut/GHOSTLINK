@@ -18,7 +18,7 @@ const declared = {
   'apps/desktop/ui/index.html': capture('apps/desktop/ui/index.html', /PERSONAL VPN · ([^<\s]+)/),
   // The daemon only runs a worker whose version line matches exactly, so these must agree.
   'core/outline-worker/main.go': capture('core/outline-worker/main.go', /tunnel worker ([^;"]+);/),
-  'core/vpn-engine/src/outline_session.rs': capture('core/vpn-engine/src/outline_session.rs', /tunnel worker ([^;"]+);/),
+  'core/vpn-engine/src/worker_session.rs': capture('core/vpn-engine/src/worker_session.rs', /tunnel worker ([^;"]+);/),
 };
 const mismatches = Object.entries(declared).filter(([, value]) => value !== version);
 for (const [path, value] of mismatches) console.error(`${path} declares ${value ?? 'no version'}; Cargo.toml declares ${version}`);

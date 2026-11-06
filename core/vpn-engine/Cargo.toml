@@ -18,6 +18,7 @@ hex = "0.4"
 base64 = "0.22"
 url = "2.5"
 percent-encoding = "2.3"
+flate2 = "1"
 reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "socks"] }
 
 [target.'cfg(unix)'.dependencies]
