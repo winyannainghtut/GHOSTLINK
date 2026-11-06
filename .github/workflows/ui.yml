@@ -1,0 +1,32 @@
+name: Web UI
+# Typechecks and builds the dashboard (ui/) and checks that the build committed in
+# core/outline-worker/internal/server/dashboard (which ghostlink-server embeds) is exactly what
+# the sources produce, so the shipped dashboard always matches its source.
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  dashboard:
+    name: Dashboard build is reproducible
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install (lockfile, no install scripts)
+        working-directory: ui
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck and build
+        working-directory: ui
+        run: npm run build
+      - name: The committed dashboard matches the build
+        run: |
+          git status --porcelain -- core/outline-worker/internal/server/dashboard | tee changes.txt
+          if [ -s changes.txt ]; then
+            echo "Rebuild the dashboard (cd ui && npm ci && npm run build) and commit the result." >&2
+            git diff --stat -- core/outline-worker/internal/server/dashboard >&2
+            exit 1
+          fi

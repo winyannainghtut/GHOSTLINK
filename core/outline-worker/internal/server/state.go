@@ -324,6 +324,31 @@ func (s *State) usedAddresses() map[string]bool {
 	return used
 }
 
+// addressPools reports each WireGuard-family subnet: keys using it, client addresses it holds
+// (all but the network, the server's .1 and the last address) and the next free address.
+func (s *State) addressPools() []addressPool {
+	pools := []addressPool{}
+	used := s.usedAddresses()
+	for _, p := range []struct{ protocol, subnet string }{{AmneziaWG, s.AmneziaWG.Subnet}, {WireGuard, s.WireGuard.Subnet}} {
+		prefix, err := netip.ParsePrefix(p.subnet)
+		if err != nil || !prefix.Addr().Is4() {
+			continue
+		}
+		pool := addressPool{Protocol: p.protocol, CIDR: prefix.Masked().String()}
+		if bits := 32 - prefix.Bits(); bits >= 2 && bits < 31 {
+			pool.Capacity = 1<<bits - 3
+		}
+		for address := range used {
+			if a, err := netip.ParseAddr(address); err == nil && prefix.Contains(a) {
+				pool.Used++
+			}
+		}
+		pool.Next, _ = s.nextAddress(p.subnet)
+		pools = append(pools, pool)
+	}
+	return pools
+}
+
 // nextAddress picks the next free host address (/32) in subnet, after the server's .1.
 func (s *State) nextAddress(subnet string) (string, error) {
 	prefix, err := netip.ParsePrefix(subnet)

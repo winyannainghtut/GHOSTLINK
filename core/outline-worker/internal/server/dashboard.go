@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+// The dashboard is built from ui/ (cd ui && npm run build); the files here are generated.
+//
 //go:embed dashboard
 var dashboardFiles embed.FS
 
