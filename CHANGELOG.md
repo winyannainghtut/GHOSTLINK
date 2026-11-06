@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
+### Fixed
+
+- **Windows: the app and CLI could not reach the installed service.**
+  - **Symptom:** after installing the MSI, every request failed with "Cannot reach the authorized local Ghostlink service".
+  - **Cause:** before talking to the service, the client checks who is serving its pipe, so a fake service cannot receive your keys. It did that by opening the service process's token, and Windows does not let a standard user open a SYSTEM process's token.
+  - **Fix:** the client now checks the pipe's owner, which any client may read. It must be SYSTEM, Administrators (the owner a SYSTEM service gives its objects) or your own account, and an ordinary process cannot fake any of these.
+  - **Testing:** development tests ran the service as the same user, which hid this.
+- **Windows: the Start-menu shortcut had no icon.** Windows Installer shows an icon on these shortcuts only when the icon's ID ends in `.ico`.
+- **Windows: no desktop shortcut.** The MSI now adds a desktop shortcut too.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added
@@ -113,7 +125,8 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.1.0...v0.2.0

@@ -18,7 +18,7 @@ The optional OpenVPN executable path is only needed for that backend. Every othe
 
 `scripts/build-windows.ps1` builds optimized CLI/service/MCP, Tauri GUI and Go worker, then compiles and validates a WiX MSI. It also creates a portable directory archive. Rust binaries link the MSVC runtime statically for this build. The GUI requires the separately installed Microsoft WebView2 Runtime.
 
-The MSI installs into 64-bit Program Files, adds the CLI directory to the machine PATH, creates a Start menu shortcut and installs an automatic LocalSystem service named `Ghostlink`. The service pipe grants access to SYSTEM and the selected user's SID. The MSI uses Windows Installer's UserSID for an interactive install and retains a previous installation's owner. For unattended installation, supply the intended user's SID explicitly:
+The MSI installs into 64-bit Program Files, adds the CLI directory to the machine PATH, creates Start menu and desktop shortcuts and installs an automatic LocalSystem service named `Ghostlink`. The service pipe grants access to SYSTEM and the selected user's SID. The MSI uses Windows Installer's UserSID for an interactive install and retains a previous installation's owner. For unattended installation, supply the intended user's SID explicitly:
 
 ```powershell
 $vpnOwnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value

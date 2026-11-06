@@ -51,7 +51,7 @@ Pre-release builds are attached to [GitHub Releases](https://github.com/winyanna
 | Server, Fedora/RHEL family (x64, arm64) | `ghostlink-server-<version>-1.<x86_64\|aarch64>.rpm` | The same, as an RPM |
 | Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker and the server |
 
-**Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Windows SmartScreen warns about unsigned builds.
+**Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Open **Ghostlink** from the Start menu or the desktop shortcut. Windows SmartScreen warns about unsigned builds. Use v0.3.1 or later on Windows: in earlier installers, the app could not reach the installed service.
 
 **Linux.** Install the package for your distribution with `sudo`. It sets you as the owner and starts the `ghostlinkd` service:
 
@@ -143,7 +143,7 @@ More: [protocol design](docs/architecture/protocols.md) · [architecture record]
 
 ## Security and privacy
 
-- **Local control:** a named pipe (Windows) or Unix socket restricted to SYSTEM/root and the one authorized user. Clients verify the service's identity.
+- **Local control:** a named pipe (Windows) or Unix socket restricted to SYSTEM/root and the one authorized user. Clients check who created the pipe before sending anything.
 - **Credentials:** encrypted at rest. Keys never appear in process arguments, lists, status or audit logs, and agent fingerprints are salted. Server management keys are sealed the same way and are owner-only.
 - **Imports:** strict allowlist parsing everywhere; no imported setting can run a command.
 - **Network health:** "connected" requires an observed tunnel interface and a successful HTTPS check through it. A cleanup failure blocks the next connection until it is investigated.

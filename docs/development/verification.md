@@ -2,6 +2,18 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.3.1 Windows installed-service fix (2026-11-06)
+
+First real MSI installation, on the user's Windows 11 machine by the user.
+
+| Check | Result actually observed |
+|---|---|
+| Installed v0.3.0 | The `Ghostlink` service was installed and running as LocalSystem, with the user's SID as owner. `\\.\pipe\ghostlink` existed: owner BUILTIN\Administrators, DACL `D:P(A;;FA;;;SY)(A;;0x12019f;;;<user SID>)`, and a plain pipe connect succeeded. The installed v0.3.0 CLI and app still reported `daemon_unavailable`: the client's identity check opened the SYSTEM process token, which a standard user may not do |
+| Fixed client against the real installed service | The rebuilt CLI with the pipe-owner check answered `status` and `doctor` from that SYSTEM service, while the installed v0.3.0 CLI failed side by side. Shortly afterwards the user uninstalled v0.3.0 (16:43), so the fixed desktop app could not also be checked against an installed service |
+| Same-user development path | The 19 process tests (service as the same user, pipe owned by that user) passed with the new check |
+| Shortcuts | The v0.3.0 MSI's Start-menu shortcut had no icon (`IconLocation ",0"`) and there was no desktop shortcut. The v0.3.1 MSI's Shortcut table has `StartMenuShortcut` and `DesktopShortcut`, both with `Icon_ = Ghostlink.ico`, which is present in the Icon table and set as `ARPPRODUCTICON`. The WiX build validated |
+| Not verified | The fixed app installed from the v0.3.1 MSI, and the shortcut icon appearing in Explorer (both need the user's installation) |
+
 ## v0.3.0 Ghostlink server and server management (2026-11-06)
 
 Observed on the Windows development host (unelevated, loopback only) unless noted. Release CI results for the server packages are recorded when the release runs.
