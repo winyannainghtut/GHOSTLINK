@@ -217,7 +217,7 @@ func (s *State) routeRules() ([]any, []any) {
 		object{"action": "resolve", "strategy": "prefer_ipv4"},
 		internalBlock(object{"ip_is_private": true}),
 		internalBlock(object{"ip_cidr": internalRanges}),
-		object{"port": []uint16{s.API.Port}, "action": "reject"},
+		object{"port": s.privatePorts(), "action": "reject"},
 	)
 	if addr, err := netip.ParseAddr(s.Hostname); err == nil {
 		rules = append(rules, internalBlock(object{"ip_cidr": []string{netip.PrefixFrom(addr, addr.BitLen()).String()}}))
@@ -239,6 +239,15 @@ func (s *State) routeRules() ([]any, []any) {
 	rules = append(rules, blockRules(s.Rules, nil)...)
 	dnsRules = append(dnsRules, dnsBlockRule(s.Rules.BlockedDomains, nil)...)
 	return rules, dnsRules
+}
+
+// privatePorts are this server's own service ports, which VPN users must never reach.
+func (s *State) privatePorts() []uint16 {
+	ports := []uint16{s.API.Port}
+	if s.meshEnabled() {
+		ports = append(ports, s.Mesh.Port)
+	}
+	return ports
 }
 
 // EngineConfig renders the sing-box configuration for the current state.
@@ -285,6 +294,9 @@ func (s *State) Listening() map[string]string {
 	if s.AmneziaWG.Enabled {
 		ports[AmneziaWG] = "udp/" + strconv.Itoa(int(s.AmneziaWG.Port))
 	}
+	if s.meshEnabled() {
+		ports["mesh"] = "tcp/" + strconv.Itoa(int(s.Mesh.Port))
+	}
 	if s.appleEnabled() {
 		// strongSwan owns 500 and 4500 (iOS cannot use other ports); the DNS listener is ours.
 		ports["ipsec-ike"], ports["ipsec-natt"] = "udp/500", "udp/4500"
@@ -312,7 +324,10 @@ func (s *State) CheckPorts() error {
 	if s.Dashboard.Port != 0 && (s.Dashboard.Port < 1024 || s.Dashboard.Port == 443) {
 		return fmt.Errorf("the dashboard needs its own port from 1024 to 65535 (not 443)")
 	}
-	names := []string{"api", "dashboard", Shadowsocks, VLESS, WireGuard, AmneziaWG, "ipsec-ike", "ipsec-natt", ipsecDNSTag}
+	if s.meshEnabled() && (s.Mesh.Port < 1024 || s.Mesh.Port == 443) {
+		return fmt.Errorf("the mesh needs its own port from 1024 to 65535 (not 443)")
+	}
+	names := []string{"api", "dashboard", "mesh", Shadowsocks, VLESS, WireGuard, AmneziaWG, "ipsec-ike", "ipsec-natt", ipsecDNSTag}
 	for i, a := range names {
 		for _, b := range names[i+1:] {
 			pa, okA := ports[a]

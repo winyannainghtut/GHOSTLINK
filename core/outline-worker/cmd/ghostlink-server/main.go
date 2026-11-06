@@ -185,6 +185,16 @@ func serve(dir, logLevel string) {
 			}
 		}
 	})
+	// Mesh agents connect to their own port (on only while the mesh is on).
+	meshServer := server.NewMeshServer(service)
+	if err := meshServer.Apply(); err != nil {
+		fmt.Fprintf(os.Stderr, "ghostlink-server: mesh not started: %v\n", err)
+	}
+	service.OnChange(func(previous, next *server.State) {
+		if err := meshServer.Apply(); err != nil {
+			fmt.Fprintf(os.Stderr, "ghostlink-server: mesh: %v\n", err)
+		}
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	served := make(chan error, 1)
@@ -207,6 +217,7 @@ func serve(dir, logLevel string) {
 	_ = httpServer.Shutdown(shutdown)
 	cancel()
 	dashboard.Close()
+	meshServer.Close()
 	<-accounted
 	if err := service.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "ghostlink-server: engine close: %v\n", err)

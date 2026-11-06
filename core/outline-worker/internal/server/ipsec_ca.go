@@ -128,8 +128,7 @@ func (s *State) ensureIPsecPKI(now time.Time, free func(string, uint16) bool) er
 		s.IPsec.GroupName = defaultGroup
 	}
 	if s.IPsec.DNSPort == 0 {
-		used := map[uint16]bool{s.API.Port: true, s.Dashboard.Port: true, s.Shadowsocks.Port: true, s.VLESS.Port: true, s.WireGuard.Port: true, s.AmneziaWG.Port: true}
-		port, err := pickPort(used, free, "tcp", "udp")
+		port, err := pickPort(s.usedPorts(), free, "tcp", "udp")
 		if err != nil {
 			return err
 		}
