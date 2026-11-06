@@ -8,7 +8,7 @@ import {
   useEffect,
   useRef,
   useState,
-  type ButtonHTMLAttributes,
+  type ComponentProps,
   type ReactNode,
 } from 'react';
 
@@ -37,7 +37,7 @@ export function CardTitle({ title, detail, action }: { title: ReactNode; detail?
 }
 
 type Variant = 'cta' | 'glass' | 'ghost' | 'danger';
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md'; icon?: ReactNode };
+type ButtonProps = ComponentProps<'button'> & { variant?: Variant; size?: 'sm' | 'md'; icon?: ReactNode };
 
 export function Button({ variant = 'glass', size = 'md', icon, className, children, type = 'button', ...rest }: ButtonProps) {
   return (
@@ -60,7 +60,7 @@ export function Button({ variant = 'glass', size = 'md', icon, className, childr
   );
 }
 
-export function IconButton({ label, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+export function IconButton({ label, className, children, ...rest }: ComponentProps<'button'> & { label: string }) {
   return (
     <button
       type="button"
@@ -306,7 +306,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             className={cx(
-              'glass-strong pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-2.5 rounded-full px-4.5 py-2.5 text-[13px] text-fg',
+              'glass-strong pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-2.5 rounded-[22px] px-4.5 py-2.5 text-[13px] text-fg',
               'animate-[sheet-in_0.3s_cubic-bezier(0.2,0.9,0.25,1)]',
             )}
           >

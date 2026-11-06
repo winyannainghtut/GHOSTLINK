@@ -4,7 +4,9 @@
 @import './fonts.css';
 
 @source '../shared';
+@source '../admin';
 @source '../dashboard/src';
+@source '../desktop/src';
 
 @theme inline {
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Plus Jakarta Sans Variable', 'Inter', 'Segoe UI', sans-serif;

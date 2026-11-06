@@ -1,45 +1,22 @@
 // The dashboard shell: glass waves behind a floating navigation bar, three views and the sheets.
-import { LogOut, Plus, Settings2, Waves } from 'lucide-react';
+import { LogOut, Plus, Settings2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import type { Server } from '@admin/api';
+import { Island } from '@admin/Island';
+import { StoreProvider, useStore } from '@admin/store';
+import { Clients } from '@admin/views/Clients';
+import { NewClient } from '@admin/views/NewClient';
+import { Network } from '@admin/views/Network';
+import { Overview } from '@admin/views/Overview';
+import { SettingsSheet } from '@admin/views/Settings';
 import { WaveBackground } from '@shared/WaveBackground';
-import { Button, Card, IconButton, Segmented, UIProvider, cx } from '@shared/glass';
-import { prefersReducedMotion, useStoredState } from '@shared/hooks';
-import { signIn, signOut, type Server } from './api';
-import { Island } from './Island';
-import { StoreProvider, useStore } from './store';
-import { Clients } from './views/Clients';
-import { NewClient } from './views/NewClient';
-import { Network } from './views/Network';
-import { Overview } from './views/Overview';
-import { SettingsSheet } from './views/Settings';
+import { FinishPicker, Mark, MotionButton, useAppearance, type Appearance } from '@shared/appearance';
+import { Button, Card, IconButton, Segmented, UIProvider } from '@shared/glass';
+import { useStoredState } from '@shared/hooks';
+import { signIn, signOut } from './session';
 
-export const FINISHES = ['obsidian', 'titanium', 'daylight'] as const;
-export type Finish = (typeof FINISHES)[number];
-const MOTIONS = ['subtle', 'calm', 'still'] as const;
-type Motion = (typeof MOTIONS)[number];
 const VIEWS = ['overview', 'clients', 'network'] as const;
 type View = (typeof VIEWS)[number];
-
-export function Mark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 40 40" className={className} aria-hidden="true">
-      <rect width="40" height="40" rx="12" className="fill-fg" />
-      <path d="M12 29.5V19a8 8 0 0 1 16 0v10.5l-2.67-2-2.66 2-2.67-2-2.67 2-2.66-2z" fill="none" className="stroke-canvas" strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx="17" cy="19.5" r="1.6" className="fill-canvas" />
-      <circle cx="23" cy="19.5" r="1.6" className="fill-canvas" />
-    </svg>
-  );
-}
-
-function useAppearance() {
-  const [finish, setFinish] = useStoredState<Finish>('ghostlink-finish', 'obsidian', FINISHES);
-  const [motion, setMotion] = useStoredState<Motion>('ghostlink-motion', prefersReducedMotion() ? 'still' : 'subtle', MOTIONS);
-  useEffect(() => {
-    document.documentElement.dataset.finish = finish;
-    document.documentElement.dataset.motion = motion;
-  }, [finish, motion]);
-  return { finish, setFinish, motion, setMotion };
-}
 
 export function App() {
   const appearance = useAppearance();
@@ -96,13 +73,11 @@ function SignIn({ message }: { message: string }) {
   );
 }
 
-function Shell({ appearance, onSignOut }: { appearance: ReturnType<typeof useAppearance>; onSignOut: () => void }) {
+function Shell({ appearance, onSignOut }: { appearance: Appearance; onSignOut: () => void }) {
   const { server } = useStore();
   const [view, setView] = useStoredState<View>('ghostlink-view', 'overview', VIEWS);
   const [newClient, setNewClient] = useState(false);
   const [settings, setSettings] = useState(false);
-  const { finish, setFinish, motion, setMotion } = appearance;
-  const nextMotion: Record<Motion, Motion> = { subtle: 'calm', calm: 'still', still: 'subtle' };
 
   return (
     <>
@@ -131,16 +106,8 @@ function Shell({ appearance, onSignOut }: { appearance: ReturnType<typeof useApp
             <Island />
           </div>
           <div className="ml-auto flex items-center gap-1.5 lg:w-[300px] lg:justify-end">
-            <button
-              type="button"
-              onClick={() => setMotion(nextMotion[motion])}
-              title="Background motion"
-              className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[12.5px] text-fg-2 transition hover:bg-glass-strong hover:text-fg"
-            >
-              <Waves size={16} />
-              <span className="w-[42px] text-left capitalize">{motion}</span>
-            </button>
-            <FinishPicker value={finish} onChange={setFinish} />
+            <MotionButton motion={appearance.motion} onChange={appearance.setMotion} />
+            <FinishPicker value={appearance.finish} onChange={appearance.setFinish} />
             <IconButton label="Server settings" onClick={() => setSettings(true)}>
               <Settings2 size={17} />
             </IconButton>
@@ -156,31 +123,15 @@ function Shell({ appearance, onSignOut }: { appearance: ReturnType<typeof useApp
         {view === 'network' && <Network />}
       </main>
       <NewClient open={newClient} onClose={() => setNewClient(false)} />
-      <SettingsSheet open={settings} onClose={() => setSettings(false)} footer={<Button variant="ghost" icon={<LogOut size={15} />} onClick={onSignOut}>Sign out</Button>} />
+      <SettingsSheet
+        open={settings}
+        onClose={() => setSettings(false)}
+        footer={
+          <Button variant="ghost" icon={<LogOut size={15} />} onClick={onSignOut}>
+            Sign out
+          </Button>
+        }
+      />
     </>
-  );
-}
-
-const swatch: Record<Finish, string> = {
-  obsidian: 'bg-[#090a0d]',
-  titanium: 'bg-[#2a2e37]',
-  daylight: 'bg-[#f2f4f8]',
-};
-
-function FinishPicker({ value, onChange }: { value: Finish; onChange: (f: Finish) => void }) {
-  return (
-    <div role="radiogroup" aria-label="Finish" className="inset-glass flex items-center gap-1 rounded-full p-1">
-      {FINISHES.map(f => (
-        <button
-          key={f}
-          type="button"
-          role="radio"
-          aria-checked={value === f}
-          title={f[0].toUpperCase() + f.slice(1)}
-          onClick={() => onChange(f)}
-          className={cx('size-6 rounded-full border transition', swatch[f], value === f ? 'border-fg ring-2 ring-fg/25' : 'border-line hover:scale-110')}
-        />
-      ))}
-    </div>
   );
 }

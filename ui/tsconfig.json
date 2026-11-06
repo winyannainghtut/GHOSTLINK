@@ -14,7 +14,7 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": false,
     "types": [],
-    "paths": { "@shared/*": ["./shared/*"] }
+    "paths": { "@shared/*": ["./shared/*"], "@admin/*": ["./admin/*"] }
   },
-  "include": ["shared", "dashboard/src", "vite.dashboard.config.ts", "env.d.ts"]
+  "include": ["shared", "admin", "dashboard/src", "desktop/src", "vite.dashboard.config.ts", "vite.desktop.config.ts", "env.d.ts"]
 }

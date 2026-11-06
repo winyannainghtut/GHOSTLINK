@@ -115,56 +115,34 @@ export type { Topology };
 
 export class SignedOut extends Error {}
 
-export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch('/api' + path, {
-    method,
-    credentials: 'same-origin',
-    headers: { 'X-Ghostlink-Dashboard': '1', 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (response.status === 401) throw new SignedOut('Your session ended. Open the login link from the server again.');
-  if (!response.ok) {
-    let message = 'The server refused the request';
-    try {
-      message = (await response.json()).error || message;
-    } catch {
-      /* not JSON */
-    }
-    throw new Error(message);
-  }
-  return response.status === 204 ? (null as T) : ((await response.json()) as T);
+// How the admin views reach a server: the dashboard calls this server's /api over HTTP; the
+// desktop app sends typed operations through the local service. Paths and bodies follow the
+// server's management API (docs/deployment/ghostlink-server.md).
+export type SavedFile = { name: string; extension: 'conf' | 'mobileconfig' | 'html'; content: string; mime: string };
+export type Transport = {
+  call<T>(method: string, path: string, body?: unknown): Promise<T>;
+  // Text answers: QR codes (SVG), connection kits (HTML) and Apple profiles (XML).
+  text(path: string): Promise<string>;
+  // Saves a file the user asked for; returns where it went, when the app knows.
+  save(file: SavedFile): Promise<string | null>;
+  // The desktop app can also use a key on this device (it becomes a VPN connection there).
+  useHere?: (user: User, key: Key) => Promise<void>;
+};
+
+let transport: Transport | null = null;
+export function setTransport(next: Transport): void {
+  transport = next;
+}
+function current(): Transport {
+  if (!transport) throw new Error('No server connection');
+  return transport;
 }
 
-export async function apiBlob(path: string): Promise<Blob> {
-  const response = await fetch('/api' + path, { credentials: 'same-origin', headers: { 'X-Ghostlink-Dashboard': '1' } });
-  if (response.status === 401) throw new SignedOut('Your session ended.');
-  if (!response.ok) throw new Error('The server refused the request');
-  return response.blob();
-}
+export const api = <T,>(method: string, path: string, body?: unknown): Promise<T> => current().call<T>(method, path, body);
+export const apiText = (path: string): Promise<string> => current().text(path);
+export const saveFile = (file: SavedFile): Promise<string | null> => current().save(file);
+export const canUseHere = (): boolean => !!transport?.useHere;
+export const useHere = (user: User, key: Key): Promise<void> => current().useHere!(user, key);
 
-// Sign in with the token after # in the login link (it never reaches a request line).
-export async function signIn(): Promise<{ server: Server | null; error: string }> {
-  const token = new URLSearchParams(location.hash.slice(1)).get('t');
-  if (token) {
-    history.replaceState(null, '', location.pathname);
-    const response = await fetch('/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
-    if (!response.ok) {
-      let message = 'This login link is not valid.';
-      try {
-        message = (await response.json()).error || message;
-      } catch {
-        /* not JSON */
-      }
-      return { server: null, error: message };
-    }
-  }
-  try {
-    return { server: await api<Server>('GET', '/server'), error: '' };
-  } catch {
-    return { server: null, error: token ? 'Could not sign in.' : '' };
-  }
-}
-
-export async function signOut(): Promise<void> {
-  await fetch('/logout', { method: 'POST', credentials: 'same-origin' });
-}
+// QR codes come back as SVG text; a data: URL shows them under both apps' CSPs.
+export const svgURL = (svg: string): string => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);

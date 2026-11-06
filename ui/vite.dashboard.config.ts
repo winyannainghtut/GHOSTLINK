@@ -13,7 +13,7 @@ export default defineConfig({
   root: here('./dashboard'),
   base: './',
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { '@shared': here('./shared') } },
+  resolve: { alias: { '@shared': here('./shared'), '@admin': here('./admin') } },
   build: {
     outDir: here('../core/outline-worker/internal/server/dashboard'),
     emptyOutDir: true,

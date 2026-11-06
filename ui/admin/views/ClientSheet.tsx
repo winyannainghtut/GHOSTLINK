@@ -155,6 +155,11 @@ function KeysTab({ user }: { user: User }) {
                       <Button size="sm" icon={<Copy size={13} />} onClick={() => tools.copyKey(user, key.id)}>
                         Copy key
                       </Button>
+                      {tools.canUseHere && (
+                        <Button size="sm" variant="ghost" onClick={() => tools.useHere(user, key.id)}>
+                          Use on this device
+                        </Button>
+                      )}
                     </>
                   )}
                   {summary && (

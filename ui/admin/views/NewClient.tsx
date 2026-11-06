@@ -1,12 +1,11 @@
 // New client: name, protocol and an optional data limit. The server creates the client and its
 // key (WireGuard-family keys get the next free /32 and a fresh Curve25519 key pair), then the
 // sheet shows the QR code, the .conf and the share options.
-import { Check as CheckIcon, Copy, FileDown, KeyRound } from 'lucide-react';
+import { Check as CheckIcon, Copy, FileDown, KeyRound, MonitorDown } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fileSafe, saveBlob } from '@shared/format';
 import { Button, Field, Inner, Note, Sheet, cx, useUI } from '@shared/glass';
-import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, apiBlob, type Key, type ProtocolId, type User } from '../api';
-import { hasConf, isApple } from '../keys';
+import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, canUseHere, useHere, type Key, type ProtocolId, type User } from '../api';
+import { hasConf, isApple, qrFor, saveConf, saveKit, saveProfile } from '../keys';
 import { useStore } from '../store';
 
 type Created = { user: User; key: Key; qr?: string };
@@ -36,11 +35,15 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
   useEffect(() => {
     if (isApple(protocol)) setAuth(AUTH[protocol as 'ikev2' | 'ipsec'][0][0]);
   }, [protocol]);
-  useEffect(() => () => {
-    if (created?.qr) URL.revokeObjectURL(created.qr);
-  }, [created]);
 
   const pool = server.address_pools?.find(p => p.protocol === protocol);
+  const run = async (work: () => Promise<string>) => {
+    try {
+      toast(await work());
+    } catch (e) {
+      toast((e as Error).message, 'bad');
+    }
+  };
 
   const create = async () => {
     setBusy(true);
@@ -52,7 +55,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
       user = await api<User>('POST', '/users', body);
       const key = await api<Key>('POST', `/users/${user.id}/keys`, isApple(protocol) ? { protocol, auth } : { protocol });
       let qr: string | undefined;
-      if (!isApple(protocol)) qr = URL.createObjectURL(await apiBlob(`/users/${user.id}/keys/${key.id}/qr?format=svg&content=${key.config ? 'conf' : 'key'}`));
+      if (!isApple(protocol)) qr = await qrFor(user, key, key.config ? 'conf' : 'key');
       setCreated({ user, key, qr });
       if (key.warning) toast(key.warning, 'info');
       await Promise.all([reloadUsers(), reloadServer()]);
@@ -96,7 +99,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
             </p>
             <div className="flex flex-wrap gap-2">
               {hasConf(key.protocol) && key.config && (
-                <Button icon={<FileDown size={14} />} onClick={() => saveBlob(new Blob([key.config!], { type: 'text/plain' }), `${fileSafe(user.name)}-${key.protocol}.conf`)}>
+                <Button icon={<FileDown size={14} />} onClick={() => run(() => saveConf(user, key))}>
                   Download .conf
                 </Button>
               )}
@@ -104,7 +107,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                 <Button
                   variant="cta"
                   icon={<FileDown size={14} />}
-                  onClick={async () => saveBlob(await apiBlob(`/users/${user.id}/keys/${key.id}/profile`), `${fileSafe(user.name)}-${key.protocol}.mobileconfig`)}
+                  onClick={() => run(() => saveProfile(user, key))}
                 >
                   Download profile
                 </Button>
@@ -113,7 +116,12 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                   Copy key
                 </Button>
               )}
-              <Button variant="ghost" icon={<FileDown size={14} />} onClick={async () => saveBlob(await apiBlob(`/users/${user.id}/kit`), `${fileSafe(user.name)}-vpn.html`)}>
+              {canUseHere() && !isApple(key.protocol) && (
+                <Button icon={<MonitorDown size={14} />} onClick={() => run(async () => (await useHere(user, key), 'Saved under My servers on this device.'))}>
+                  Use on this device
+                </Button>
+              )}
+              <Button variant="ghost" icon={<FileDown size={14} />} onClick={() => run(() => saveKit(user))}>
                 Connection kit
               </Button>
             </div>

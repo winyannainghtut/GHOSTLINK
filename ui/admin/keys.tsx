@@ -1,9 +1,11 @@
-// Actions on a client's keys, shared by the client cards, the list and the client sheet.
-import { Smartphone, Laptop, Globe, UserRound } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
-import { fileSafe, saveBlob } from '@shared/format';
+// Actions on a client's keys, shared by the client cards, the list, the client sheet and the
+// new-client flow. Files go through the transport (a download in the dashboard, the Downloads
+// folder in the desktop app).
+import { Globe, Laptop, Smartphone, UserRound } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { fileSafe } from '@shared/format';
 import { Button, Sheet, useUI } from '@shared/glass';
-import { APPLE, api, apiBlob, protocolName, type Key, type KeySummary, type User } from './api';
+import { APPLE, api, apiText, canUseHere, protocolName, saveFile, svgURL, useHere, type Key, type KeySummary, type User } from './api';
 
 export const isApple = (protocol: string) => (APPLE as string[]).includes(protocol);
 export const hasConf = (protocol: string) => protocol === 'wireguard' || protocol === 'amneziawg';
@@ -26,6 +28,31 @@ export function DeviceIcon({ user, size = 18 }: { user: User; size?: number }) {
   return <UserRound size={size} />;
 }
 
+const saved = (where: string | null, what: string) => (where ? `${what} saved to ${where}.` : `${what} downloaded.`);
+
+export async function saveConf(user: User, key: Key): Promise<string> {
+  if (!key.config) throw new Error('This key has no .conf file.');
+  const where = await saveFile({ name: `${fileSafe(user.name)}-${key.protocol}-${key.id}`, extension: 'conf', content: key.config, mime: 'text/plain' });
+  return saved(where, '.conf') + ' Import it in the WireGuard or AmneziaWG app.';
+}
+
+export async function saveProfile(user: User, key: Key, askPassword = false): Promise<string> {
+  const content = await apiText(`/users/${user.id}/keys/${key.id}/profile${askPassword ? '?prompt_password=1' : ''}`);
+  const where = await saveFile({ name: `${fileSafe(user.name)}-${key.protocol}-${key.id}`, extension: 'mobileconfig', content, mime: 'application/x-apple-aspen-config' });
+  return askPassword
+    ? `${saved(where, 'Profile')} It has no password: give ${user.name} this one separately: ${key.certificate_password}`
+    : `${saved(where, 'Profile')} Send it privately (AirDrop, Mail or Files); opening it installs the VPN.`;
+}
+
+export async function saveKit(user: User): Promise<string> {
+  const where = await saveFile({ name: `${fileSafe(user.name)}-vpn`, extension: 'html', content: await apiText(`/users/${user.id}/kit`), mime: 'text/html' });
+  return `${saved(where, 'Connection kit')} It contains ${user.name}'s keys: send it privately.`;
+}
+
+export async function qrFor(user: User, key: Key, content: 'conf' | 'key'): Promise<string> {
+  return svgURL(await apiText(`/users/${user.id}/keys/${key.id}/qr?format=svg&content=${content}`));
+}
+
 const scanHint = (key: Key, content: string) =>
   content === 'conf'
     ? 'Scan with the WireGuard or AmneziaWG app: + → Scan from QR code.'
@@ -38,9 +65,6 @@ const scanHint = (key: Key, content: string) =>
 export function useKeyTools(onChanged?: () => void) {
   const { toast, confirm } = useUI();
   const [qr, setQr] = useState<{ url: string; title: string; note: string } | null>(null);
-  useEffect(() => () => {
-    if (qr?.url) URL.revokeObjectURL(qr.url);
-  }, [qr]);
 
   const full = async (user: User, id: string) => {
     const keys = await api<Key[]>('GET', `/users/${user.id}/keys`);
@@ -57,48 +81,26 @@ export function useKeyTools(onChanged?: () => void) {
   };
 
   const tools = {
+    canUseHere: canUseHere(),
     showQR: (user: User, id: string, content: 'auto' | 'conf' | 'key' = 'auto') =>
       run(async () => {
         const key = await full(user, id);
         const kind = content === 'auto' ? (key.config ? 'conf' : 'key') : content;
-        const blob = await apiBlob(`/users/${user.id}/keys/${key.id}/qr?format=svg&content=${kind}`);
-        setQr({ url: URL.createObjectURL(blob), title: `${protocolName(key.protocol)} · ${user.name}`, note: scanHint(key, kind) });
+        setQr({ url: await qrFor(user, key, kind), title: `${protocolName(key.protocol)} · ${user.name}`, note: scanHint(key, kind) });
       }),
-    downloadConf: (user: User, id: string) =>
-      run(async () => {
-        const key = await full(user, id);
-        if (!key.config) throw new Error('This key has no .conf file.');
-        saveBlob(new Blob([key.config], { type: 'text/plain' }), `${fileSafe(user.name)}-${key.protocol}-${key.id}.conf`);
-        toast('.conf downloaded. Import it in the WireGuard or AmneziaWG app.');
-      }),
+    downloadConf: (user: User, id: string) => run(async () => toast(await saveConf(user, await full(user, id)))),
     copyKey: (user: User, id: string) =>
       run(async () => {
         const key = await full(user, id);
         await navigator.clipboard.writeText(key.access_key);
         toast('Key copied. Share it only with ' + user.name + '.');
       }),
-    copyConf: (user: User, id: string) =>
+    downloadProfile: (user: User, id: string, askPassword = false) => run(async () => toast(await saveProfile(user, await full(user, id), askPassword), askPassword ? 'info' : 'ok')),
+    downloadKit: (user: User) => run(async () => toast(await saveKit(user))),
+    useHere: (user: User, id: string) =>
       run(async () => {
-        const key = await full(user, id);
-        await navigator.clipboard.writeText(key.config ?? '');
-        toast('.conf copied.');
-      }),
-    downloadProfile: (user: User, id: string, askPassword = false) =>
-      run(async () => {
-        const key = await full(user, id);
-        const blob = await apiBlob(`/users/${user.id}/keys/${key.id}/profile${askPassword ? '?prompt_password=1' : ''}`);
-        saveBlob(blob, `${fileSafe(user.name)}-${key.protocol}-${key.id}.mobileconfig`);
-        toast(
-          askPassword
-            ? `Profile saved without its password. Give ${user.name} this password separately: ${key.certificate_password}`
-            : 'Profile saved. Send it privately (AirDrop, Mail or Files); opening it installs the VPN.',
-          askPassword ? 'info' : 'ok',
-        );
-      }),
-    downloadKit: (user: User) =>
-      run(async () => {
-        saveBlob(await apiBlob(`/users/${user.id}/kit`), `${fileSafe(user.name)}-vpn.html`);
-        toast('Connection kit saved. It contains ' + user.name + "'s keys: send it privately.");
+        await useHere(user, await full(user, id));
+        toast('Saved under My servers on this device.');
       }),
     revoke: (user: User, key: KeySummary) =>
       run(async () => {
