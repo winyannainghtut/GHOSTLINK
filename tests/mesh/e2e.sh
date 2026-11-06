@@ -90,12 +90,12 @@ grep -q "100.96.0.0/16" "$work/enable.txt"
 step "Join four nodes"
 join() { # NS NAME INVITE-OPTIONS -- AGENT-OPTIONS
     local ns=$1 name=$2; shift 2
-    local options=() agent=()
+    local options=() agent_flags=()
     while [ $# -gt 0 ] && [ "$1" != -- ]; do options+=("$1"); shift; done
     [ $# -gt 0 ] && shift
-    agent=("$@")
+    agent_flags=("$@")
     invite=$(admin --json mesh invite "${options[@]}" | jq -r .invite)
-    in_ns "$ns" env GHOSTLINK_MESH_INVITE="$invite" "$bin/ghostlink-mesh" join --state "$work/$ns" --name "$name" "${agent[@]}" | tee -a "$work/joins.txt"
+    in_ns "$ns" env GHOSTLINK_MESH_INVITE="$invite" "$bin/ghostlink-mesh" join --state "$work/$ns" --name "$name" "${agent_flags[@]}" | tee -a "$work/joins.txt"
     ip netns exec "$ns" "$bin/ghostlink-mesh" serve --state "$work/$ns" >"$work/$ns.log" 2>&1 &
     pids+=($!)
     agent[$ns]=$!
