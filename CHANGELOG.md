@@ -11,6 +11,7 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
   - It prints the management key and the ports to open.
   - Options: `--hostname`, `--ipsec`, `--open-firewall` (only for an active ufw or firewalld), `--version`, `--package` for offline installs.
   - Running it again upgrades.
+  - On servers with under 1 GB of memory and swap (for example the smallest AWS Lightsail plans) it stops before installing, because the kernel would kill the installation; `--add-swap` adds a 1 GB swap file. It also finishes an installation that was interrupted.
 
 ### Fixed
 
