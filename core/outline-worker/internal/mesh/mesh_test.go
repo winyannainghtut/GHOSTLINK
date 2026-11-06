@@ -194,7 +194,7 @@ func TestGenerationFollowsContent(t *testing.T) {
 	f.sync(a, "203.0.113.1")
 	f.sync(b, "203.0.113.2")
 	first := f.config(a).Generation
-	if again := f.config(a).Generation; again != first || first == 0 {
+	if again := f.config(a).Generation; again != first || first == 0 || first >= 1<<53 {
 		t.Fatal("generation is not stable")
 	}
 	tags := []string{"db"}

@@ -71,7 +71,9 @@ func (l *Live) config(n *Network, node *Node, now time.Time) (*meshproto.Config,
 	slices.Sort(c.Routes)
 	data, _ := json.Marshal(c)
 	sum := sha256.Sum256(data)
-	c.Generation = binary.BigEndian.Uint64(sum[:8]) | 1 // never 0, which means "nothing applied"
+	// 53 bits, so JSON readers that use doubles (JavaScript, jq) keep it exact; never 0, which
+	// means "nothing applied".
+	c.Generation = binary.BigEndian.Uint64(sum[:8])&(1<<53-1) | 1
 	return c, c.Validate()
 }
 

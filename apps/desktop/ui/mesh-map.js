@@ -13,66 +13,21 @@
     return node;
   }
 
-  // A small deterministic pseudo-random generator, so the same mesh always lays out the same.
-  function seeded(text) {
-    let h = 2166136261;
-    for (const ch of text) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-    return () => {
-      h = Math.imul(h ^ (h >>> 15), 2246822507);
-      h = Math.imul(h ^ (h >>> 13), 3266489909);
-      return ((h ^= h >>> 16) >>> 0) / 4294967296;
-    };
-  }
-
-  // Force-directed placement (Fruchterman-Reingold). Saved positions stay where they are.
-  function layout(nodes, links, saved) {
+  // Every active pair of mesh nodes is linked, so a ring reads best: relays first (at the top),
+  // then the others by ID; nodes waiting or disabled come last. Large meshes use two rings.
+  // The same mesh always lays out the same; saved (dragged) positions stay where they are.
+  function layout(nodes, saved) {
+    const rank = n => (n.relay ? 0 : n.status === 'active' ? 1 : 2);
+    const ordered = [...nodes].sort((a, b) => rank(a) - rank(b) || Number(a.id) - Number(b.id));
     const positions = {};
-    const ids = nodes.map(n => n.id).sort((a, b) => Number(a) - Number(b));
-    const random = seeded(ids.join(','));
-    ids.forEach((id, i) => {
-      if (saved && saved[id]) positions[id] = { x: saved[id].x, y: saved[id].y, pinned: true };
-      else {
-        const angle = (2 * Math.PI * i) / Math.max(ids.length, 1);
-        positions[id] = { x: WIDTH / 2 + 170 * Math.cos(angle) + random() * 20, y: HEIGHT / 2 + 150 * Math.sin(angle) + random() * 20, pinned: false };
-      }
+    const count = ordered.length, twoRings = count > 14;
+    ordered.forEach((node, i) => {
+      if (saved && saved[node.id]) { positions[node.id] = { x: saved[node.id].x, y: saved[node.id].y, pinned: true }; return; }
+      if (count === 1) { positions[node.id] = { x: WIDTH / 2, y: HEIGHT / 2 - 20, pinned: false }; return; }
+      const scale = twoRings && i % 2 ? 0.6 : 1;
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / count;
+      positions[node.id] = { x: WIDTH / 2 + (WIDTH / 2 - 130) * scale * Math.cos(angle), y: HEIGHT / 2 - 12 + (HEIGHT / 2 - 85) * scale * Math.sin(angle), pinned: false };
     });
-    const free = ids.filter(id => !positions[id].pinned);
-    if (free.length) {
-      const k = Math.sqrt((WIDTH * HEIGHT) / Math.max(ids.length, 1)) * 0.7;
-      let temperature = 60;
-      for (let step = 0; step < 220; step++) {
-        const shift = {};
-        for (const id of ids) shift[id] = { x: 0, y: 0 };
-        for (let i = 0; i < ids.length; i++) {
-          for (let j = i + 1; j < ids.length; j++) {
-            const a = positions[ids[i]], b = positions[ids[j]];
-            let dx = a.x - b.x, dy = a.y - b.y;
-            const distance = Math.max(Math.hypot(dx, dy), 0.01);
-            const force = (k * k) / distance;
-            dx /= distance; dy /= distance;
-            shift[ids[i]].x += dx * force; shift[ids[i]].y += dy * force;
-            shift[ids[j]].x -= dx * force; shift[ids[j]].y -= dy * force;
-          }
-        }
-        for (const link of links) {
-          const a = positions[link.a], b = positions[link.b];
-          if (!a || !b) continue;
-          let dx = a.x - b.x, dy = a.y - b.y;
-          const distance = Math.max(Math.hypot(dx, dy), 0.01);
-          const force = (distance * distance) / k;
-          dx /= distance; dy /= distance;
-          shift[link.a].x -= dx * force; shift[link.a].y -= dy * force;
-          shift[link.b].x += dx * force; shift[link.b].y += dy * force;
-        }
-        for (const id of free) {
-          const s = shift[id], length = Math.max(Math.hypot(s.x, s.y), 0.01);
-          const p = positions[id];
-          p.x = Math.min(WIDTH - 70, Math.max(70, p.x + (s.x / length) * Math.min(length, temperature)));
-          p.y = Math.min(HEIGHT - 70, Math.max(50, p.y + (s.y / length) * Math.min(length, temperature)));
-        }
-        temperature *= 0.97;
-      }
-    }
     return positions;
   }
 
@@ -93,6 +48,7 @@
       this.svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       this.svg.classList.add('mesh-map');
       this.positions = {};
+      this.layoutIds = null;
       this.selected = null;
       this.topology = null;
       this.drag = null;
@@ -125,19 +81,21 @@
       const key = this.storageKey();
       if (key && this.options.storage) this.options.storage.removeItem(key);
       this.positions = {};
+      this.layoutIds = null;
       if (this.topology) this.update(this.topology);
     }
 
     update(topology) {
-      if (this.topology && this.topology.id !== topology.id) { this.positions = {}; this.selected = null; }
+      if (this.topology && this.topology.id !== topology.id) { this.positions = {}; this.layoutIds = null; this.selected = null; }
       this.topology = topology;
       const nodes = topology.nodes || [];
-      const missing = nodes.some(n => !this.positions[n.id]);
-      if (missing) {
+      const ids = nodes.map(n => n.id).sort().join(',');
+      // Lay out again only when nodes come or go; dragged nodes keep their place.
+      if (ids !== this.layoutIds) {
+        this.layoutIds = ids;
         const saved = this.saved();
         for (const [id, p] of Object.entries(this.positions)) if (p.pinned) saved[id] = p;
-        const placed = layout(nodes, topology.links || [], saved);
-        for (const n of nodes) if (!this.positions[n.id]) this.positions[n.id] = placed[n.id];
+        this.positions = layout(nodes, saved);
       }
       this.render();
     }
@@ -160,36 +118,57 @@
       const linksLayer = svg('g', { class: 'links' }, this.svg);
       const routesLayer = svg('g', { class: 'routes' }, this.svg);
       const nodesLayer = svg('g', { class: 'nodes' }, this.svg);
+      // Latency labels: on every link of a small mesh, else only on the selected node's links.
+      const labelAll = (t.links || []).length <= 6;
       for (const link of t.links || []) {
         const a = this.positions[link.a], b = this.positions[link.b];
         if (!a || !b) continue;
         const busy = (link.rx_bps || 0) + (link.tx_bps || 0);
         const width = 2 + Math.min(5, Math.log10(1 + busy / 1000));
         const selected = this.selected && (link.a === this.selected || link.b === this.selected);
-        const line = svg('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: `link ${link.path}${selected ? ' selected' : ''}`, 'stroke-width': width.toFixed(1) }, linksLayer);
+        const cls = `link ${link.path}${selected ? ' selected' : ''}`;
+        // A relayed link bends through the relay, which is where its traffic goes.
+        const r = link.path === 'relay' ? this.positions[link.via] : null;
+        let line, mid;
+        if (r) {
+          // With this control point the curve passes through the relay at its middle.
+          const cx = 2 * r.x - (a.x + b.x) / 2, cy = 2 * r.y - (a.y + b.y) / 2;
+          line = svg('path', { d: `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`, class: cls, fill: 'none', 'stroke-width': width.toFixed(1) }, linksLayer);
+          mid = { x: 0.5625 * a.x + 0.375 * cx + 0.0625 * b.x, y: 0.5625 * a.y + 0.375 * cy + 0.0625 * b.y }; // a quarter along
+        } else {
+          line = svg('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: cls, 'stroke-width': width.toFixed(1) }, linksLayer);
+          mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        }
         const via = link.path === 'relay' && byId[link.via] ? ` via ${byId[link.via].name}` : '';
         const rtt = link.rtt_ms > 0 ? `${link.rtt_ms.toFixed(1)} ms` : 'no ping yet';
         svg('title', {}, line).textContent = `${byId[link.a]?.name} ↔ ${byId[link.b]?.name}: ${link.path}${via}, ${rtt}, ${speed(busy)}`;
-        if (link.rtt_ms > 0) {
-          const label = svg('text', { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 4, 'text-anchor': 'middle', class: 'rtt' }, linksLayer);
+        if (link.rtt_ms > 0 && (labelAll || selected)) {
+          const label = svg('text', { x: mid.x, y: mid.y - 4, 'text-anchor': 'middle', class: 'rtt' }, linksLayer);
           label.textContent = `${link.rtt_ms < 10 ? link.rtt_ms.toFixed(1) : Math.round(link.rtt_ms)} ms`;
         }
       }
       for (const node of t.nodes) {
         const p = this.positions[node.id];
         if (!p) continue;
-        (node.approved_routes || []).forEach((route, i) => {
-          const rx = p.x + 52, ry = p.y - 28 + i * 22;
-          svg('line', { x1: p.x + RADIUS - 4, y1: p.y, x2: rx, y2: ry + 9, class: 'route-link' }, routesLayer);
+        // Shared subnets: bubbles beside the node, on the side away from the middle.
+        const routes = node.approved_routes || [];
+        const right = p.x >= WIDTH / 2;
+        routes.forEach((route, i) => {
+          const w = route.length * 6.4 + 14;
+          const ry = Math.min(HEIGHT - 22, Math.max(4, p.y - 9 + (i - (routes.length - 1) / 2) * 22));
+          const rx = right ? Math.min(WIDTH - w - 4, p.x + RADIUS + 22) : Math.max(4, p.x - RADIUS - 22 - w);
+          svg('line', { x1: p.x + (right ? RADIUS : -RADIUS), y1: p.y, x2: right ? rx : rx + w, y2: ry + 9, class: 'route-link' }, routesLayer);
           const box = svg('g', { class: 'route' }, routesLayer);
-          svg('rect', { x: rx, y: ry, width: route.length * 6.4 + 14, height: 18, rx: 9 }, box);
+          svg('rect', { x: rx, y: ry, width: w, height: 18, rx: 9 }, box);
           svg('text', { x: rx + 7, y: ry + 13 }, box).textContent = route;
         });
         const state = node.status !== 'active' ? node.status : node.online ? 'online' : 'offline';
         const group = svg('g', { class: `node ${state}${node.id === this.selected ? ' selected' : ''}${node.relay_in_use ? ' relay' : ''}`, transform: `translate(${p.x} ${p.y})`, tabindex: 0, role: 'button' }, nodesLayer);
+        // The relay in use has a dashed ring; a node sharing subnets is a rounded square.
         if (node.relay_in_use) svg('circle', { r: RADIUS + 6, class: 'relay-ring' }, group);
-        svg('circle', { r: RADIUS }, group);
-        svg('text', { y: 4, 'text-anchor': 'middle', class: 'glyph' }, group).textContent = node.relay_in_use ? 'R' : (node.approved_routes || []).length ? 'S' : node.name.slice(0, 1).toUpperCase();
+        if (routes.length) svg('rect', { x: -RADIUS, y: -RADIUS, width: 2 * RADIUS, height: 2 * RADIUS, rx: 9, class: 'shape' }, group);
+        else svg('circle', { r: RADIUS, class: 'shape' }, group);
+        svg('text', { y: 5, 'text-anchor': 'middle', class: 'glyph' }, group).textContent = node.name.slice(0, 1).toUpperCase();
         svg('text', { y: RADIUS + 16, 'text-anchor': 'middle', class: 'name' }, group).textContent = node.name;
         svg('text', { y: RADIUS + 29, 'text-anchor': 'middle', class: 'sub' }, group).textContent = node.status === 'pending' ? 'waiting for approval' : node.address;
         const tip = [`${node.name} (${node.address}) — ${state}`];

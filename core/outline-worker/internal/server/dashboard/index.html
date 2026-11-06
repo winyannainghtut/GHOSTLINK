@@ -61,7 +61,7 @@
       <header><div><div class="eyebrow" id="mesh-address"></div><h1>Mesh</h1><p id="mesh-stats">A private network between your Linux servers.</p></div><div class="actions" id="mesh-tools"><button class="primary" id="mesh-add" type="button">Add node</button><button class="secondary" id="mesh-rules" type="button">Access rules</button></div></header>
       <div class="card" id="mesh-off" hidden><h2>Connect your servers privately</h2><p class="hint">Every Linux server you add gets a private address (100.96.x.x by default) and reaches the others directly over WireGuard, or through a relay when it is behind NAT. This server coordinates the mesh; you see it here as a live map. Windows servers and the Ghostlink app as a node will follow in a later version.</p><div class="actions"><button class="primary" id="mesh-enable" type="button">Turn on mesh</button></div></div>
       <div id="mesh-on" class="mesh-body" hidden><svg id="mesh-svg" role="img" aria-label="Mesh map: nodes and the links between them"></svg><aside id="mesh-side" class="card mesh-side" aria-label="Mesh details"></aside></div>
-      <div class="mesh-legend" id="mesh-legend" hidden><span class="legend direct">Direct</span><span class="legend relay">Through the relay</span><span class="legend down">Down</span><span>Drag nodes to arrange the map.</span></div>
+      <div class="mesh-legend" id="mesh-legend" hidden><span class="legend direct">Direct</span><span class="legend relay">Through the relay</span><span class="legend down">Down</span><span class="legend-shape ring">Relay in use</span><span class="legend-shape square">Shares subnets</span><span>Drag nodes to arrange the map.</span></div>
     </section>
 
     <section id="view-settings" hidden>
