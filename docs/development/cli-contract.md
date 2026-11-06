@@ -53,8 +53,16 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 - `clients {user?}`: addresses users connected from
 - `key_qr {user, key, format, content?}`: `format` `svg` or `text`; `content` `auto`, `key` or `conf`. Answered as a string.
 - `kit {user}`: the HTML connection kit, answered as a string
+- `mesh_info`: [mesh](../deployment/mesh.md) settings, node counts and open invites
+- `mesh_update {patch}`: `patch` takes `enabled`, `cidr` (only before the first node joins), `name` and `ping`
+- `mesh_invite_create {invite}`: `invite` takes `tags`, `uses`, `expires_hours`, `relay`, `approval` and `note`. The answer carries the secret `invite` and the join `command`, once.
+- `mesh_invite_list`, `mesh_invite_delete {invite}`
+- `mesh_node_update {node, change}`: `change` takes `name`, `tags`, `status` (`active` or `disabled`), `relay`, `approved_routes` and `masquerade`
+- `mesh_node_delete {node}`
+- `mesh_rules_get`, `mesh_rules_set {rules}`: each rule is `{from, to, protocol, ports}`. `from`/`to` are `*`, `tag:NAME` or `node:NAME`; `protocol` is `tcp`, `udp`, `icmp` or `any`; `ports` are like `5432` or `8000-8100`.
+- `mesh_topology`: nodes and links for the map (online state, path `direct`/`relay`/`down`, latency, traffic)
 
-User and key IDs must be decimal. `protocol` is `amneziawg`, `wireguard`, `vless`, `shadowsocks`, `ikev2` or `ipsec`. `update` also takes `rotate_ipsec_psk`. With `import_as`, the new key is also saved as a VPN server on this device. The answer then carries `imported` (the profile summary) or `import_error`, and the key is never lost.
+User, key, invite and node IDs must be decimal. Mesh names and tags are lower-case letters, digits and hyphens; the service checks rule selectors, protocols and port syntax before calling. `protocol` is `amneziawg`, `wireguard`, `vless`, `shadowsocks`, `ikev2` or `ipsec`. `update` also takes `rotate_ipsec_psk`. With `import_as`, the new key is also saved as a VPN server on this device. The answer then carries `imported` (the profile summary) or `import_error`, and the key is never lost.
 
 The service makes these calls without holding its main lock, so a slow server never delays status, connect or disconnect. It keeps one pinned connection per managed server and reuses it, so polling `live` every few seconds does not repeat the TLS handshake. Replacing or removing the server drops the connection. A management key is parsed strictly:
 - only `apiUrl` and `certSha256` are allowed;
@@ -74,7 +82,7 @@ Extra error codes:
 
 A server's own validation message comes back as `invalid_request` (exit 2), and its `404` comes back as `not_found` (exit 2).
 
-CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove|qr|kit|profile | rules show|set | usage | live | stats | clients`. `server set` also takes `--site-stats on|off`, `--history-days`, `--site-days`, `--history-max-mb` and `--rotate-ipsec-psk`. `keys kit --output FILE` writes a NEW private file. `keys create --protocol ikev2|ipsec` takes `--auth`, `--server-address`, `--remote-id` and `--local-id`, and refuses `--output`/`--import`. `keys profile --key ID --output FILE [--prompt-password] [--on-demand]` saves the Apple profile to a NEW private file. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
+CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove|qr|kit|profile | rules show|set | usage | live | stats | clients | mesh show|enable|disable|invite|invites|revoke|nodes|node|remove|rules`. `server mesh invite --output FILE` writes the join command to a NEW private file and leaves it out of the answer. `server mesh rules --rule "FROM TO PROTOCOL [PORTS]"` (repeatable) replaces the rules, and `--clear` removes them. `server mesh node --node ID` takes `--name`, `--tags`, `--status active|disabled`, `--relay on|off`, `--routes CIDR,…|none` and `--masquerade on|off`. `server set` also takes `--site-stats on|off`, `--history-days`, `--site-days`, `--history-max-mb` and `--rotate-ipsec-psk`. `keys kit --output FILE` writes a NEW private file. `keys create --protocol ikev2|ipsec` takes `--auth`, `--server-address`, `--remote-id` and `--local-id`, and refuses `--output`/`--import`. `keys profile --key ID --output FILE [--prompt-password] [--on-demand]` saves the Apple profile to a NEW private file. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
 
 `access_key_import` and `profile_import` take an optional `replace` boolean (default `false`). Without it, an existing ID returns `invalid_request` (exit 2) instead of overwriting the saved credential. The CLI exposes it as `--replace` on `key add` and `profile import`.
 

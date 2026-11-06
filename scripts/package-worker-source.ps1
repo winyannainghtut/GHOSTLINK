@@ -53,8 +53,8 @@ try {
     Remove-Item -LiteralPath $verifyDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 $instructions = @"
-Ghostlink $Version corresponding source: tunnel worker (ghostlink-tunnel), server (ghostlink-server)
-and IPsec agent (ghostlink-ipsec-agent)
+Ghostlink $Version corresponding source: tunnel worker (ghostlink-tunnel), server (ghostlink-server),
+IPsec agent (ghostlink-ipsec-agent) and mesh agent (ghostlink-mesh)
 
 Build toolchain: Go 1.26.10 (pinned in go.mod).
 Windows x64: CGO_ENABLED=0 GOOS=windows GOARCH=amd64
@@ -71,6 +71,8 @@ IPsec agent (Linux x64/arm64):
   go build -mod=vendor -trimpath -buildvcs=false -ldflags "-s -w" -o ghostlink-ipsec-agent ./cmd/ghostlink-ipsec-agent
   The IPsec image adds it to files from Alpine Linux 3.24 (packages/linux/server/ipsec.Dockerfile);
   their source is the separate Ghostlink-$Version-ipsec-component-source-<arch>.tar.gz.
+Mesh agent (Linux x64/arm64; the ghostlink-mesh .deb/.rpm):
+  go build -mod=vendor -trimpath -buildvcs=false -ldflags "-s -w" -o ghostlink-mesh ./cmd/ghostlink-mesh
 
 Set those variables using your shell's environment syntax. The vendor directory contains
 the actual engine/dependency source used by this worker and required embedded resources.

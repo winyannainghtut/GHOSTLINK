@@ -2,6 +2,53 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.6.0 Mesh of Linux servers (2026-11-06)
+
+### Kernel WireGuard end to end (CI, `tests/mesh/e2e.sh`, Ubuntu 24.04)
+
+| Check | Result actually observed |
+|---|---|
+| Setup | A native coordinator (`ghostlink-server`) on a bridge acting as the internet, with four agents in network namespaces:<ul><li>`relay` and `pub` have public addresses;</li><li>`nata` and `natb` are each behind their own masquerading NAT router (`--random-fully`) with no inbound;</li><li>a LAN namespace sits behind `pub`.</li></ul>All four joined with invites, came online and in sync, and every pair with a reachable side pinged directly over `glmesh0`. `<node>.mesh` names resolved from `/etc/hosts` |
+| Relay | `nata` ↔ `natb` had no direct path and were switched to the relay: the topology showed `nata <-> natb  via relay`, and they pinged through it |
+| Access rules | With `web → db TCP 5432`, only that port reached `db` from the web node (a Python HTTP listener) and other traffic was refused; clearing the rules opened everything again |
+| Shared subnet | The LAN behind `pub` was unreachable until the administrator approved `192.168.50.0/24`, then reachable from the other nodes |
+| Disable, remove, stop | A disabled node lost its interface and was unreachable, then came back when enabled. A removed node's agent cleaned up and deleted its state, and its peers dropped it within seconds. A stopped agent exited with no `glmesh0`, firewall chains or `/etc/hosts` block left. The first run found the long-poll was not cancelled on stop (fixed); the next found the check raced the teardown (the test now waits for the process to exit) |
+
+### Packages (release CI, x64 and arm64)
+
+| Check | Result actually observed |
+|---|---|
+| Mesh agent package (`linux-package.yml`, run 42245192783) | `ghostlink-mesh` .deb/.rpm were built and the version check passed. On the runner, against the server .deb installed in the same job:<ul><li>`mesh enable`, an invite with `--tags ci`, and the **Add node** command (`install-mesh.sh` piped to `sudo bash`, with `--package`) joined `ci-node`. The service was active, the status `active`, the mesh address on `glmesh0`, `ci-node.mesh` resolved, and the coordinator listed it online with tag `ci`.</li><li>`systemctl stop` plus `ghostlink-mesh leave` left no interface, chains or hosts block, and the coordinator had no nodes.</li><li>`install-server.sh --package … --mesh-package …` joined the host as the online relay and listed the mesh TCP and UDP ports.</li><li>`apt-get purge ghostlink-mesh` left the host clean, removed the state and binary, and the coordinator had no nodes again.</li><li>The .rpm lists `/usr/bin/ghostlink-mesh` and the unit, and its scripts run `ghostlink-mesh leave`.</li></ul>Passed on both x64 and arm64 |
+
+### Coordinator and agent (Go, Windows host and CI)
+
+| Check | Result actually observed |
+|---|---|
+| Coordinator (`TestMeshCoordinator`, real TLS listener) | <ul><li>Enable, then a local invite.</li><li>Join through a client pinned like the agent; a reused invite gave `403`.</li><li>The long-poll waited, and woke at once when a second node joined.</li><li>Rules and route approval reached the configurations; the topology was correct.</li><li>A removed node got `401`; disabling stopped the port.</li></ul> |
+| Mesh logic (`internal/mesh`) | <ul><li>Invite expiry, uses and hashing.</li><li>Direct → relay after the grace period → retry; relay re-routing with no overlapping `AllowedIPs`.</li><li>The generation follows content and stays below 2^53.</li><li>Rules compile to per-node sources; subnet conflicts are refused; unsafe configurations are refused.</li></ul> |
+| Protocol checks (`internal/meshproto`) | Invites round-trip; damaged ones, `http` URLs, bad pins and tokens with shell characters are refused. Bad names, keys, endpoints, IPv6 and over-wide or special routes are refused, and so are join and sync requests with bad fields |
+| Agent (`internal/meshagent`) | Firewall rules per config, the `/etc/hosts` block, and peer changes that keep sessions (update-only, endpoint only when the suggestion changes) |
+| Map copies | `TestMeshMapMatchesTheDesktopCopy`: the dashboard's `mesh-map.js` is identical to the app's, and the dashboard loads it |
+| Static | Go vet clean. `govulncheck` 1.9.0 (Windows, and `GOOS=linux`): **No vulnerabilities found**. Rust fmt and clippy (`-D warnings`) clean; Rust tests pass, including fixed mesh paths, numeric IDs, rule validation and agent denial of `server_mesh_*` |
+
+### App and dashboard (WebView2 DevTools, isolated profile)
+
+| Check | Result actually observed |
+|---|---|
+| Setup | The debug app, an isolated dev service and a real local `ghostlink-server`. Mesh enabled with `ghostlink server mesh enable`. Seven fake agents speaking the real join/sync protocol over pinned TLS, so the coordinator computed real paths:<ul><li>a relay, two web nodes and `db` sharing `192.168.50.0/24`;</li><li>two nodes with no endpoints (behind NAT);</li><li>one waiting for approval.</li></ul> |
+| Map | The Mesh card read "7 nodes, 1 waiting for approval". The map showed 7 nodes, 14 direct links and 1 relayed link (the two NAT nodes, drawn through the relay), the relay ring, the subnet bubble and the pending node. A node dragged with DevTools input events stayed put across a poll, and its position was saved |
+| Node details and actions | `db` showed its address, `db.mesh`, endpoint, agent and the shared subnet. **Approve** made the pending node active. **Add node** returned the `install-mesh.sh --join 'glmesh1:…'` command with its expiry. The rules editor saved `tag:web → tag:db tcp 5432`, confirmed by `ghostlink server mesh rules`. Dark theme checked; no console errors |
+| Dashboard | Same server, in the same webview: the **Mesh** view drew 7 nodes, the relayed link and the subnet. Node details worked, and its rules editor added `tag:batch → node:db tcp 5432,6379` (confirmed by the CLI). No console errors |
+| Secrets | No invite or invite token appeared in any file the service or server wrote |
+| Found and fixed | Configuration generations were 64-bit hashes, which JavaScript (and jq) cannot hold exactly; they are now 53-bit |
+
+### Not verified
+
+- The mesh across real cloud servers and real NAT routers (for example AWS Lightsail plus a home server).
+- RPM installation on Fedora/RHEL: inspected only.
+- Kernels without WireGuard: refused by the installer; not exercised.
+- Long-running relay switching under packet loss; IPv6 (not supported).
+
 ## v0.5.0 IKEv2/IPsec for iPhone, iPad and Mac (2026-11-06)
 
 ### Real strongSwan interop (CI, `tests/ipsec/interop.sh`)

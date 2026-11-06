@@ -1,4 +1,4 @@
-# Protocols, split tunneling and the server (v0.3.0)
+# Protocols, split tunneling, the server and the mesh
 
 How Ghostlink supports Shadowsocks, VLESS-REALITY, WireGuard and AmneziaWG, and how split tunneling is applied. The Outline key decision is in [outline-access-keys.md](outline-access-keys.md); the original OpenVPN-era record is in [decision-record.md](decision-record.md).
 
@@ -145,6 +145,46 @@ flowchart LR
 - **Users:** identified by EAP or XAuth name, else by the certificate's identity.
 - **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to a sing-box `direct` inbound (high port, allowed only from the pools), whose `hijack-dns` applies the DNS rules for everyone.
 - **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted.
+
+## Mesh of Linux servers (v0.6.0)
+
+The mesh carries no VPN users. It is a separate layer-3 overlay between servers over **kernel WireGuard**, with the Ghostlink server as a control plane that holds no privileges:
+
+```mermaid
+flowchart LR
+  APP[App / CLI / dashboard] -- management API --> SRV[ghostlink-server<br/>internal/mesh: nodes, tokens, rules,<br/>live paths, per-node configs]
+  SRV -- "mesh API (own TCP port, TLS 1.3, pinned):<br/>/v1/join, /v1/sync long-poll, /v1/leave" --- AG1[ghostlink-mesh on node A]
+  SRV --- AG2[ghostlink-mesh on node B]
+  AG1 -- "glmesh0, UDP 51820<br/>direct, or via the relay" --- AG2
+```
+
+- **Join:** the agent generates its WireGuard key and posts the invite token, its name, public key, listen port, reported endpoints and offered subnets. It gets back a node ID, a node secret and its address (the next free one in the mesh network).
+- **Sync:** every call reports per-peer handshake, rx/tx and endpoint, ping RTTs, the applied generation and any error.
+  - The coordinator answers at once when the node's configuration differs from the applied one, otherwise after up to 10 s, or as soon as anything changes (a join, an admin change, a path change, a node coming online or moving address).
+  - The generation is a 53-bit hash of the configuration's content, so identical configurations never cause re-applies.
+- **Per-node configuration** (`meshproto.Config`):
+  - the address with the mesh prefix and the listen port;
+  - peers (public key, endpoint, `AllowedIPs`, keepalive 25 s);
+  - routes to other nodes' shared subnets; the relay role; its own shared subnets with masquerade;
+  - compiled firewall rules (open, ping, allow-list of source CIDRs × destination CIDRs × protocol × ports);
+  - the `/etc/hosts` names.
+  - The agent validates all of it before applying.
+- **Endpoints:** for each viewer and target the coordinator chooses:
+  1. the target's private address, when both connect from the same public address;
+  2. a public address the target reported;
+  3. the address the coordinator sees the target connect from, with the target's listen port;
+  4. a private address, when neither is public (a LAN-only mesh).
+  5. Otherwise none: the target connects out.
+- **Paths:** a pair starts direct.
+  - It is relayed when neither side has an endpoint for the other, or when no handshake is younger than 3 minutes 90 s after the pair started. It stays relayed for 15 minutes, then tries direct again.
+  - Relaying moves the far node's `AllowedIPs` into the relay peer on both sides. The relay has IP forwarding on, and its FWD chain allows mesh-to-mesh traffic between relayed peers.
+- **Firewall on each node:**
+  - `GHOSTLINK-MESH-IN` (INPUT from `glmesh0`): established traffic, ping when allowed, then the compiled rules for the node's address (or everything when the mesh has no rules), then drop.
+  - `GHOSTLINK-MESH-FWD` (FORWARD from `glmesh0`): established traffic; on a relay, traffic back out of `glmesh0` to the relayed peer. Mesh traffic to the node's shared subnets passes under the same rules; anything else is dropped.
+  - `GHOSTLINK-MESH-OUT` (FORWARD into `glmesh0`): replies going back into the mesh.
+  - `GHOSTLINK-MESH-POST`: masquerade from the mesh into shared subnets. `GHOSTLINK-MESH-MSS`: MSS clamping on `glmesh0`.
+  - They are written with `iptables-<nft|legacy>-restore --noflush` through `internal/hostfw`, as the IPsec agent does.
+- **Map data:** `GET /mesh/topology` returns node views (status, online within 30 s, in sync, endpoint, seen-from, routes, version, error, rates) and link views (path, via, RTT from pings, handshake age, rates). All of it is live in memory and none is stored.
 
 ## Process notes
 
