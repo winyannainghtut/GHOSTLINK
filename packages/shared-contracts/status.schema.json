@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["status", "profile", "server", "vpn_ip", "protocol", "connected_duration_seconds", "bytes_received", "bytes_sent", "receive_bytes_per_second", "send_bytes_per_second", "last_error"],
+  "properties": {
+    "status": { "enum": ["disconnected", "connecting", "connected", "reconnecting", "disconnecting", "failed"] },
+    "profile": { "type": ["string", "null"] },
+    "server": { "type": ["string", "null"] },
+    "vpn_ip": { "type": ["string", "null"] },
+    "protocol": { "type": ["string", "null"] },
+    "connected_duration_seconds": { "type": "integer", "minimum": 0 },
+    "bytes_received": { "type": "integer", "minimum": 0 },
+    "bytes_sent": { "type": "integer", "minimum": 0 },
+    "receive_bytes_per_second": { "type": "integer", "minimum": 0 },
+    "send_bytes_per_second": { "type": "integer", "minimum": 0 },
+    "last_error": { "type": ["string", "null"] }
+  },
+  "if": { "properties": { "status": { "const": "connected" } } },
+  "then": { "properties": { "vpn_ip": { "type": "string", "minLength": 2 } } }
+}
