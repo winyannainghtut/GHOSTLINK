@@ -53,7 +53,8 @@ try {
     Remove-Item -LiteralPath $verifyDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 $instructions = @"
-Ghostlink $Version corresponding source: tunnel worker (ghostlink-tunnel) and server (ghostlink-server)
+Ghostlink $Version corresponding source: tunnel worker (ghostlink-tunnel), server (ghostlink-server)
+and IPsec agent (ghostlink-ipsec-agent)
 
 Build toolchain: Go 1.26.10 (pinned in go.mod).
 Windows x64: CGO_ENABLED=0 GOOS=windows GOARCH=amd64
@@ -66,6 +67,10 @@ Server (Linux x64/arm64, as above with the matching GOARCH):
   go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-server ./cmd/ghostlink-server
   The server image adds this binary and its notices to gcr.io/distroless/static-debian12:nonroot
   (see packages/linux/server/Dockerfile in the Ghostlink repository).
+IPsec agent (Linux x64/arm64):
+  go build -mod=vendor -trimpath -buildvcs=false -ldflags "-s -w" -o ghostlink-ipsec-agent ./cmd/ghostlink-ipsec-agent
+  The IPsec image adds it to files from Alpine Linux 3.24 (packages/linux/server/ipsec.Dockerfile);
+  their source is the separate Ghostlink-$Version-ipsec-component-source-<arch>.tar.gz.
 
 Set those variables using your shell's environment syntax. The vendor directory contains
 the actual engine/dependency source used by this worker and required embedded resources.

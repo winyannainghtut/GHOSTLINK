@@ -2,6 +2,76 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.5.0 IKEv2/IPsec for iPhone, iPad and Mac (2026-11-06)
+
+### Real strongSwan interop (CI, `tests/ipsec/interop.sh`)
+
+- **Setup:** observed on GitHub's `ubuntu-24.04` runner (kernel 7.0.0-1017-azure, Docker, iptables-nft).
+  - The script installed the built `ghostlink-server` `.deb`, ran `ghostlink-server ipsec enable` and checked the hardening: read-only, `drop=[ALL]`, only NET_ADMIN, NET_BIND_SERVICE and NET_RAW, user `0:<server gid>`, host network, `no-new-privileges`, `ipsec/` mode 770, IPv4 forwarding on.
+  - It enabled IKEv2 and IPsec over the API, created keys and downloaded their profiles (`application/x-apple-aspen-config`).
+  - `tests/ipsec/client_config.py` turned each profile into a strongSwan client configuration with exactly the profile's addresses, identifiers, credentials, CA, PKCS#12 identity (opened with the embedded password) and algorithms.
+  - The client (strongSwan 6.0.7 from the same image) ran in its own network namespace (10.99.0.2), with an "internet" host 198.51.100.10 in another.
+- **Each method connected:** IKEv2 EAP-MSCHAPv2, IKEv2 certificate, IPsec certificate + XAuth (Main Mode) and IPsec group key + XAuth (Aggressive Mode). Through each tunnel:
+  - HTTP to the internet host worked (NAT);
+  - the globally blocked port 8081 was refused;
+  - the server's own API (10.99.0.1) was unreachable;
+  - DNS for a blocked site returned NXDOMAIN, both from the pool gateway and from another resolver address (redirected);
+  - the server counted the connection.
+- **Refusals:**
+  - a wrong EAP password was rejected;
+  - disabling the user ended the live session and refused the certificate (strongSwan log: certificate on hold) and the group key;
+  - re-enabling allowed the certificate again;
+  - removing the certificate key refused it (revoked in the CRL).
+- **Accounting:**
+  - usage became non-zero;
+  - `/stats` showed `ikev2` and `ipsec` bytes and "IPsec (not inspected)";
+  - `/clients` recorded 10.99.0.2;
+  - lowering the data limit to the usage ended the session and marked the user over the limit.
+- **Logs:** no password appeared in the agent's log.
+- **`ipsec disable`:** it left no `GHOSTLINK-IPSEC` chains, no `glipsec0` and no sysctl drop-in.
+
+### Server and agent (Go, Windows host)
+
+- **Profiles (strict plist parser):**
+  - required keys per method;
+  - unique and stable `PayloadUUID`s;
+  - the VPN payload references its PKCS#12, which decodes with the embedded password to a client certificate that verifies against the CA with the ClientAuth EKU, and is absent with `prompt_password`;
+  - the CA payload equals the state's CA;
+  - a hostile server and user name is escaped and reads back exactly;
+  - on demand.
+- **Server certificate:** verifies for the IP and an extra remote identifier, and carries the IKE intermediate EKU.
+- **NT hash and CRL:** the NT hash matches the RFC 2759 vector. The CRL is signed by the CA; a disabled user's certificate is on hold (reason 6) and lifted on enabling, and a removed key is revoked.
+- **Desired state:**
+  - it validates and holds NT hashes, never EAP passwords;
+  - disabled and over-limit users drop out;
+  - `rotate_ipsec_psk` changes the key.
+- **Agent:**
+  - `swanctl.conf`, firewall rules and pool ranges are rendered as expected, with secrets only in `0s` base64;
+  - validation refuses newline or brace identities, `@` forms, short hashes or keys, oversized pools, a non-first gateway, invalid or injected ranges and ports, a low DNS port, wrong PEM types and an unknown version;
+  - `list-sa`, `child-updown` and `child-rekey` events parse into status, with final counters;
+  - established-but-disallowed SAs are selected for termination.
+- **Accounting:** a session that ends between reports is counted once from its final counters.
+- **DNS listener:** it answered NXDOMAIN for a blocked name to an allowed source and nothing to others.
+
+### Daemon, CLI and app
+
+- **Node suite:** 19/19. The new steps cover the component check, IKEv2/IPsec key creation (refusing `--import` and a wrong method), the PSK warning, `keys profile --output` (a new private file, never overwriting), no certificate password in key lists, `--rotate-ipsec-psk`, and an agent token refused `key_profile`.
+- **App GUI, over WebView2 DevTools with an isolated profile and a local test server:**
+  - **Server settings:** shows IKEv2/IPsec toggles ("UDP 500, 4500") and the component state, and saving them turns both on.
+  - **Key dialog:**
+    - IKEv2 shows auth eap/certificate and the remote identifier, and hides "use on this device";
+    - IPsec + group key shows the weak-key warning, and the server's warning appears after creation;
+    - key rows show method, identity and address, with **Save iPhone/Mac profile** (and **Profile without password** for certificates).
+  - **Saving:** writes a `.mobileconfig` to Downloads containing the VPN payload and the custom remote identifier. The test file was deleted by its exact path.
+- **CI:** the desktop workflow (Windows and Ubuntu: Go tests, vet, govulncheck, Rust build, tests, clippy, Node suite) passed.
+
+### Not verified
+
+- Installing and connecting a profile on a real iPhone, iPad or Mac.
+- The component on hosts using iptables-legacy, firewalld or ufw, and on a real internet-facing host.
+- IPv6 leaks from Apple devices with IPv4-only tunnels.
+- arm64 interop until the release workflow's arm64 job runs.
+
 ## v0.4.0 Monitoring, server-side admin and dashboard (2026-11-06)
 
 Observed on the Windows development host (unelevated, loopback only). The release CI server test now also runs the admin commands and dashboard checks on Ubuntu with Docker.

@@ -27,6 +27,7 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 ### Fixed
 
 - A QR-decoding test could fail at random on synthetic images. It now falls back to reading the clean bitmap directly.
+- The dependency notice inventory missed Go modules only the Linux server links (netlink, nftables, nfqueue, dbus); it is now generated for Linux too, and the server images carry those notices.
 
 ## [0.4.0] - 2026-11-06
 

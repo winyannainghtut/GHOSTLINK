@@ -8,6 +8,38 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.5.0 — IKEv2/IPsec for iPhone, iPad and Mac
+
+The user asked for native iOS VPN protocols:
+- IKEv2/IPsec first, with password and certificate sign-in, configurable server address, remote and local identifiers, and secure credential storage;
+- IPsec second, with PSK and certificates.
+
+They chose:
+- configuration profiles instead of an app;
+- hosting IKEv2/IPsec on the Ghostlink server as an optional component;
+- PSK and certificates for IPsec, with certificates as the default;
+- unsigned profiles, since there is no Apple Developer account or Mac yet.
+
+Delivered:
+- **the server's CA and profiles**;
+- **a strongSwan 6 component** in a second, network-privileged container, driven by a validating agent from settings the unprivileged server writes;
+- **accounting, limits and cut-offs** for IKEv2/IPsec users;
+- **firewall rules and DNS-based site blocks**;
+- **app, CLI, dashboard and server commands**;
+- **a GPL source bundle** for the component's Alpine packages.
+
+CI iterations on a feature branch fixed:
+- strongSwan's critical-plugin syntax;
+- hidden start-up logs;
+- a test address created too late;
+- the agent's polling delay;
+- lost counters for sessions that ended between reports (now taken from charon's down and rekey events);
+- Alpine's GitLab refusing CI downloads (switched to the GitHub mirror).
+
+An unrelated flaky QR test was made deterministic. The license inventory now includes Linux-only Go modules.
+
+Not verified: a real Apple device; hosts with iptables-legacy, firewalld or ufw; an internet-facing host.
+
 ### Later on November 6: v0.4.0 — monitoring, server-side admin, dashboard
 
 The user asked for:

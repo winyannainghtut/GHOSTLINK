@@ -125,6 +125,27 @@ The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=` and `last_handshake_t
 
 The dashboard (`dashboard.go` with embedded static files) serves the same API mux under `/api/` after its own session checks, and the server commands (`admin.go`) call the API over loopback. All three front ends share one implementation.
 
+## IKEv2/IPsec for Apple devices (v0.5.0)
+
+Apple's built-in IKEv2 and IPsec run in the kernel, so they cannot pass sing-box like the other protocols. The server keeps the model and the unprivileged role; a separate agent does the privileged work:
+
+```mermaid
+flowchart LR
+  API[API / users / limits] --> D[ipsec/desired.json<br/>NT hashes, XAuth, PSK, certs, CRL, firewall]
+  D --> A[ghostlink-ipsec-agent<br/>validates]
+  A --> C[charon via swanctl/vici]
+  A --> F[iptables GHOSTLINK-IPSEC-*<br/>NAT, blocks, DNS DNAT]
+  C --> S[ipsec/status.json<br/>SAs, bytes, closed children]
+  S --> M[Monitor.AddExternal<br/>usage, limits, live]
+  F -.DNS :53.-> N[sing-box direct inbound<br/>hijack-dns, global blocks]
+```
+
+- **Connections:** four of them (`gl-ikev2-cert`, `gl-ikev2-eap`, `gl-ikev1-cert` and `gl-ikev1-psk` in Aggressive Mode) use fixed proposals. All are UDP-encapsulated (`encap = yes`) and draw from the pools `10.79.0.0/20` and `10.80.0.0/20`.
+- **Identities:** the IKEv2 server identity is `%any`, so the identifier the device requests is answered when the server certificate carries it. Every key's remote identifier is added to that certificate.
+- **Users:** identified by EAP or XAuth name, else by the certificate's identity.
+- **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to a sing-box `direct` inbound (high port, allowed only from the pools), whose `hijack-dns` applies the DNS rules for everyone.
+- **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted.
+
 ## Process notes
 
 - **Close race in the TUN adapter:** the adapter (`internal/awg/tun.go`) makes `Close` wait for writes in flight and refuses later writes. amneziawg-go closes the TUN before stopping peers, and sing-box's stack dereferences a detached dispatcher on a late write. This crashed an AmneziaWG client on Linux CI and would have crashed the server on reloads.
