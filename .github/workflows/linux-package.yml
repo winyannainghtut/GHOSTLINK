@@ -116,6 +116,26 @@ jobs:
           # An upgrade (here: reinstall) keeps users and keys.
           sudo apt-get install -y --reinstall "./$deb"
           curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
+          # Server-side admin commands (inside the container, through the local API).
+          sudo ghostlink-server user add smoke --limit 1GB
+          sudo ghostlink-server key add smoke vless --no-qr | grep -q '^vless://'
+          sudo ghostlink-server users | grep -q smoke
+          sudo ghostlink-server top --once | grep -q smoke
+          sudo ghostlink-server stats smoke --range 24h | grep -q 'Traffic for smoke'
+          sudo ghostlink-server kit smoke --output kit.html && sudo grep -q 'vless://' kit.html && test "$(stat -c %a kit.html)" = 600
+          # Dashboard: its own port, loopback only, token sign-in, CSRF header required.
+          sudo ghostlink-server dashboard | tee dashboard.txt
+          dport=$(sed -n 's/.*-L 8080:127\.0\.0\.1:\([0-9]*\) .*/\1/p' dashboard.txt | head -n 1)
+          token=$(sed -n 's/.*#t=\([A-Za-z0-9_-]*\).*/\1/p' dashboard.txt | head -n 1)
+          test -n "$dport" && test -n "$token" && test "$dport" != 443
+          ss -ltn | grep -q "127.0.0.1:$dport "
+          if ss -ltn | grep -Eq "(0\.0\.0\.0|\*|\[::\]):$dport "; then echo "dashboard listens publicly" >&2; exit 1; fi
+          curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$dport/" | grep -qx 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Ghostlink-Dashboard: 1' "http://127.0.0.1:$dport/api/server")" = 401
+          jq -n --arg token "$token" '{token: $token}' > login.json
+          test "$(curl -s -c jar.txt -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data @login.json "http://127.0.0.1:$dport/login")" = 204
+          test "$(curl -s -b jar.txt -o /dev/null -w '%{http_code}' "http://127.0.0.1:$dport/api/server")" = 403
+          curl -s --fail -b jar.txt -H 'X-Ghostlink-Dashboard: 1' "http://127.0.0.1:$dport/api/live" | jq -e '.users | length == 2'
           sudo apt-get purge -y ghostlink-server
           if docker ps -a --format '{{.Names}}' | grep -qx ghostlink-server; then echo "container left after purge" >&2; exit 1; fi
           test ! -e /var/lib/ghostlink-server && ! id ghostlink-server 2>/dev/null

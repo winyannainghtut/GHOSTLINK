@@ -8,6 +8,33 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.4.0 — monitoring, server-side admin, dashboard
+
+The user asked for:
+- detailed monitoring: traffic types and live data;
+- server management without the app;
+- a dashboard on a non-443 port;
+- automatic rotation so traffic records cannot fill the disk.
+
+They chose:
+- server commands plus a tunnel-only web dashboard;
+- opt-in top sites;
+- no OpenVPN for now.
+
+Delivered:
+- **monitoring:** per-user live rates, connections, traffic types, protocols, opt-in services, client addresses and health;
+- **history:** with age, size and low-disk rotation;
+- **server commands and a dashboard** on its own port;
+- **sharing:** QR codes and connection kits;
+- **app and CLI support.**
+
+Deviation from the plan: the dashboard login token is stored as-is in the server state, like the management secret, rather than hashed, so the same link can be printed again.
+
+Incidents during GUI checks:
+- the debug app exited because it couldn't share the installed app's WebView2 profile; it now uses its own profile;
+- a `blob:` download failed in WebView2; it was replaced by a desktop save command;
+- **headless Edge with a fresh profile was implicitly signed in to the user's Microsoft account.** It was stopped and its profile deleted, and the user was told.
+
 ### Later on November 6: v0.3.1 — first real Windows install
 
 The user installed the v0.3.0 MSI and found two problems:

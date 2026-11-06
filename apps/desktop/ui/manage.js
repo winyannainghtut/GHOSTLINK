@@ -5,7 +5,7 @@
 const PROTOCOL_ORDER = ['amneziawg', 'wireguard', 'vless', 'shadowsocks'];
 const protocolsInOrder = protocols => PROTOCOL_ORDER.filter(protocol => protocols[protocol]).map(protocol => [protocol, protocols[protocol]]);
 const PROTOCOL_NAMES = { amneziawg: 'AmneziaWG', wireguard: 'WireGuard', vless: 'VLESS with REALITY', shadowsocks: 'Shadowsocks (Outline)' };
-const manageState = { servers: [], current: null, info: null, users: [], rules: null, editingUser: null, keysUser: null, rulesUser: null, confirm: null };
+const manageState = { servers: [], current: null, info: null, users: [], rules: null, editingUser: null, keysUser: null, rulesUser: null, confirm: null, live: {}, statsUser: null, polling: false };
 const serverCall = op => request({ type: 'server_call', server: manageState.current, op });
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 // Data limits are decimal gigabytes, so usage is shown the same way.
@@ -69,6 +69,7 @@ async function reloadManaged() {
   }
 }
 function renderManaged() {
+  setTimeout(paintLive, 0);
   const { info, users, rules } = manageState;
   $('#managed-title').textContent = info.name;
   $('#managed-endpoint').textContent = `${info.hostname} · VERSION ${info.version}`.toUpperCase();
@@ -92,9 +93,11 @@ function renderManaged() {
     if (hasRules(user.rules)) notes.push('own rules');
     if (user.exempt_from_global_rules) notes.push('not affected by rules for everyone');
     who.append(el('div', 'usage', notes.join(' · ')));
+    const live = el('div', 'usage live'); live.dataset.live = user.id; who.append(live);
     const actions = el('div', 'actions');
     const buttons = [
       ['Keys', 'primary', () => openKeys(user)],
+      ['Stats', 'secondary', () => openStats(user)],
       ['Edit', 'secondary', () => openUser(user)],
       ['Rules', 'secondary', () => openRules(user)],
       ['Remove', 'secondary', () => confirmAction(`Remove ${user.name}?`, 'Their keys stop working immediately. This cannot be undone.', 'Remove user', () => serverCall({ op: 'user_delete', user: user.id }))],
@@ -203,7 +206,9 @@ function renderKeys(keys) {
     const what = el('div', 'what', PROTOCOL_NAMES[key.protocol] || key.protocol);
     what.append(el('small', '', `Created ${new Date(key.created_unix * 1000).toLocaleDateString()}`));
     row.append(what);
-    const buttons = [['Copy key', () => navigator.clipboard.writeText(key.access_key).then(() => notice('Key copied. Share it only with the person it belongs to.', true))]];
+    const buttons = [['QR code', () => showQR(user, key, key.config ? 'conf' : 'key')]];
+    if (key.config) buttons.push(['QR (vpn://)', () => showQR(user, key, 'key')]);
+    buttons.push(['Copy key', () => navigator.clipboard.writeText(key.access_key).then(() => notice('Key copied. Share it only with the person it belongs to.', true))]);
     if (key.config) buttons.push(['Copy .conf', () => navigator.clipboard.writeText(key.config).then(() => notice('Configuration copied for WireGuard or AmneziaWG apps.', true))]);
     buttons.push(['Use on this device', async () => { await useHere(user, key); await refresh(); notice('Saved under My servers on this device.', true); }]);
     buttons.push(['Remove', () => { $('#keys-dialog').close(); confirmAction(`Remove this ${PROTOCOL_NAMES[key.protocol] || key.protocol} key?`, 'Anyone using it is disconnected and cannot reconnect.', 'Remove key', () => serverCall({ op: 'key_delete', user: user.id, key: key.id })); }]);
@@ -256,6 +261,7 @@ $('#rules-form').addEventListener('submit', async event => {
 $('#managed-settings').addEventListener('click', () => {
   const info = manageState.info; if (!info) return;
   $('#settings-name').value = info.name; $('#settings-hostname').value = info.hostname; $('#settings-reality').value = info.vless_handshake;
+  $('#settings-sites').checked = Boolean(info.site_stats); $('#settings-history-days').value = info.history_days || 90; $('#settings-site-days').value = info.site_days || 30; $('#settings-history-mb').value = info.history_max_mb || 20;
   const grid = $('#settings-protocols'); grid.replaceChildren();
   for (const [protocol, value] of protocolsInOrder(info.protocols)) {
     const label = el('label', 'check'); const box = el('input'); box.type = 'checkbox'; box.checked = value.enabled; box.dataset.protocol = protocol;
@@ -273,6 +279,12 @@ $('#server-settings-form').addEventListener('submit', async event => {
   if (name !== info.name) patch.name = name;
   if (hostname !== info.hostname) patch.hostname = hostname;
   if (reality !== info.vless_handshake) patch.vless_handshake = reality;
+  const sites = $('#settings-sites').checked;
+  if (sites !== Boolean(info.site_stats)) patch.site_stats = sites;
+  for (const [key, id] of [['history_days', '#settings-history-days'], ['site_days', '#settings-site-days'], ['history_max_mb', '#settings-history-mb']]) {
+    const value = Number($(id).value);
+    if (value && value !== info[key]) patch[key] = value;
+  }
   for (const [protocol, value] of protocolsInOrder(info.protocols)) {
     const enabled = document.querySelector(`[data-protocol="${protocol}"]`).checked;
     const port = Number(document.querySelector(`[data-port="${protocol}"]`).value);
@@ -288,4 +300,135 @@ $('#server-settings-form').addEventListener('submit', async event => {
     if (patch.hostname) notice('Saved. New keys use the new address; keys you already shared keep the old one.', true);
     await reloadManaged();
   } catch (error) { formError('#settings-error', error); }
+});
+
+// --- live monitoring ---
+function formatSpeed(bytesPerSecond) {
+  const bits = (Number(bytesPerSecond) || 0) * 8;
+  if (bits >= 1e9) return (bits / 1e9).toFixed(2) + ' Gbit/s';
+  if (bits >= 1e6) return (bits / 1e6).toFixed(1) + ' Mbit/s';
+  if (bits >= 1e3) return Math.round(bits / 1e3) + ' kbit/s';
+  return Math.round(bits) + ' bit/s';
+}
+const svgNode = (tag, attrs) => { const node = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); return node; };
+function liveVisible() { return Boolean(manageState.current) && !$('#manage-view').hidden && !$('#managed-page').hidden && appState.available; }
+function paintLive() {
+  for (const node of document.querySelectorAll('[data-live]')) {
+    const live = manageState.live[node.dataset.live];
+    node.replaceChildren();
+    const dot = el('span', 'online-dot' + (live && live.online ? ' on' : ''));
+    node.append(dot, document.createTextNode(live && live.online ? `online · ↓ ${formatSpeed(live.down_bps)} ↑ ${formatSpeed(live.up_bps)}` : 'offline'));
+  }
+}
+async function pollLive() {
+  if (!liveVisible() || manageState.polling) return;
+  manageState.polling = true;
+  try {
+    const live = await serverCall({ op: 'live' });
+    manageState.live = Object.fromEntries(live.users.map(u => [u.id, u]));
+    $('#live-down').textContent = formatSpeed(live.down_bps);
+    $('#live-up').textContent = formatSpeed(live.up_bps);
+    $('#live-online').textContent = `${live.online_users} of ${live.users.length}`;
+    const h = live.health || {};
+    $('#live-health').textContent = h.cpu_percent !== undefined ? `CPU ${h.cpu_percent.toFixed(0)}%` + (h.detail_paused ? ' · disk full' : '') : (h.detail_paused ? 'disk nearly full' : 'running');
+    const chart = $('#live-chart'); chart.replaceChildren();
+    const series = live.series || [];
+    if (series.length > 1) {
+      const top = Math.max(1, ...series.flatMap(p => [p.up, p.down]));
+      for (const key of ['down', 'up']) {
+        const points = series.map((p, i) => `${(i / (series.length - 1) * 600).toFixed(1)},${(68 - p[key] / top * 64).toFixed(1)}`).join(' ');
+        chart.append(svgNode('polyline', { points, class: key }));
+      }
+    }
+    paintLive();
+  } catch {}
+  finally { manageState.polling = false; }
+}
+setInterval(pollLive, 2000);
+
+// --- statistics ---
+function hbars(target, items, empty) {
+  target.replaceChildren();
+  if (!items || !items.length) { target.append(el('p', 'field-note', empty || 'Nothing recorded yet.')); return; }
+  const wrap = el('div', 'hbars'); const top = Math.max(...items.map(i => i.bytes), 1);
+  for (const item of items) {
+    const row = el('div', 'hbar'); const track = el('div', 'track'); const fill = el('span', 'fill');
+    fill.style.width = (item.bytes / top * 100).toFixed(1) + '%'; track.append(fill);
+    row.append(el('span', '', PROTOCOL_NAMES[item.label] || item.label), track, el('span', '', formatData(item.bytes)));
+    wrap.append(row);
+  }
+  target.append(wrap);
+}
+function openStats(user) {
+  manageState.statsUser = user;
+  $('#stats-scope').textContent = user ? `ONLY ${user.name.toUpperCase()}` : 'EVERYONE ON THIS SERVER';
+  $('#stats-heading').textContent = user ? `Statistics · ${user.name}` : 'Traffic statistics';
+  $('#stats-dialog').showModal();
+  loadStats();
+}
+async function loadStats() {
+  const user = manageState.statsUser; const range = $('#stats-range').value;
+  try {
+    const [stats, clients] = await Promise.all([
+      serverCall(user ? { op: 'stats', user: user.id, range } : { op: 'stats', range }),
+      serverCall(user ? { op: 'clients', user: user.id } : { op: 'clients' }),
+    ]);
+    const chart = $('#stats-chart'); chart.replaceChildren();
+    const series = stats.series || [];
+    let up = 0, down = 0;
+    if (series.length) {
+      const top = Math.max(...series.map(b => b.up + b.down), 1); const width = 600 / series.length;
+      series.forEach((b, i) => {
+        up += b.up; down += b.down;
+        const d = b.down / top * 128, u = b.up / top * 128;
+        chart.append(svgNode('rect', { x: i * width + 1, y: 138 - d - u, width: Math.max(width - 2, 1), height: d, class: 'bar-down' }));
+        chart.append(svgNode('rect', { x: i * width + 1, y: 138 - u, width: Math.max(width - 2, 1), height: u, class: 'bar-up' }));
+      });
+    } else {
+      const text = svgNode('text', { x: 6, y: 70 }); text.textContent = 'No traffic recorded in this period'; chart.append(text);
+    }
+    $('#stats-total').textContent = `${formatData(down)} downloaded and ${formatData(up)} uploaded, shown per ${stats.unit}. History is kept for ${stats.retention.history_days} days.`;
+    hbars($('#stats-types'), stats.types); hbars($('#stats-protocols'), stats.protocols);
+    hbars($('#stats-sites'), stats.sites, stats.site_stats ? 'No sites recorded in this period.' : 'Top services are off. Turn them on in Server settings.');
+    const people = $('#stats-people'); people.replaceChildren();
+    if (!user && stats.users && stats.users.length) {
+      people.append(el('h3', 'subhead', 'By user'));
+      const box = el('div'); people.append(box);
+      hbars(box, stats.users.map(u => ({ label: u.name, bytes: u.up + u.down })).filter(u => u.bytes > 0), 'No traffic in this period.');
+    }
+    const target = $('#stats-clients'); target.replaceChildren();
+    if (!clients.clients.length) { target.append(el('p', 'field-note', 'No connections recorded in the last 30 days.')); return; }
+    const table = el('table', 'client-table'); const head = el('tr');
+    for (const title of [user ? '' : 'User', 'Address', 'Protocol', 'Last seen'].filter(Boolean)) head.append(el('th', '', title));
+    table.append(head);
+    for (const c of clients.clients.slice(0, 50)) {
+      const row = el('tr');
+      if (!user) row.append(el('td', '', c.name));
+      row.append(el('td', '', c.ip), el('td', '', PROTOCOL_NAMES[c.protocol] || c.protocol), el('td', '', new Date(c.last_unix * 1000).toLocaleString()));
+      table.append(row);
+    }
+    target.append(table);
+  } catch (error) { notice(error.message); }
+}
+$('#stats-range').addEventListener('change', loadStats);
+$('#server-stats').addEventListener('click', () => openStats(null));
+
+// --- QR codes and connection kits ---
+async function showQR(user, key, content) {
+  const svg = await serverCall({ op: 'key_qr', user: user.id, key: key.id, format: 'svg', content });
+  $('#qr-image').src = 'data:image/svg+xml;base64,' + btoa(svg);
+  $('#qr-heading').textContent = `${PROTOCOL_NAMES[key.protocol] || key.protocol} · ${user.name}`;
+  $('#qr-note').textContent = content === 'conf' ? 'Scan with the WireGuard or AmneziaWG app: + then Scan from QR code.'
+    : key.protocol === 'shadowsocks' ? 'Scan with Outline, Shadowrocket or v2rayNG.'
+    : key.protocol === 'vless' ? 'Scan with v2rayNG, Hiddify, Streisand or Shadowrocket.' : 'Scan with the AmneziaVPN app.';
+  $('#qr-dialog').showModal();
+}
+$('#qr-dialog').addEventListener('close', () => $('#qr-image').removeAttribute('src'));
+$('#kit-save').addEventListener('click', async () => {
+  const user = manageState.keysUser; formError('#keys-error');
+  try {
+    const page = await serverCall({ op: 'kit', user: user.id });
+    const saved = await nativeInvoke('save_download', { name: `${user.name}-vpn`, content: page });
+    notice(`Connection kit for ${user.name} saved as ${saved}. Send it privately; it contains their keys.`, true);
+  } catch (error) { formError('#keys-error', error); }
 });

@@ -216,6 +216,10 @@ struct Daemon {
     session: Option<Session>,
     events: mpsc::Sender<&'static str>,
     audit_log: Arc<AuditLog>,
+    /// One pinned client per managed server, reused across calls (live polling).
+    admin_clients: std::sync::Mutex<
+        std::collections::HashMap<String, (String, ghostlink_engine::server_admin::AdminClient)>,
+    >,
 }
 impl Daemon {
     fn commit(&mut self, next: Store) -> Result<()> {
@@ -777,6 +781,9 @@ impl Daemon {
                 if next.managed_servers.remove(&name).is_none() {
                     return Ok(Response::err("not_found", "No managed server has this ID"));
                 }
+                if let Ok(mut clients) = self.admin_clients.lock() {
+                    clients.remove(&name);
+                }
                 self.commit(next)?;
                 // Only this device forgets the server; the server and its users are untouched.
                 Ok(Response::ok(json!({"removed": name})))
@@ -860,6 +867,7 @@ async fn run(
         session: None,
         events,
         audit_log: audit_log.clone(),
+        admin_clients: Default::default(),
     }));
     let mut listener = ipc::Listener::bind(&args).await?;
     {

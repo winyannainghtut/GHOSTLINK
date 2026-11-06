@@ -201,6 +201,39 @@ enum ServerCommand {
         /// PROTOCOL=PORT, e.g. vless=8443. Repeatable.
         #[arg(long = "port")]
         ports: Vec<String>,
+        /// Record top sites per user (off deletes what was recorded).
+        #[arg(long, value_parser = ["on", "off"])]
+        site_stats: Option<String>,
+        /// Days of traffic history to keep (7-365).
+        #[arg(long)]
+        history_days: Option<u32>,
+        /// Days of site totals to keep (1-90).
+        #[arg(long)]
+        site_days: Option<u32>,
+        /// Size limit for recorded history, in MB.
+        #[arg(long)]
+        history_max_mb: Option<u32>,
+    },
+    /// Live speed per user, online users and server health.
+    Live {
+        #[arg(long)]
+        server: String,
+    },
+    /// Recorded traffic: types, protocols, top services and usage over time.
+    Stats {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long, default_value = "7d", value_parser = ["24h", "7d", "30d", "90d"])]
+        range: String,
+    },
+    /// Addresses users connected from (last 30 days).
+    Clients {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: Option<String>,
     },
     Users {
         #[command(subcommand)]
@@ -299,6 +332,27 @@ enum ServerKeysCommand {
         user: String,
         #[arg(long)]
         key: String,
+    },
+    /// Print a key's QR code in the terminal.
+    Qr {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        key: String,
+        /// auto (the .conf for WireGuard-family keys), key or conf.
+        #[arg(long, default_value = "auto", value_parser = ["auto", "key", "conf"])]
+        content: String,
+    },
+    /// Save an HTML connection kit (all of a user's keys, QR codes and app help) to a NEW private file.
+    Kit {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 #[derive(Subcommand)]
@@ -790,6 +844,10 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             enable,
             disable,
             ports,
+            site_stats,
+            history_days,
+            site_days,
+            history_max_mb,
         } => {
             let mut protocols = std::collections::BTreeMap::<String, ProtocolPatch>::new();
             for protocol in enable {
@@ -818,6 +876,10 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         hostname: hostname.clone(),
                         vless_handshake: reality_site.clone(),
                         protocols: (!protocols.is_empty()).then_some(protocols),
+                        site_stats: site_stats.as_deref().map(|v| v == "on"),
+                        history_days: *history_days,
+                        site_days: *site_days,
+                        history_max_mb: *history_max_mb,
                     },
                 },
             )
@@ -906,6 +968,33 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                     key: key.clone(),
                 },
             ),
+            ServerKeysCommand::Qr {
+                server,
+                user,
+                key,
+                content,
+            } => call(
+                server,
+                ServerOp::KeyQr {
+                    user: user.clone(),
+                    key: key.clone(),
+                    format: "text".into(),
+                    content: Some(content.clone()),
+                },
+            ),
+            ServerKeysCommand::Kit {
+                server,
+                user,
+                output,
+            } => {
+                if output.exists() {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "--output must name a new file; it will not overwrite an existing one",
+                    ));
+                }
+                call(server, ServerOp::Kit { user: user.clone() })
+            }
         },
         ServerCommand::Rules { command } => match command {
             ServerRulesCommand::Show { server, user: None } => call(server, ServerOp::RulesGet),
@@ -946,6 +1035,21 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             }
         },
         ServerCommand::Usage { server } => call(server, ServerOp::Metrics),
+        ServerCommand::Live { server } => call(server, ServerOp::Live),
+        ServerCommand::Stats {
+            server,
+            user,
+            range,
+        } => call(
+            server,
+            ServerOp::Stats {
+                user: user.clone(),
+                range: range.clone(),
+            },
+        ),
+        ServerCommand::Clients { server, user } => {
+            call(server, ServerOp::Clients { user: user.clone() })
+        }
     })
 }
 
@@ -1016,6 +1120,26 @@ fn finish_server_response(
                     key.remove("config");
                 }
             }
+        }
+        ServerCommand::Keys {
+            command: ServerKeysCommand::Qr { .. },
+        } => {
+            // Printed as-is so the terminal draws the code.
+            if let Some(text) = data.as_str() {
+                *data = json!({ "help_text": text.trim_end() });
+            }
+        }
+        ServerCommand::Keys {
+            command: ServerKeysCommand::Kit { output, .. },
+        } => {
+            let page = data.as_str().unwrap_or_default().to_string();
+            if write_private(output, &page).is_err() {
+                return Err(Response::err(
+                    "permission_denied",
+                    "Could not write the NEW private --output file",
+                ));
+            }
+            *data = json!({ "saved_to": output.display().to_string() });
         }
         ServerCommand::Rules {
             command: ServerRulesCommand::Show {

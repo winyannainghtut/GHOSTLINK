@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter/certificate"
@@ -67,20 +68,47 @@ type Engine struct {
 	mu       sync.Mutex
 	box      *box.Box
 	lastGood []byte
-	usage    *Usage
+	monitor  *Monitor
 	logLevel string
+	reloads  atomic.Int64
 }
 
-func NewEngine(usage *Usage, logLevel string) *Engine {
-	return &Engine{usage: usage, logLevel: logLevel}
+func NewEngine(monitor *Monitor, logLevel string) *Engine {
+	return &Engine{monitor: monitor, logLevel: logLevel}
 }
+
+// PeerStatus reports WireGuard/AmneziaWG peers, keyed by protocol and then public key.
+func (e *Engine) PeerStatus() map[string]map[string]awg.PeerStatus {
+	e.mu.Lock()
+	instance := e.box
+	e.mu.Unlock()
+	result := map[string]map[string]awg.PeerStatus{}
+	if instance == nil {
+		return result
+	}
+	for _, protocol := range []string{WireGuard, AmneziaWG} {
+		if endpoint, ok := instance.Endpoint().Get(protocol); ok {
+			if peers, ok := endpoint.(interface {
+				PeerStatus() (map[string]awg.PeerStatus, error)
+			}); ok {
+				if status, err := peers.PeerStatus(); err == nil {
+					result[protocol] = status
+				}
+			}
+		}
+	}
+	return result
+}
+
+// Reloads counts successful engine (re)starts.
+func (e *Engine) Reloads() int64 { return e.reloads.Load() }
 
 func (e *Engine) start(config []byte) (*box.Box, error) {
 	instance, err := newBox(config)
 	if err != nil {
 		return nil, err
 	}
-	instance.Router().AppendTracker(e.usage)
+	instance.Router().AppendTracker(e.monitor)
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		return nil, err
@@ -119,6 +147,7 @@ func (e *Engine) Apply(state *State) error {
 		return err
 	}
 	e.box, e.lastGood = instance, config
+	e.reloads.Add(1)
 	return nil
 }
 

@@ -33,6 +33,7 @@ commands:
   serve     run the VPN engine and the management API
   show-key  print the management key
   check     validate the stored configuration without opening ports
+  admin     manage users, keys, rules and monitoring (admin help lists commands)
   version   print the version
 
 flags:
@@ -81,6 +82,10 @@ func main() {
 		os.Exit(2)
 	}
 	command := os.Args[1]
+	if command == "admin" {
+		admin(os.Args[2:])
+		return
+	}
 	flags := flag.NewFlagSet(command, flag.ExitOnError)
 	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	state := flags.String("state", defaultState, "")
@@ -144,8 +149,22 @@ func serve(dir, logLevel string) {
 	if err != nil {
 		fail("%v (run init first)", err)
 	}
-	usage := server.NewUsage()
-	service := server.NewService(store, server.NewEngine(usage, logLevel), usage)
+	// Servers created before the dashboard existed get its port and token here.
+	if _, _, err := server.Initialize(dir, server.InitOptions{}); err != nil {
+		fail("%v", err)
+	}
+	if store, err = server.Load(dir); err != nil {
+		fail("%v", err)
+	}
+	monitor := server.NewMonitor()
+	service := server.NewService(store, server.NewEngine(monitor, logLevel), monitor)
+	service.SetReporter(func(what string, err error) {
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "ghostlink-server: %s: back to normal\n", what)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "ghostlink-server: %s: %v\n", what, err)
+	})
 	if err := service.Start(); err != nil {
 		fail("could not start the VPN engine: %v", err)
 	}
@@ -155,15 +174,24 @@ func serve(dir, logLevel string) {
 		service.Close()
 		fail("could not start the management API: %v", err)
 	}
+	dashboard := server.NewDashboard(service, api)
+	if err := dashboard.Apply(); err != nil {
+		fmt.Fprintf(os.Stderr, "ghostlink-server: dashboard not started: %v\n", err)
+	}
+	service.OnChange(func(previous, next *server.State) {
+		if previous.Dashboard != next.Dashboard {
+			if err := dashboard.Apply(); err != nil {
+				fmt.Fprintf(os.Stderr, "ghostlink-server: dashboard: %v\n", err)
+			}
+		}
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	served := make(chan error, 1)
 	go func() { served <- httpServer.ServeTLS(listener, "", "") }()
 	accounted := make(chan struct{})
 	go func() {
-		service.RunAccounting(ctx, 30*time.Second, func(err error) {
-			fmt.Fprintf(os.Stderr, "ghostlink-server: usage accounting: %v\n", err)
-		})
+		service.Run(ctx)
 		close(accounted)
 	}()
 	fmt.Fprintf(os.Stderr, "ghostlink-server: running (%s)\n", version.Server)
@@ -178,10 +206,22 @@ func serve(dir, logLevel string) {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = httpServer.Shutdown(shutdown)
 	cancel()
+	dashboard.Close()
 	<-accounted
 	if err := service.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "ghostlink-server: engine close: %v\n", err)
 	}
 	fmt.Fprintln(os.Stderr, "ghostlink-server: stopped")
 	os.Exit(exit)
+}
+
+// admin runs a management command against the local server: admin [--state DIR] COMMAND ...
+func admin(args []string) {
+	dir := defaultState
+	if len(args) >= 2 && args[0] == "--state" {
+		dir, args = args[1], args[2:]
+	}
+	if err := server.RunAdmin(dir, args, os.Stdout); err != nil {
+		fail("%v", err)
+	}
 }

@@ -1,0 +1,414 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 Ghostlink contributors
+
+package server
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/bufio"
+	N "github.com/sagernet/sing/common/network"
+	"golang.org/x/net/publicsuffix"
+)
+
+// Monitor is the router's connection tracker. It counts every routed connection and flow per
+// user: bytes in each direction, open connections, traffic type, protocol used and (only when
+// site statistics are on) the site or service. One Monitor outlives engine reloads.
+type Monitor struct {
+	mu      sync.Mutex
+	users   map[string]*userCounters
+	detail  map[detailKey]*atomic.Int64
+	sites   map[string]map[string]bool // user -> site labels counted today (bounded)
+	clients map[string]map[string]clientSeen
+
+	siteStats    atomic.Bool
+	detailPaused atomic.Bool
+
+	samples    []rateSample // server totals, one per second, newest last
+	lastUp     map[string]int64
+	lastDown   map[string]int64
+	rates      map[string][2]int64
+	sampleDay  int64
+	historyMu  sync.Mutex
+	history    *History
+	flushedUp  map[string]int64
+	flushedDn  map[string]int64
+	flushedDet map[detailKey]int64
+}
+
+type userCounters struct {
+	up, down   atomic.Int64 // totals since start
+	pending    atomic.Int64 // both directions since the last Drain
+	active     atomic.Int64
+	lastActive atomic.Int64 // unix seconds
+}
+
+type detailKey struct{ user, kind, label string }
+
+type clientSeen struct {
+	Protocol string
+	First    time.Time
+	Last     time.Time
+}
+
+type rateSample struct {
+	T    int64 `json:"t"`
+	Up   int64 `json:"up"`
+	Down int64 `json:"down"`
+}
+
+const (
+	maxSitesPerUserDay = 500
+	rateSamples        = 120
+)
+
+var _ adapter.ConnectionTracker = (*Monitor)(nil)
+
+func NewMonitor() *Monitor {
+	return &Monitor{
+		users:      map[string]*userCounters{},
+		detail:     map[detailKey]*atomic.Int64{},
+		sites:      map[string]map[string]bool{},
+		clients:    map[string]map[string]clientSeen{},
+		lastUp:     map[string]int64{},
+		lastDown:   map[string]int64{},
+		rates:      map[string][2]int64{},
+		history:    newHistory(),
+		flushedUp:  map[string]int64{},
+		flushedDn:  map[string]int64{},
+		flushedDet: map[detailKey]int64{},
+	}
+}
+
+func (m *Monitor) user(tag string) *userCounters {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[tag]
+	if !ok {
+		u = &userCounters{}
+		m.users[tag] = u
+	}
+	return u
+}
+
+func (m *Monitor) detailCounter(key detailKey) *atomic.Int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if key.kind == "site" {
+		seen := m.sites[key.user]
+		if seen == nil {
+			seen = map[string]bool{}
+			m.sites[key.user] = seen
+		}
+		if !seen[key.label] && len(seen) >= maxSitesPerUserDay {
+			key.label = "Other sites"
+		}
+		seen[key.label] = true
+	}
+	c, ok := m.detail[key]
+	if !ok {
+		c = new(atomic.Int64)
+		m.detail[key] = c
+	}
+	return c
+}
+
+// trafficType names the sniffed protocol of a connection in plain words.
+func trafficType(metadata adapter.InboundContext) string {
+	switch metadata.Protocol {
+	case "tls":
+		return "Web (HTTPS)"
+	case "http":
+		return "Web (HTTP)"
+	case "quic":
+		return "QUIC (video, Google)"
+	case "dns":
+		return "DNS"
+	case "bittorrent":
+		return "BitTorrent"
+	case "ssh":
+		return "SSH"
+	case "rdp":
+		return "Remote desktop"
+	case "stun", "dtls":
+		return "Calls"
+	case "ntp":
+		return "Time (NTP)"
+	}
+	if metadata.Network == N.NetworkUDP {
+		return "Other UDP"
+	}
+	return "Other TCP"
+}
+
+// counters returns the read (upload) and write (download) counters for a connection.
+func (m *Monitor) counters(metadata adapter.InboundContext) (*userCounters, []*atomic.Int64, []*atomic.Int64) {
+	u := m.user(metadata.User)
+	u.lastActive.Store(time.Now().Unix())
+	up := []*atomic.Int64{&u.up, &u.pending}
+	down := []*atomic.Int64{&u.down, &u.pending}
+	if !m.detailPaused.Load() {
+		shared := []*atomic.Int64{
+			m.detailCounter(detailKey{metadata.User, "type", trafficType(metadata)}),
+			m.detailCounter(detailKey{metadata.User, "protocol", metadata.Inbound}),
+		}
+		if m.siteStats.Load() {
+			if label := siteLabel(metadata); label != "" {
+				shared = append(shared, m.detailCounter(detailKey{metadata.User, "site", label}))
+			}
+		}
+		up = append(up, shared...)
+		down = append(down, shared...)
+		if metadata.Inbound == Shadowsocks || metadata.Inbound == VLESS {
+			m.sawClient(metadata.User, metadata.Source.Addr, metadata.Inbound, time.Now())
+		}
+	}
+	return u, up, down
+}
+
+func (m *Monitor) sawClient(user string, addr netip.Addr, protocol string, at time.Time) {
+	if !addr.IsValid() {
+		return
+	}
+	ip := addr.Unmap().String()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := m.clients[user]
+	if seen == nil {
+		seen = map[string]clientSeen{}
+		m.clients[user] = seen
+	}
+	entry, ok := seen[ip]
+	if !ok {
+		entry = clientSeen{Protocol: protocol, First: at}
+	}
+	entry.Last, entry.Protocol = at, protocol
+	seen[ip] = entry
+}
+
+func (m *Monitor) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
+	if metadata.User == "" {
+		return conn
+	}
+	u, up, down := m.counters(metadata)
+	u.active.Add(1)
+	return &trackedConn{CounterConn: bufio.NewInt64CounterConn(conn, up, down), user: u}
+}
+
+func (m *Monitor) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+	if metadata.User == "" {
+		return conn
+	}
+	u, up, down := m.counters(metadata)
+	u.active.Add(1)
+	return &trackedPacketConn{CounterPacketConn: bufio.NewInt64CounterPacketConn(conn, up, nil, down, nil), user: u}
+}
+
+func (m *Monitor) RoutedFlow(_ context.Context, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) tun.FlowTracker {
+	if metadata.User == "" {
+		return nil
+	}
+	u, up, down := m.counters(metadata)
+	u.active.Add(1)
+	return &flowCounter{user: u, up: up, down: down}
+}
+
+// trackedConn counts open connections; embedding keeps the counter's upstream interfaces.
+type trackedConn struct {
+	*bufio.CounterConn
+	user *userCounters
+	once sync.Once
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(func() { c.user.active.Add(-1) })
+	return c.CounterConn.Close()
+}
+
+type trackedPacketConn struct {
+	*bufio.CounterPacketConn
+	user *userCounters
+	once sync.Once
+}
+
+func (c *trackedPacketConn) Close() error {
+	c.once.Do(func() { c.user.active.Add(-1) })
+	return c.CounterPacketConn.Close()
+}
+
+type flowCounter struct {
+	user     *userCounters
+	up, down []*atomic.Int64
+	once     sync.Once
+}
+
+func (f *flowCounter) AttachFlow(tun.FlowHandle) {}
+func (f *flowCounter) CountForward(n int) {
+	for _, c := range f.up {
+		c.Add(int64(n))
+	}
+}
+func (f *flowCounter) CountReverse(n int) {
+	for _, c := range f.down {
+		c.Add(int64(n))
+	}
+}
+func (f *flowCounter) FlowEstablished() {}
+func (f *flowCounter) CloseFlow(tun.FlowCloseReason) {
+	f.once.Do(func() { f.user.active.Add(-1) })
+}
+
+// Drain returns the bytes counted since the last call per user tag, for data limits.
+func (m *Monitor) Drain() map[string]uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := map[string]uint64{}
+	for tag, u := range m.users {
+		if n := u.pending.Swap(0); n > 0 {
+			result[tag] = uint64(n)
+		}
+	}
+	return result
+}
+
+// Sample records one per-second rate point. Run it once a second.
+func (m *Monitor) Sample(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var totalUp, totalDown int64
+	for tag, u := range m.users {
+		up, down := u.up.Load(), u.down.Load()
+		dUp, dDown := up-m.lastUp[tag], down-m.lastDown[tag]
+		m.lastUp[tag], m.lastDown[tag] = up, down
+		m.rates[tag] = [2]int64{dUp, dDown}
+		if dUp+dDown > 0 {
+			u.lastActive.Store(now.Unix())
+		}
+		totalUp += dUp
+		totalDown += dDown
+	}
+	m.samples = append(m.samples, rateSample{now.Unix(), totalUp, totalDown})
+	if len(m.samples) > rateSamples {
+		m.samples = m.samples[len(m.samples)-rateSamples:]
+	}
+	if day := dayStart(now); day != m.sampleDay {
+		m.sampleDay = day
+		m.sites = map[string]map[string]bool{}
+	}
+}
+
+// UserLive is one user's live state.
+type UserLive struct {
+	UpBps      int64 `json:"up_bps"`
+	DownBps    int64 `json:"down_bps"`
+	Active     int64 `json:"active"`
+	LastActive int64 `json:"last_active_unix"`
+}
+
+func (m *Monitor) Live() (map[string]UserLive, []rateSample) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	users := map[string]UserLive{}
+	for tag, u := range m.users {
+		rate := m.rates[tag]
+		users[tag] = UserLive{UpBps: rate[0], DownBps: rate[1], Active: u.active.Load(), LastActive: u.lastActive.Load()}
+	}
+	return users, append([]rateSample(nil), m.samples...)
+}
+
+// SetSiteStats turns site statistics on or off; turning them off forgets every site counted.
+func (m *Monitor) SetSiteStats(on bool) {
+	m.siteStats.Store(on)
+	if on {
+		return
+	}
+	m.mu.Lock()
+	for key := range m.detail {
+		if key.kind == "site" {
+			delete(m.detail, key)
+			delete(m.flushedDet, key)
+		}
+	}
+	m.sites = map[string]map[string]bool{}
+	m.mu.Unlock()
+	m.historyMu.Lock()
+	m.history.clearSites()
+	m.historyMu.Unlock()
+}
+
+// PeerSeen records WireGuard/AmneziaWG peers' real addresses and handshakes.
+func (m *Monitor) PeerSeen(user, protocol string, endpoint netip.AddrPort, handshake time.Time) {
+	if !handshake.IsZero() {
+		u := m.user(user)
+		if handshake.Unix() > u.lastActive.Load() {
+			u.lastActive.Store(handshake.Unix())
+		}
+	}
+	if endpoint.IsValid() && !m.detailPaused.Load() && !handshake.IsZero() {
+		m.sawClient(user, endpoint.Addr(), protocol, handshake)
+	}
+}
+
+// --- site labels ---
+
+var services = []struct {
+	label    string
+	suffixes []string
+}{
+	{"YouTube", []string{"youtube.com", "googlevideo.com", "ytimg.com", "youtu.be", "youtube-nocookie.com", "youtubei.googleapis.com"}},
+	{"Netflix", []string{"netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com", "nflxso.net"}},
+	{"TikTok", []string{"tiktok.com", "tiktokcdn.com", "tiktokv.com", "tiktokcdn-us.com", "byteoversea.com", "ibytedtos.com", "ttwstatic.com"}},
+	{"Instagram", []string{"instagram.com", "cdninstagram.com"}},
+	{"WhatsApp", []string{"whatsapp.com", "whatsapp.net"}},
+	{"Messenger", []string{"messenger.com"}},
+	{"Facebook", []string{"facebook.com", "fbcdn.net", "fb.com", "facebook.net", "fbsbx.com"}},
+	{"Telegram", []string{"telegram.org", "t.me", "telegram.me", "telesco.pe", "cdn-telegram.org"}},
+	{"Viber", []string{"viber.com"}},
+	{"Signal", []string{"signal.org", "whispersystems.org"}},
+	{"Discord", []string{"discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media"}},
+	{"X (Twitter)", []string{"twitter.com", "x.com", "twimg.com", "t.co"}},
+	{"Zoom", []string{"zoom.us", "zoom.com"}},
+	{"Spotify", []string{"spotify.com", "scdn.co", "spotifycdn.com"}},
+	{"Amazon", []string{"amazon.com", "primevideo.com", "amazonvideo.com", "media-amazon.com", "aiv-cdn.net"}},
+	{"Steam", []string{"steampowered.com", "steamcontent.com", "steamcommunity.com", "steamstatic.com"}},
+	{"Apple", []string{"apple.com", "icloud.com", "mzstatic.com", "apple-dns.net", "cdn-apple.com"}},
+	{"Microsoft", []string{"microsoft.com", "live.com", "office.com", "office365.com", "windows.com", "windowsupdate.com", "msn.com", "bing.com", "skype.com", "outlook.com", "sharepoint.com", "onedrive.com"}},
+	{"Google", []string{"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "gmail.com", "ggpht.com", "gvt1.com", "gvt2.com"}},
+}
+
+func siteLabel(metadata adapter.InboundContext) string {
+	domain := metadata.Domain
+	if domain == "" && metadata.Destination.IsFqdn() {
+		domain = metadata.Destination.Fqdn
+	}
+	return labelFor(domain)
+}
+
+func labelFor(domain string) string {
+	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
+	if domain == "" {
+		return ""
+	}
+	if _, err := netip.ParseAddr(domain); err == nil {
+		return ""
+	}
+	for _, service := range services {
+		for _, suffix := range service.suffixes {
+			if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
+				return service.label
+			}
+		}
+	}
+	if site, err := publicsuffix.EffectiveTLDPlusOne(domain); err == nil {
+		return site
+	}
+	return domain
+}

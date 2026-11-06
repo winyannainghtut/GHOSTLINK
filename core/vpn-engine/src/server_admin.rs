@@ -265,6 +265,55 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
         ServerOp::RulesGet => (Method::GET, "/rules".into(), None),
         ServerOp::RulesSet { rules } => (Method::PUT, "/rules".into(), body(rules)?),
         ServerOp::Metrics => (Method::GET, "/metrics".into(), None),
+        ServerOp::Live => (Method::GET, "/live".into(), None),
+        ServerOp::Stats { user, range } => {
+            if !["24h", "7d", "30d", "90d"].contains(&range.as_str()) {
+                return Err(AdminError::Invalid(
+                    "Range must be 24h, 7d, 30d or 90d".into(),
+                ));
+            }
+            let mut path = format!("/stats?range={range}");
+            if let Some(user) = user {
+                path.push_str(&format!("&user={}", numeric_id(user)?));
+            }
+            (Method::GET, path, None)
+        }
+        ServerOp::Clients { user } => {
+            let path = match user {
+                Some(user) => format!("/clients?user={}", numeric_id(user)?),
+                None => "/clients".into(),
+            };
+            (Method::GET, path, None)
+        }
+        ServerOp::KeyQr {
+            user,
+            key,
+            format,
+            content,
+        } => {
+            let content = content.as_deref().unwrap_or("auto");
+            if !["svg", "text"].contains(&format.as_str())
+                || !["auto", "key", "conf"].contains(&content)
+            {
+                return Err(AdminError::Invalid(
+                    "QR format must be svg or text, and content auto, key or conf".into(),
+                ));
+            }
+            (
+                Method::GET,
+                format!(
+                    "/users/{}/keys/{}/qr?format={format}&content={content}",
+                    numeric_id(user)?,
+                    numeric_id(key)?
+                ),
+                None,
+            )
+        }
+        ServerOp::Kit { user } => (
+            Method::GET,
+            format!("/users/{}/kit", numeric_id(user)?),
+            None,
+        ),
     })
 }
 
@@ -277,37 +326,82 @@ fn clean_message(text: &str) -> String {
     }
 }
 
-/// Sends one request to the server named by `key`.
+/// A pinned HTTPS client for one server. Reusing it keeps the TLS connection alive, so frequent
+/// calls (live monitoring) do not repeat the handshake.
+#[derive(Clone)]
+pub struct AdminClient {
+    client: reqwest::Client,
+    verifier: Arc<PinnedCertificate>,
+}
+
+impl AdminClient {
+    pub fn new(key: &ManagementKey) -> Result<Self, AdminError> {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = Arc::new(PinnedCertificate {
+            pin: key.pin(),
+            provider: provider.clone(),
+            mismatch: AtomicBool::new(false),
+        });
+        let tls = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|_| AdminError::Invalid("TLS is unavailable".into()))?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier.clone())
+            .with_no_client_auth();
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(tls)
+            .redirect(Policy::none())
+            .no_proxy()
+            .http1_only()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(25))
+            .build()
+            .map_err(|_| AdminError::Invalid("TLS is unavailable".into()))?;
+        Ok(Self { client, verifier })
+    }
+
+    /// Sends one request to the server named by `key`.
+    pub async fn send(
+        &self,
+        key: &ManagementKey,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, AdminError> {
+        self.verifier.mismatch.store(false, Ordering::SeqCst);
+        send_with(&self.client, &self.verifier, key, method, path, body).await
+    }
+
+    pub async fn call(&self, key: &ManagementKey, op: &ServerOp) -> Result<Value, AdminError> {
+        let (method, path, body) = request(op)?;
+        self.send(key, method, &path, body).await
+    }
+}
+
+/// Sends one request with a fresh client.
 pub async fn send(
     key: &ManagementKey,
     method: Method,
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, AdminError> {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = Arc::new(PinnedCertificate {
-        pin: key.pin(),
-        provider: provider.clone(),
-        mismatch: AtomicBool::new(false),
-    });
-    let tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .map_err(|_| AdminError::Invalid("TLS is unavailable".into()))?
-        .dangerous()
-        .with_custom_certificate_verifier(verifier.clone())
-        .with_no_client_auth();
-    let client = reqwest::Client::builder()
-        .use_preconfigured_tls(tls)
-        .redirect(Policy::none())
-        .no_proxy()
-        .http1_only()
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(25))
-        .build()
-        .map_err(|_| AdminError::Invalid("TLS is unavailable".into()))?;
+    AdminClient::new(key)?.send(key, method, path, body).await
+}
+
+async fn send_with(
+    client: &reqwest::Client,
+    verifier: &PinnedCertificate,
+    key: &ManagementKey,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, AdminError> {
     let mut request = client
         .request(method, format!("{}{}", key.api_url, path))
-        .header("Accept", "application/json");
+        .header(
+            "Accept",
+            "application/json, image/svg+xml, text/plain, text/html",
+        );
     if let Some(body) = body {
         request = request.json(&body);
     }
@@ -319,6 +413,11 @@ pub async fn send(
         Err(_) => return Err(AdminError::Unreachable),
     };
     let status = response.status();
+    let textual = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/") || t.starts_with("image/svg+xml"));
     let mut data = Vec::new();
     loop {
         match response.chunk().await {
@@ -334,6 +433,11 @@ pub async fn send(
     }
     let value: Value = if data.is_empty() {
         Value::Null
+    } else if textual && status.is_success() {
+        match String::from_utf8(data) {
+            Ok(text) => Value::String(text),
+            Err(_) => return Err(AdminError::InvalidResponse),
+        }
     } else {
         match serde_json::from_slice(&data) {
             Ok(value) => value,
@@ -361,10 +465,9 @@ pub async fn send(
     Ok(value)
 }
 
-/// Runs a typed operation.
+/// Runs a typed operation with a fresh client.
 pub async fn call(key: &ManagementKey, op: &ServerOp) -> Result<Value, AdminError> {
-    let (method, path, body) = request(op)?;
-    send(key, method, &path, body).await
+    AdminClient::new(key)?.call(key, op).await
 }
 
 /// Confirms the key reaches a Ghostlink server and returns its `/server` description.

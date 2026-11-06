@@ -7,21 +7,42 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Service ties stored state, the running engine and usage accounting together. Every change
-// is applied to a copy, started in the engine and only then saved, so a change the engine
-// refuses (for example a port already in use) leaves the server as it was.
+// Service ties stored state, the running engine and monitoring together. Every change is
+// applied to a copy, started in the engine and only then saved, so a change the engine refuses
+// (for example a port already in use) leaves the server as it was.
 type Service struct {
-	store  *Store
-	engine *Engine
-	usage  *Usage
+	store        *Store
+	engine       *Engine
+	monitor      *Monitor
+	health       *healthSampler
+	hooksMu      sync.Mutex
+	hooks        []func(previous, next *State)
+	historyBytes atomic.Int64
+	report       func(string, error)
 }
 
-func NewService(store *Store, engine *Engine, usage *Usage) *Service {
-	return &Service{store: store, engine: engine, usage: usage}
+func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
+	return &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
+		report: func(string, error) {}}
 }
+
+// OnChange registers fn to run after every saved change, outside the state lock.
+func (s *Service) OnChange(fn func(previous, next *State)) {
+	s.hooksMu.Lock()
+	defer s.hooksMu.Unlock()
+	s.hooks = append(s.hooks, fn)
+}
+
+// SetReporter receives background errors (they are logged by the server command).
+func (s *Service) SetReporter(fn func(string, error)) { s.report = fn }
+
+func (s *Service) historyPath() string { return filepath.Join(s.store.Dir(), HistoryFile) }
 
 func clone(state *State) (*State, error) {
 	data, err := json.Marshal(state)
@@ -32,10 +53,14 @@ func clone(state *State) (*State, error) {
 	return &copied, json.Unmarshal(data, &copied)
 }
 
-// Start runs the engine for the stored state.
+// Start loads recorded history and runs the engine for the stored state.
 func (s *Service) Start() error {
+	if err := s.monitor.LoadHistory(s.historyPath()); err != nil {
+		s.report("history", err)
+	}
 	s.store.Lock()
 	defer s.store.Unlock()
+	s.monitor.SetSiteStats(s.store.State.Monitor.SiteStats)
 	return s.engine.Apply(s.store.State)
 }
 
@@ -49,30 +74,52 @@ func (s *Service) Read(fn func(*State)) {
 // Change applies fn to a copy of the state. If the engine configuration changes, the engine
 // restarts with it first; the state is saved only if that worked.
 func (s *Service) Change(fn func(*State) error) error {
+	previous, next, err := s.change(fn)
+	if err != nil || previous == nil {
+		return err
+	}
+	if previous.Monitor.SiteStats != next.Monitor.SiteStats {
+		s.monitor.SetSiteStats(next.Monitor.SiteStats)
+	}
+	for _, u := range previous.Users {
+		if next.User(u.ID) == nil {
+			s.monitor.Forget(u.Tag())
+		}
+	}
+	s.hooksMu.Lock()
+	hooks := append([]func(*State, *State){}, s.hooks...)
+	s.hooksMu.Unlock()
+	for _, hook := range hooks {
+		hook(previous, next)
+	}
+	return nil
+}
+
+func (s *Service) change(fn func(*State) error) (*State, *State, error) {
 	s.store.Lock()
 	defer s.store.Unlock()
 	next, err := clone(s.store.State)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := fn(next); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := next.CheckPorts(); err != nil {
-		return InputError{err}
+		return nil, nil, InputError{err}
 	}
 	before, err := s.store.State.EngineConfig(s.engine.logLevel)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	after, err := next.EngineConfig(s.engine.logLevel)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	reload := !bytes.Equal(before, after)
 	if reload {
 		if err := s.engine.Apply(next); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 	previous := s.store.State
@@ -82,15 +129,19 @@ func (s *Service) Change(fn func(*State) error) error {
 		if reload {
 			_ = s.engine.Apply(previous)
 		}
-		return err
+		return nil, nil, err
 	}
-	return nil
+	snapshot, err := clone(next)
+	if err != nil {
+		return nil, nil, err
+	}
+	return previous, snapshot, nil
 }
 
 // Account adds counted traffic to each user; users who reach their data limit are removed
 // from the engine, which also ends their open connections.
 func (s *Service) Account() error {
-	counted := s.usage.Drain()
+	counted := s.monitor.Drain()
 	if len(counted) == 0 {
 		return nil
 	}
@@ -105,20 +156,96 @@ func (s *Service) Account() error {
 	})
 }
 
-// RunAccounting records usage every interval until ctx ends, then once more.
-func (s *Service) RunAccounting(ctx context.Context, interval time.Duration, report func(error)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+// pollPeers maps WireGuard/AmneziaWG peers back to users for their addresses and handshakes.
+func (s *Service) pollPeers() {
+	byKey := map[string]string{}
+	s.Read(func(state *State) {
+		for _, u := range state.Users {
+			for _, k := range u.Keys {
+				if k.PublicKey != "" {
+					byKey[k.Protocol+"/"+k.PublicKey] = u.Tag()
+				}
+			}
+		}
+	})
+	for protocol, peers := range s.engine.PeerStatus() {
+		for key, status := range peers {
+			if user, ok := byKey[protocol+"/"+key]; ok {
+				s.monitor.PeerSeen(user, protocol, status.Endpoint, status.LastHandshake)
+			}
+		}
+	}
+}
+
+func (s *Service) settings() MonitorSettings {
+	var settings MonitorSettings
+	s.Read(func(state *State) { settings = state.Monitor })
+	return settings
+}
+
+// Record flushes counted traffic into the history and checks the disk; it is safe to call at
+// any time (the API calls it before answering statistics).
+func (s *Service) Record(now time.Time) {
+	s.pollPeers()
+	s.monitor.Flush(now)
+	if paused, changed := s.monitor.CheckDisk(s.store.Dir()); changed {
+		if paused {
+			s.report("disk", errLowDisk)
+		} else {
+			s.report("disk", nil)
+		}
+	}
+}
+
+// SaveHistory rotates and writes recorded traffic.
+func (s *Service) SaveHistory(now time.Time) {
+	size, err := s.monitor.SaveHistory(s.historyPath(), now, s.settings())
+	if err != nil {
+		s.report("history", err)
+		return
+	}
+	s.historyBytes.Store(int64(size))
+}
+
+// Health returns the host snapshot plus monitoring state.
+func (s *Service) Health() Health {
+	health := s.health.Snapshot(s.store.Dir())
+	health.EngineReloads = s.engine.Reloads()
+	health.DetailPaused = s.monitor.detailPaused.Load()
+	health.HistoryBytes = int(s.historyBytes.Load())
+	return health
+}
+
+// Run samples rates every second, records and enforces limits every 30 s and saves history
+// every 5 minutes, until ctx ends; then it records and saves once more.
+func (s *Service) Run(ctx context.Context) {
+	second := time.NewTicker(time.Second)
+	defer second.Stop()
+	var ticks int
 	for {
 		select {
 		case <-ctx.Done():
+			now := time.Now()
 			if err := s.Account(); err != nil {
-				report(err)
+				s.report("usage", err)
 			}
+			s.Record(now)
+			s.SaveHistory(now)
 			return
-		case <-ticker.C:
-			if err := s.Account(); err != nil {
-				report(err)
+		case now := <-second.C:
+			ticks++
+			s.monitor.Sample(now)
+			if ticks%5 == 0 {
+				s.health.Sample(now)
+			}
+			if ticks%30 == 0 {
+				if err := s.Account(); err != nil {
+					s.report("usage", err)
+				}
+				s.Record(now)
+			}
+			if ticks%300 == 0 {
+				s.SaveHistory(now)
 			}
 		}
 	}
@@ -131,3 +258,11 @@ type InputError struct{ Err error }
 
 func (e InputError) Error() string { return e.Err.Error() }
 func (e InputError) Unwrap() error { return e.Err }
+
+type lowDisk struct{}
+
+func (lowDisk) Error() string {
+	return "the disk is nearly full; detailed traffic recording is paused until space is freed"
+}
+
+var errLowDisk error = lowDisk{}

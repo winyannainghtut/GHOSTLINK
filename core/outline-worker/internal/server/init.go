@@ -191,8 +191,19 @@ func NewState(options InitOptions) (*State, error) {
 func Initialize(dir string, options InitOptions) (*Store, bool, error) {
 	store, err := Load(dir)
 	created := false
+	free := options.PortFree
+	if free == nil {
+		free = portFree
+	}
 	switch {
 	case err == nil:
+		if changed, err := store.State.ensureDashboard(free); err != nil {
+			return nil, false, err
+		} else if changed {
+			if err := store.Save(); err != nil {
+				return nil, false, err
+			}
+		}
 		if host := strings.TrimSpace(options.Hostname); host != "" && host != store.State.Hostname {
 			if err := ValidHostname(host); err != nil {
 				return nil, false, err
@@ -208,6 +219,9 @@ func Initialize(dir string, options InitOptions) (*Store, bool, error) {
 			return nil, false, err
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, false, err
+		}
+		if _, err := state.ensureDashboard(free); err != nil {
 			return nil, false, err
 		}
 		store = &Store{dir: dir, State: state}

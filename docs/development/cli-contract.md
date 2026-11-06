@@ -47,10 +47,15 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 - `rules_get`
 - `rules_set {rules}`
 - `metrics`
+- `live`: speeds, open connections, online users, server health
+- `stats {range, user?}`: `range` is `24h`, `7d`, `30d` or `90d`
+- `clients {user?}`: addresses users connected from
+- `key_qr {user, key, format, content?}`: `format` `svg` or `text`; `content` `auto`, `key` or `conf`. Answered as a string.
+- `kit {user}`: the HTML connection kit, answered as a string
 
 User and key IDs must be decimal. `protocol` is `amneziawg`, `wireguard`, `vless` or `shadowsocks`. With `import_as`, the new key is also saved as a VPN server on this device. The answer then carries `imported` (the profile summary) or `import_error`, and the key is never lost.
 
-The service makes these calls without holding its main lock, so a slow server never delays status, connect or disconnect. A management key is parsed strictly:
+The service makes these calls without holding its main lock, so a slow server never delays status, connect or disconnect. It keeps one pinned connection per managed server and reuses it, so polling `live` every few seconds does not repeat the TLS handshake. Replacing or removing the server drops the connection. A management key is parsed strictly:
 - only `apiUrl` and `certSha256` are allowed;
 - the URL must be plain `https` with a 16–128 character URL-safe secret path and no query;
 - the pin must be 64 hex digits.
@@ -68,7 +73,7 @@ Extra error codes:
 
 A server's own validation message comes back as `invalid_request` (exit 2), and its `404` comes back as `not_found` (exit 2).
 
-CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove | rules show|set | usage`. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
+CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove|qr|kit | rules show|set | usage | live | stats | clients`. `server set` also takes `--site-stats on|off`, `--history-days`, `--site-days` and `--history-max-mb`. `keys kit --output FILE` writes a NEW private file. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
 
 `access_key_import` and `profile_import` take an optional `replace` boolean (default `false`). Without it, an existing ID returns `invalid_request` (exit 2) instead of overwriting the saved credential. The CLI exposes it as `--replace` on `key add` and `profile import`.
 

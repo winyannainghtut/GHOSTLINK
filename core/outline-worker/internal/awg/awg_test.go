@@ -368,3 +368,27 @@ func TestUAPIInjectionIsRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePeers(t *testing.T) {
+	state := "private_key=00\nlisten_port=1\npublic_key=" + strings.Repeat("ab", 32) +
+		"\nendpoint=[::ffff:203.0.113.9]:51820\nlast_handshake_time_sec=1700000000\nlast_handshake_time_nsec=5\nrx_bytes=10\ntx_bytes=20\n" +
+		"public_key=" + strings.Repeat("cd", 32) + "\nlast_handshake_time_sec=0\nrx_bytes=0\ntx_bytes=0\n"
+	peers := parsePeers(state)
+	first := peers[base64.StdEncoding.EncodeToString(mustHex(t, strings.Repeat("ab", 32)))]
+	if first.RxBytes != 10 || first.TxBytes != 20 || first.Endpoint.String() != "203.0.113.9:51820" || first.LastHandshake.Unix() != 1700000000 {
+		t.Fatalf("parsed %+v", first)
+	}
+	second := peers[base64.StdEncoding.EncodeToString(mustHex(t, strings.Repeat("cd", 32)))]
+	if second.Endpoint.IsValid() || !second.LastHandshake.IsZero() {
+		t.Fatalf("a peer without traffic must have no endpoint or handshake: %+v", second)
+	}
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
