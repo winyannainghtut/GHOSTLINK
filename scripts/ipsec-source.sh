@@ -44,7 +44,7 @@ docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work
     done
     [ -f "$dest/APKBUILD" ] || { echo "no Alpine recipe for $origin" >&2; exit 1; }
     # The recipe must be exactly the version in the image.
-    want=$(. "$dest/APKBUILD" >/dev/null 2>&1; echo "$pkgver-r$pkgrel")
+    want=$(set +u; . "$dest/APKBUILD" >/dev/null 2>&1; echo "$pkgver-r$pkgrel")
     grep "^$origin " /work/copyleft | while read -r _ package; do
       case "$package" in
         *-"$want") ;;
