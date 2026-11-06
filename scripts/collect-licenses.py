@@ -40,9 +40,10 @@ def main():
                 entries[key] = {"ecosystem": "rust", "name": package["name"], "version": package["version"], "license": package["license"], "repository": package["repository"], "notices": notices}
     go_list = ["go", "list", "-deps", "-tags", "with_gvisor,with_utls,with_wireguard", "-f", "{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}"]
     worker = ROOT / "core/outline-worker"
-    # The worker for this platform, plus the Linux server and IPsec agent (Linux-only imports).
+    # The worker for this platform, plus the Linux server, IPsec agent and mesh agent (Linux-only
+    # imports).
     listing = subprocess.check_output(go_list + [".", "./cmd/ghostlink-server"], cwd=worker, text=True)
-    listing += subprocess.check_output(go_list + [".", "./cmd/ghostlink-server", "./cmd/ghostlink-ipsec-agent"], cwd=worker, text=True,
+    listing += subprocess.check_output(go_list + [".", "./cmd/ghostlink-server", "./cmd/ghostlink-ipsec-agent", "./cmd/ghostlink-mesh"], cwd=worker, text=True,
                                        env={**os.environ, "GOOS": "linux", "GOARCH": "amd64"})
     for line in set(listing.splitlines()):
         if not line.strip():

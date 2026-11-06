@@ -61,6 +61,16 @@ func NewAPI(service *Service, version string) *API {
 		"GET /users/{id}/kit":                  a.kit,
 		"GET /users/{id}/keys/{keyID}/profile": a.keyProfile,
 		"GET /dashboard":                       a.dashboardInfo,
+		"GET /mesh":                            a.getMesh,
+		"PATCH /mesh":                          a.patchMesh,
+		"POST /mesh/invites":                   a.createInvite,
+		"GET /mesh/invites":                    a.listInvites,
+		"DELETE /mesh/invites/{id}":            a.deleteInvite,
+		"PATCH /mesh/nodes/{id}":               a.patchMeshNode,
+		"DELETE /mesh/nodes/{id}":              a.deleteMeshNode,
+		"GET /mesh/rules":                      a.getMeshRules,
+		"PUT /mesh/rules":                      a.putMeshRules,
+		"GET /mesh/topology":                   a.meshTopology,
 	}
 	for pattern, handler := range routes {
 		a.mux.HandleFunc(pattern, a.wrap(handler))

@@ -255,6 +255,7 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
       [--history-days N] [--site-days N] [--history-max-mb N] [--rotate-ipsec-psk]
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
+  mesh ...                             private network between your servers (mesh help)
 
 Add --json before the command for machine-readable output.`
 
@@ -529,6 +530,8 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		return nil
 	case "dashboard":
 		return c.dashboardCommand(rest, out)
+	case "mesh":
+		return c.meshCommand(rest, out, asJSON)
 	}
 	return fmt.Errorf("unknown command %q\n\n%s", command, adminUsage)
 }

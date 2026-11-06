@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"ghostlink.local/outline-worker/internal/mesh"
 )
 
 const (
@@ -184,11 +186,13 @@ type State struct {
 	WireGuard     WireGuardServer   `json:"wireguard"`
 	AmneziaWG     AmneziaWGServer   `json:"amneziawg"`
 	IPsec         IPsecServer       `json:"ipsec"`
-	Rules         Rules             `json:"rules"`
-	Monitor       MonitorSettings   `json:"monitor"`
-	Dashboard     DashboardConfig   `json:"dashboard"`
-	Users         []*User           `json:"users"`
-	NextID        int               `json:"next_id"`
+	// Mesh is the private overlay network this server coordinates (nil until turned on).
+	Mesh      *mesh.Network   `json:"mesh,omitempty"`
+	Rules     Rules           `json:"rules"`
+	Monitor   MonitorSettings `json:"monitor"`
+	Dashboard DashboardConfig `json:"dashboard"`
+	Users     []*User         `json:"users"`
+	NextID    int             `json:"next_id"`
 }
 
 // IPsecServer is the optional IKEv2/IPsec service for Apple's built-in VPN. The server holds
@@ -283,8 +287,7 @@ func (s *State) ensureDashboard(free func(string, uint16) bool) (bool, error) {
 		changed = true
 	}
 	if s.Dashboard.Port == 0 {
-		used := map[uint16]bool{s.API.Port: true, s.Shadowsocks.Port: true, s.VLESS.Port: true, s.WireGuard.Port: true, s.AmneziaWG.Port: true}
-		port, err := pickPort(used, free, "tcp")
+		port, err := pickPort(s.usedPorts(), free, "tcp")
 		if err != nil {
 			return false, err
 		}

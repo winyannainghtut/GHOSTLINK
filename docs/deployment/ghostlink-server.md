@@ -18,6 +18,7 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
   - the addresses users connect from, and server health;
   - history that rotates itself so it never fills the disk.
 - **Sharing:** QR codes for every key (phones scan instead of pasting), and a one-page connection kit per user with all their keys and app instructions.
+- **Mesh of your Linux servers:** the server can coordinate a private WireGuard network between your servers, with a live map. See [Ghostlink mesh](mesh.md).
 - **Delivery:** a `.deb` or `.rpm` that **contains the container image**. No registry or internet download is needed to install it.
 
 ## Requirements
@@ -49,6 +50,7 @@ Run it again to upgrade; users, keys and rules are kept.
 | `--package FILE` | Install a package you already have (offline) |
 | `--hostname HOST` | Set the address in keys |
 | `--ipsec` | Start the IKEv2/IPsec component and turn on IKEv2 |
+| `--mesh` | Turn on the [mesh](mesh.md), install the `ghostlink-mesh` agent and join this server as its relay (`--mesh-package FILE` for an offline agent package) |
 | `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
 | `--no-docker` | Never install Docker |
 | `--reinstall` | Install even if this version is already installed |
@@ -263,6 +265,7 @@ What it can't see: VPN traffic is encrypted, so the server never sees page conte
 | `sudo ghostlink-server restart` / `stop` | Restart or stop the container |
 | `sudo ghostlink-server remove` | Remove the containers and images; keep users and keys |
 | `sudo ghostlink-server ipsec enable\|disable\|status\|logs` | The optional IPsec component for iPhone, iPad and Mac |
+| `sudo ghostlink-server mesh …` | The [mesh](mesh.md): `enable`, `invite`, `nodes`, `approve`, `node`, `remove`, `rules`, `map`, and `join-here` (this host as a node and relay) |
 
 ## Ports
 
@@ -277,6 +280,7 @@ Every port is random on first install (10000–32000, all different) and shown b
 | WireGuard | UDP |
 | AmneziaWG | UDP |
 | IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
+| Mesh coordinator (when the mesh is on) | TCP, for mesh agents; VPN users cannot reach it. A host that is also a mesh node needs UDP 51820 too ([mesh ports](mesh.md#ports)) |
 
 Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities.
 
@@ -334,6 +338,11 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET /users/{id}/kit` | The HTML connection kit |
 | `GET /users/{id}/keys/{key}/profile[?prompt_password=1&on_demand=1]` | An IKEv2/IPsec key's Apple profile (`application/x-apple-aspen-config`) |
 | `GET /dashboard` | Dashboard port, mode and login token |
+| `GET` / `PATCH /mesh` | Mesh settings (`enabled`, `cidr` before the first node, `name`, `ping`), counts and open invites |
+| `POST` / `GET /mesh/invites`, `DELETE /mesh/invites/{id}` | Invites: `tags`, `uses`, `expires_hours`, `relay`, `approval`, `note`; creating one returns `invite` and the join `command` once |
+| `PATCH` / `DELETE /mesh/nodes/{id}` | A node: `name`, `tags`, `status` (`active`/`disabled`), `relay`, `approved_routes`, `masquerade`; or remove it |
+| `GET` / `PUT /mesh/rules` | Access rules: `{"rules":[{"from":"tag:web","to":"tag:db","protocol":"tcp","ports":["5432"]}]}` |
+| `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
 
 `PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token` and `rotate_ipsec_psk`. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
 

@@ -1,6 +1,6 @@
 # Third-party attribution and distribution
 
-Ghostlink is an independent application. It is not an official product of OpenVPN Inc., the Outline Foundation, Amnezia, SagerNet, WireGuard LLC, Microsoft or the Tauri project, and implies no endorsement by them.
+Ghostlink is an independent application. It is not an official product of OpenVPN Inc., the Outline Foundation, Amnezia, SagerNet, WireGuard LLC, ZeroTier, Inc., Microsoft or the Tauri project, and implies no endorsement by them.
 
 "WireGuard" is a registered trademark of Jason A. Donenfeld. Ghostlink uses the name only to describe protocol compatibility. AmneziaWG and Amnezia are names of the Amnezia project; Ghostlink imports their key formats for compatibility and is not affiliated with it.
 
@@ -14,6 +14,8 @@ The server packages also carry the optional **IPsec component** image: `ghostlin
 - OpenSSL (Apache-2.0), musl (MIT) and the other libraries they link.
 
 The image lists them with exact versions in `/usr/share/doc/ghostlink-ipsec/packages.txt`. Each release publishes their complete corresponding source, the Alpine recipes plus the checksum-verified upstream sources, as `Ghostlink-<version>-ipsec-component-source-<arch>.tar.gz`. strongSwan is a trademark of the strongSwan project. Ghostlink is not affiliated with it, or with Apple, whose built-in VPN it configures through standard configuration profiles.
+
+The **ghostlink-mesh** agent (same Go module, GPL-3.0-or-later) is shipped as its own `.deb`/`.rpm`. It configures the Linux kernel's WireGuard through `golang.zx2c4.com/wireguard/wgctrl` (MIT) and `github.com/mdlayher/genetlink` (MIT), with their notices included. The mesh design took ideas from ZeroTier One's controller model; no ZeroTier code is used, and Ghostlink is not affiliated with ZeroTier, Inc.
 
 OpenVPN 2 is an optional separately installed engine; Ghostlink does not bundle its executable or OpenVPN 3 Core. OpenVPN's COPYING and other applicable notices remain relevant if a future package bundles those components. The Outline Apps and SDK repositories informed compatibility/design; their source is not embedded in the original Ghostlink UI or key parser.
 

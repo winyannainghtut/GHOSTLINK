@@ -5,13 +5,11 @@ package ipsecagent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
-	"os/exec"
 	"strings"
-	"time"
 
+	"ghostlink.local/outline-worker/internal/hostfw"
 	"ghostlink.local/outline-worker/internal/ipsecproto"
 )
 
@@ -113,86 +111,46 @@ func Rules(d ipsecproto.Desired) map[string]string {
 	return out
 }
 
-// Firewall applies Rules with one iptables backend: the one the host (and Docker) uses, since
-// a packet must pass both backends' FORWARD policies.
+// Firewall applies Rules with the host's iptables backend (see internal/hostfw).
 type Firewall struct {
 	Backend string // "nft" or "legacy"
 }
 
+var chains = map[string][]string{
+	"filter": {chainForward, chainOut, chainInput},
+	"nat":    {chainDNAT, chainNAT},
+	"mangle": {chainMSS},
+}
+
+func hostJumps() []hostfw.Jump {
+	var out []hostfw.Jump
+	for _, j := range jumps {
+		out = append(out, hostfw.Jump{Table: j[0], Chain: j[1], Target: j[2]})
+	}
+	return out
+}
+
 func run(ctx context.Context, stdin string, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
+	return hostfw.Run(ctx, stdin, name, args...)
 }
 
-// DetectBackend picks the backend with more rules in it (as Kubernetes' iptables wrapper does);
-// a fresh host with neither picks nft.
-func DetectBackend(ctx context.Context) string {
-	count := func(backend string) int {
-		out, err := run(ctx, "", "iptables-"+backend+"-save")
-		if err != nil {
-			return -1
-		}
-		return strings.Count(out, "\n-A ")
-	}
-	if count("legacy") > count("nft") {
-		return "legacy"
-	}
-	return "nft"
-}
+// DetectBackend picks the iptables backend the host uses.
+func DetectBackend(ctx context.Context) string { return hostfw.Detect(ctx) }
 
-func (f *Firewall) iptables(ctx context.Context, args ...string) error {
-	_, err := run(ctx, "", "iptables-"+f.Backend, append([]string{"-w", "5"}, args...)...)
-	return err
-}
+func (f *Firewall) host() *hostfw.Firewall { return &hostfw.Firewall{Backend: f.Backend} }
 
 // Apply replaces the agent's chains and makes sure each is jumped to from its built-in chain.
 func (f *Firewall) Apply(ctx context.Context, d ipsecproto.Desired) error {
-	if f.Backend != "nft" && f.Backend != "legacy" {
-		return errors.New("unknown iptables backend")
-	}
-	rules := Rules(d)
-	for _, table := range []string{"filter", "nat", "mangle"} {
-		if _, err := run(ctx, rules[table], "iptables-"+f.Backend+"-restore", "--noflush", "-w", "5"); err != nil {
-			return err
-		}
+	if err := f.host().Restore(ctx, Rules(d)); err != nil {
+		return err
 	}
 	return f.EnsureJumps(ctx)
 }
 
 // EnsureJumps puts back a jump someone removed (for example a firewall reload).
 func (f *Firewall) EnsureJumps(ctx context.Context) error {
-	for _, j := range jumps {
-		if f.iptables(ctx, "-t", j[0], "-C", j[1], "-j", j[2]) == nil {
-			continue
-		}
-		if err := f.iptables(ctx, "-t", j[0], "-I", j[1], "1", "-j", j[2]); err != nil {
-			return err
-		}
-	}
-	return nil
+	return f.host().EnsureJumps(ctx, hostJumps())
 }
 
 // Remove deletes the jumps and the agent's chains, leaving the host as it was.
-func (f *Firewall) Remove(ctx context.Context) {
-	for _, j := range jumps {
-		for i := 0; i < 8 && f.iptables(ctx, "-t", j[0], "-D", j[1], "-j", j[2]) == nil; i++ {
-		}
-	}
-	for _, table := range [][]string{{"filter", chainForward, chainOut, chainInput}, {"nat", chainDNAT, chainNAT}, {"mangle", chainMSS}} {
-		for _, chain := range table[1:] {
-			_ = f.iptables(ctx, "-t", table[0], "-F", chain)
-		}
-		for _, chain := range table[1:] {
-			_ = f.iptables(ctx, "-t", table[0], "-X", chain)
-		}
-	}
-}
+func (f *Firewall) Remove(ctx context.Context) { f.host().Remove(ctx, hostJumps(), chains) }

@@ -1,6 +1,6 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.5.0** (IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-06, Asia/Singapore**. Current release: **v0.6.0** (Ghostlink mesh: a private WireGuard network between Linux servers coordinated by the Ghostlink server, with a live map in the app and dashboard; v0.5.0 added IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -588,6 +588,28 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
   - `tests/ipsec/interop.sh` (CI `ipsec.yml` and the release's `linux-package.yml`) installs the `.deb` and connects a strongSwan client built from each downloaded profile;
   - `scripts/ipsec-source.sh` builds the GPL source bundle from the image's `packages.txt`.
 
+**Mesh of Linux servers (v0.6.0).** Guide: [docs/deployment/mesh.md](docs/deployment/mesh.md).
+- **Contract:** `internal/meshproto`. It defines invites (`glmesh1:` + base64url `{url, pin, token}`), join/sync requests and the per-node `Config` with `Validate()`. The protocol is OS-neutral, for the later Windows nodes.
+- **Coordinator** (in the unprivileged server):
+  - `internal/mesh`:
+    - `network.go`: nodes, hashed invite tokens and node secrets (`ID.secret`), addresses, rules and the `tag:`/`node:` selectors;
+    - `live.go`: last reports, the per-pair path state machine (direct, relay after 90 s without a handshake, retried after 15 min) and the topology for the map;
+    - `config.go`: per-node configs, relay re-routing of `AllowedIPs`, rules compiled to source CIDRs, and a 53-bit content-hash generation.
+  - `internal/server/mesh.go`: `MeshServer`, its own TLS port with the API certificate, `/v1/join|sync|leave`, and a long-poll of up to 10 s. Each sync takes the wake channel before computing its answer. The same file holds the admin handlers under `/mesh…`.
+  - `admin_mesh.go`: `ghostlink-server mesh …`; the host script adds `mesh join-here`.
+- **Agent:**
+  - `internal/meshagent` and `cmd/ghostlink-mesh`. It sets up kernel WireGuard `glmesh0` over netlink plus wgctrl, routes with protocol 77, and `GHOSTLINK-MESH-IN/FWD/OUT/POST/MSS` chains through the shared `internal/hostfw` (also used by the IPsec agent).
+  - It writes a marked `/etc/hosts` block and ICMP pings, and changes peers in place (`PeerChanges`) so sessions survive. Forwarding needs local consent (`--relay`, `--advertise-routes`, `allow-forwarding`).
+  - Package: `packages/linux/mesh/` (hardened unit, maintainer scripts), `scripts/build-linux-mesh.sh`; installer `scripts/install-mesh.sh`. `install-server.sh --mesh` runs `join-here`.
+- **UI:**
+  - `apps/desktop/ui/mesh-map.js` is a dependency-free SVG map: ring layout, relayed links bent through the relay, drag with positions saved per mesh. `apps/desktop/ui/mesh.js` has the dialogs.
+  - The dashboard has an identical `mesh-map.js` copy (`TestMeshMapMatchesTheDesktopCopy`) and its own `dashboard/mesh.js`.
+  - Rust: `server_mesh_*` ops in contracts, engine and CLI.
+- **Tests:**
+  - `tests/mesh/e2e.sh` (CI `mesh.yml`): namespaces, NAT, relay, rules, subnets, cleanup.
+  - `linux-package.yml`: package smoke test against the installed server.
+  - Go unit tests in `internal/mesh`, `meshproto`, `meshagent` and `server`.
+
 Client side:
 - **Daemon:** `ManagedServerAdd/List/Remove` and typed `ServerCall` live in `services/vpn-daemon/src/remote.rs`, and run **without the daemon lock** during network calls.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
@@ -841,6 +863,13 @@ Requires an authorized Windows test machine and human administrator installation
 - **Downloads in the app:** WebView2 cannot download `blob:` links from the app's custom scheme. The app saves files with its `save_download` command instead.
 - **Headless Edge:** never use headless Edge with a fresh profile for checks. On this machine Windows signs it in to the user's Microsoft account and starts sync. That happened once; the instance was stopped and its profile deleted. To view web pages (for example the dashboard), point the debug app's isolated WebView2 at them over DevTools.
 - **Docker Desktop:** do not start Docker Desktop on the user's machine. Server image and package tests run in release CI, on runners that have Docker.
+- **Mesh pitfalls:**
+  - Stopping the agent must cancel its long-poll (`Sync(ctx, …)`), or teardown waits up to 10 s.
+  - Tests that check cleanup must wait for the agent process to exit, because the interface goes before the firewall chains.
+  - Config generations must stay below 2^53, or JavaScript and jq readers round them.
+  - In the e2e script, `local` arrays shadow globals of the same name (`agent`), so the agent flags are `agent_flags`.
+  - Mesh iteration also happens on the feature branch (`mesh.yml`, about 2.5 minutes).
+- **GUI check with fake mesh agents:** `%TEMP%\gl-gui\gui060.mjs` (a local scratch script, not in the repository) drives the debug app and, in the same isolated webview, the dashboard. Its fake agents use the real join/sync protocol over pinned TLS. Use `agent: false` in Node's `https` so the pin can be checked on `secureConnect`.
 - **IPsec iteration happens on CI:** the IPsec component needs Linux, Docker and xfrm, so work on it is iterated on a feature branch whose pushes run `ipsec.yml`. Those pushes are about 4 minutes each. `main` gets the squashed result.
 - **strongSwan:**
   - `charon.load` marks critical plugins with a trailing `!`, and a critical plugin also demands its optional features (for example DSA in `pem`), so Ghostlink loads plugins plainly and the agent checks the loaded list over vici.

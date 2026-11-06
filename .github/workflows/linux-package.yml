@@ -1,6 +1,7 @@
 name: Linux package
 # Reusable: on the given runner, builds the headless client (archive, .deb, .rpm) and the
-# server (.deb, .rpm with its Docker images inside), installs both as a smoke test, runs the
+# server (.deb, .rpm with its Docker images inside) and the mesh agent (.deb, .rpm), installs
+# them as a smoke test (the agent joins the installed server), runs the
 # IKEv2/IPsec interop test, builds the IPsec component's GPL source, and uploads
 # them as the workflow artifact "linux-<arch>". Called by release.yml.
 on:
@@ -87,7 +88,7 @@ jobs:
         run: |
           docker version --format 'Docker {{.Server.Version}}'
           bash scripts/build-linux-server.sh "$VERSION"
-      - name: Smoke-test the server .deb (install, API, keys, upgrade, purge)
+      - name: Smoke-test the server .deb (install, API, keys, upgrade, dashboard)
         env:
           ARCH: ${{ inputs.arch }}
         run: |
@@ -137,6 +138,66 @@ jobs:
           test "$(curl -s -c jar.txt -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data @login.json "http://127.0.0.1:$dport/login")" = 204
           test "$(curl -s -b jar.txt -o /dev/null -w '%{http_code}' "http://127.0.0.1:$dport/api/server")" = 403
           curl -s --fail -b jar.txt -H 'X-Ghostlink-Dashboard: 1' "http://127.0.0.1:$dport/api/live" | jq -e '.users | length == 2'
+      - name: Mesh agent .deb and .rpm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build-linux-mesh.sh "$VERSION"
+      - name: Smoke-test the mesh agent (installer with an invite, join-here, leave, purge)
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -eu
+          deb=$(ls artifacts/linux-$ARCH/ghostlink-mesh_*.deb)
+          clean() {
+            if ip link show glmesh0 >/dev/null 2>&1; then echo "glmesh0 left behind" >&2; exit 1; fi
+            if sudo iptables-save | grep -q GHOSTLINK-MESH; then echo "firewall chains left behind" >&2; exit 1; fi
+            if grep -q ghostlink-mesh /etc/hosts; then echo "/etc/hosts block left behind" >&2; exit 1; fi
+          }
+          connected() {
+            for i in $(seq 1 40); do
+              sudo ghostlink-mesh status --json > agent.json 2>/dev/null && jq -e '.status.state == "active"' agent.json >/dev/null && return 0
+              sleep 0.5
+            done
+            cat agent.json >&2; return 1
+          }
+          sudo ghostlink-server mesh enable | tee mesh.txt
+          # 1. "Add node": the command the app shows, with the local package instead of a download.
+          invite=$(sudo ghostlink-server --json mesh invite --tags ci | tee invite.json | jq -r .invite)
+          jq -e '.command | contains("install-mesh.sh") and contains("--join")' invite.json
+          cat scripts/install-mesh.sh | sudo bash -s -- --package "./$deb" --join "$invite" --name ci-node | tee join.txt
+          systemctl is-active ghostlink-mesh
+          connected
+          jq -e '.node.name == "ci-node" and (.node.address | startswith("100.96."))' agent.json
+          ip -brief address show glmesh0 | grep -q ' 100\.96\.'
+          getent hosts ci-node.mesh | grep -q '^100\.96\.'
+          sudo ghostlink-server --json mesh nodes | jq -e '[.nodes[] | select(.name == "ci-node" and .online and .tags == ["ci"])] | length == 1'
+          # 2. Leaving removes the node from the coordinator and everything on the host.
+          sudo systemctl stop ghostlink-mesh
+          sudo ghostlink-mesh leave
+          clean
+          sudo ghostlink-server --json mesh nodes | jq -e '.nodes | length == 0'
+          # 3. The server installer with --mesh: this host joins as the relay (mesh join-here).
+          server_deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
+          cat scripts/install-server.sh | sudo bash -s -- --package "./$server_deb" --mesh-package "./$deb" | tee installer.txt
+          grep -q '/udp  mesh (this server as a node)' installer.txt && grep -q '/tcp  mesh coordinator' installer.txt
+          systemctl is-active ghostlink-mesh
+          connected
+          sudo ghostlink-server --json mesh nodes | jq -e '[.nodes[] | select(.relay and .online)] | length == 1'
+          sudo apt-get purge -y ghostlink-mesh
+          clean
+          test ! -e /var/lib/ghostlink-mesh && test ! -e /usr/bin/ghostlink-mesh
+          sudo ghostlink-server --json mesh nodes | jq -e '.nodes | length == 0'
+      - name: Inspect the mesh .rpm
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          rpm -qip artifacts/linux-$ARCH/ghostlink-mesh-*.rpm
+          rpm -qlp artifacts/linux-$ARCH/ghostlink-mesh-*.rpm | tee mesh-files.txt
+          grep -qx /usr/bin/ghostlink-mesh mesh-files.txt && grep -qx /usr/lib/systemd/system/ghostlink-mesh.service mesh-files.txt
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-mesh-*.rpm | grep -q 'ghostlink-mesh leave'
+      - name: Purge the server .deb
+        run: |
+          set -eu
           sudo apt-get purge -y ghostlink-server
           if docker ps -a --format '{{.Names}}' | grep -qx ghostlink-server; then echo "container left after purge" >&2; exit 1; fi
           test ! -e /var/lib/ghostlink-server && ! id ghostlink-server 2>/dev/null

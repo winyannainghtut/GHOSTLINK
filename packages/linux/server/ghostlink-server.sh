@@ -51,6 +51,12 @@ Users, keys, rules and monitoring (also available in the Ghostlink app and the d
   dashboard [--port N] [--public|--private] [--reset-token]
                                        web dashboard: prints the SSH tunnel command and login link
 
+Mesh: a private network between your Linux servers (this server coordinates it):
+
+  mesh enable | mesh invite [--tags web] | mesh nodes | mesh map | mesh approve NAME | mesh help
+  mesh join-here           make this server a mesh node too (the relay for nodes behind NAT);
+                           needs the ghostlink-mesh package (scripts/install-mesh.sh)
+
 IKEv2/IPsec for iPhone, iPad and Mac (optional; strongSwan in a second, network-privileged
 container that only applies settings the server writes):
 
@@ -274,6 +280,34 @@ EOF
     esac
 }
 
+# mesh_command manages the mesh; join-here also makes this host a node and the relay.
+mesh_command() {
+    if [ "${1:-}" != join-here ]; then
+        admin mesh "$@"
+        return
+    fi
+    shift
+    need_root "mesh join-here"
+    command -v ghostlink-mesh >/dev/null 2>&1 ||
+        die "install the mesh agent first: curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash"
+    [ ! -f /var/lib/ghostlink-mesh/node.json ] || die "this server is already a mesh node (see: sudo ghostlink-mesh status)"
+    invite=$(admin --json mesh invite --relay --local --hours 1 --note "this server" | sed -n 's/^  "invite": "\(glmesh1:[^"]*\)".*/\1/p')
+    [ -n "$invite" ] || die "could not create an invite; is the mesh on? (sudo ghostlink-server mesh enable)"
+    # Other nodes reach this host at its public address, which the agent can't always see.
+    host=$(sed -n 's/^  "hostname": "\([^"]*\)".*/\1/p' "$STATE/state.json" | head -n 1)
+    case "$host" in
+        *[!0-9.]*) address=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 { print $1 }') ;;
+        *) address=$host ;;
+    esac
+    if [ -n "$address" ]; then
+        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join --relay --endpoint "$address:51820" "$@"
+    else
+        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join --relay "$@"
+    fi
+    systemctl enable --now ghostlink-mesh.service >/dev/null
+    echo "This server is now a mesh node and the relay. Allow UDP 51820 in its firewall and cloud security group."
+}
+
 # admin runs a management command inside the running container, against its local API.
 admin() {
     need_root "$1"
@@ -351,11 +385,12 @@ case "$command" in
         admin "$command" "$@" ;;
     --json) # machine-readable output: ghostlink-server --json users
         case "${1:-}" in
-            users | user | key | keys | rules | usage | stats | clients | settings | set | site-stats | dashboard) admin --json "$@" ;;
-            *) die "--json works with: users, user, key, keys, rules, usage, stats, clients, settings, set, site-stats, dashboard" ;;
+            users | user | key | keys | rules | usage | stats | clients | settings | set | site-stats | dashboard | mesh) admin --json "$@" ;;
+            *) die "--json works with: users, user, key, keys, rules, usage, stats, clients, settings, set, site-stats, dashboard, mesh" ;;
         esac ;;
     kit) need_root kit; kit "$@" ;;
     profile) need_root profile; profile "$@" ;;
+    mesh) mesh_command "$@" ;;
     ipsec) ipsec_command "$@" ;;
     setup) setup "$@" ;;
     show-key) need_root show-key; show_key ;;

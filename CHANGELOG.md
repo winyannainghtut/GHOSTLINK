@@ -4,18 +4,36 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-06
+
 ### Added
 
+- **Ghostlink mesh: a private network between your Linux servers.** Every server you add gets a mesh address (`100.96.0.0/16` by default) and reaches the others over kernel WireGuard, across clouds, data centres and home networks. Guide: [docs/deployment/mesh.md](docs/deployment/mesh.md).
+  - **Coordinator:** the Ghostlink server hands out addresses, keys, paths and access rules on its own TLS 1.3 port (pinned like the management API). Nodes get changes within about a second.
+  - **Agent:** the new `ghostlink-mesh` package (.deb/.rpm, x64 and arm64) runs a hardened systemd service. It sets up `glmesh0`, firewall chains and `<node>.mesh` names, and reports handshakes, traffic and latency. The node's private key never leaves it.
+  - **Direct links, relay fallback:** pairs connect directly; a pair that can't (for example two nodes behind NAT) goes through a relay node, and direct is retried later.
+  - **Tag-based access rules** (`tag:web → tag:db tcp 5432`), enforced by each receiving node. A new mesh allows everything until the first rule.
+  - **Shared subnets (site-to-site):** a node offers a subnet behind it (`--advertise-routes`), and the administrator approves it. It is masqueraded by default.
+  - **Easy setup:**
+    - `install-server.sh --mesh` makes the server the coordinator and its first node (the relay).
+    - **Add node** in the app gives a one-line command for each new server: `install-mesh.sh --join 'glmesh1:…'`. Invites are single-use and expire after 24 hours by default; they can carry tags, a relay role or an approval step.
+  - **Live map** in the app (**Servers I run → Manage → Mesh**) and the dashboard (**Mesh** view):
+    - it shows nodes and links: direct, through the relay, or down, with latency and traffic;
+    - nodes can be dragged; node details let you approve, tag, share subnets, set the relay, disable or remove;
+    - it also has Add node and an access-rules editor.
+  - Everywhere you manage the server: `sudo ghostlink-server mesh …` (including `join-here`), `ghostlink server mesh …` in the CLI, and the dashboard. AI agents cannot use mesh operations.
+  - Linux servers only for now; Windows servers and the Ghostlink app on Windows as a mesh node will follow.
 - **One-command server install:** `curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash`.
   - It picks the `.deb` or `.rpm` for the distribution and CPU, installs Docker if needed and verifies the package against the release checksums.
   - It prints the management key and the ports to open.
-  - Options: `--hostname`, `--ipsec`, `--open-firewall` (only for an active ufw or firewalld), `--version`, `--package` for offline installs.
+  - Options: `--hostname`, `--ipsec`, `--mesh`, `--open-firewall` (only for an active ufw or firewalld), `--version`, `--package` and `--mesh-package` for offline installs.
   - Running it again upgrades.
   - On servers with under 1 GB of memory and swap (for example the smallest AWS Lightsail plans) it stops before installing, because the kernel would kill the installation; `--add-swap` adds a 1 GB swap file. It also finishes an installation that was interrupted.
 
 ### Fixed
 
-- `sudo ghostlink-server --json users` (and the other admin commands) failed with a usage message, although the guide documents it; the host command now passes `--json` through. This takes effect with the next server package.
+- `sudo ghostlink-server --json users` (and the other admin commands) failed with a usage message, although the guide documents it; the host command now passes `--json` through.
+- A test of the engine's listener-ownership check could fail at random on Linux, when the PID it used as "another process" was one of the test's own threads.
 
 ## [0.5.0] - 2026-11-06
 

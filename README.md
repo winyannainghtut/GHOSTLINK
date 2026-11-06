@@ -20,6 +20,7 @@
 - [How it works](#how-it-works)
 - [Security and privacy](#security-and-privacy)
 - [Running your own server](#running-your-own-server)
+- [Mesh of servers](#mesh-of-servers)
 - [Building from source](#building-from-source)
 - [Status and roadmap](#status-and-roadmap)
 - [Documentation](#documentation)
@@ -35,6 +36,7 @@
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
 - **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
 - **iPhone, iPad and Mac with no app:** the server can also serve Apple's built-in IKEv2 and IPsec VPN, and hands each person a configuration profile (`.mobileconfig`) that installs it in Settings. Sign-in is by password or certificate.
+- **Mesh of your Linux servers:** a private network between your servers over WireGuard: direct links with a relay for servers behind NAT, tag-based access rules, shared subnets, and a live map in the app and the dashboard. One command adds a server.
 - **Three ways to manage your server:** the app, `sudo ghostlink-server …` commands on the server (with QR codes in the terminal and a live `top`), or a web dashboard on its own port (private behind an SSH tunnel by default).
 - **Easy sharing:** QR codes for every key and a one-page connection kit per person, for the Outline, WireGuard, AmneziaVPN and v2ray-family apps on any phone.
 - **Honest status:** "Connected" means the tunnel was observed up and an HTTPS request through it succeeded. Nothing is reported that was not measured.
@@ -53,7 +55,8 @@ Pre-release builds are attached to [GitHub Releases](https://github.com/winyanna
 | Linux x64 / arm64 (any) | `ghostlink-<version>-linux-<arch>.tar.gz` | The same files for a manual install |
 | Server, Debian/Ubuntu (x64, arm64) | `ghostlink-server_<version>-1_<amd64\|arm64>.deb` | The Ghostlink server with its Docker image included ([guide](docs/deployment/ghostlink-server.md)) |
 | Server, Fedora/RHEL family (x64, arm64) | `ghostlink-server-<version>-1.<x86_64\|aarch64>.rpm` | The same, as an RPM |
-| Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker and the server |
+| Mesh agent, Debian/Ubuntu or Fedora/RHEL (x64, arm64) | `ghostlink-mesh_<version>-1_<arch>.deb`, `ghostlink-mesh-<version>-1.<arch>.rpm` | Joins a Linux server to a Ghostlink mesh; usually installed by the app's one-line **Add node** command ([guide](docs/deployment/mesh.md)) |
+| Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker, the server and the mesh agent |
 | Source | `Ghostlink-<version>-ipsec-component-source-<x64\|arm64>.tar.gz` | GPL source of strongSwan, iptables and the other copyleft packages in the server's IPsec image |
 
 **Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Open **Ghostlink** from the Start menu or the desktop shortcut. Windows SmartScreen warns about unsigned builds. Use v0.3.1 or later on Windows: in earlier installers, the app could not reach the installed service.
@@ -163,7 +166,7 @@ Details: [security model](docs/security/model.md) · [dependency scans](docs/sec
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
-# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --open-firewall  --help
+# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --mesh (mesh of servers)  --open-firewall  --help
 ```
 
 The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
@@ -177,6 +180,25 @@ Paste the key into **Servers I run → Add server** (or `ghostlink server add`).
 - **iPhone, iPad, Mac:** run `sudo ghostlink-server ipsec enable` once and open UDP 500 and 4500. Then create IKEv2 (or IPsec) keys and save each as a profile to send.
 
 Upgrading the package keeps everything. Full guide: [Ghostlink server](docs/deployment/ghostlink-server.md).
+
+## Mesh of servers
+
+New in 0.6.0: your Ghostlink server can coordinate a **mesh**, a private network between your Linux servers. Each server you add gets a mesh address (`100.96.x.x`) and the name `<server>.mesh`, and reaches the others over kernel WireGuard wherever they run.
+
+- **Connections:** pairs connect directly. Servers behind NAT, which can't, go through a relay (your own server).
+- **Access rules:** tags such as `web → db TCP 5432` limit what may connect.
+- **Shared subnets:** a server can share the private network behind it after you approve it.
+
+```sh
+# on the Ghostlink server: coordinate the mesh and join it as the relay
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --mesh
+# in the app: Servers I run → Manage → Mesh → Add node, then run the command it gives on each server:
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash -s -- --join 'glmesh1:…'
+```
+
+**Open mesh map** in the app, or the dashboard's **Mesh** view, shows every node and link: direct or through the relay, with latency and traffic. From the map you can approve servers, set tags, subnets and the relay, edit access rules, and disable or remove servers. The same is available with `sudo ghostlink-server mesh …` and `ghostlink server mesh …`.
+
+Mesh nodes are Linux servers in this version; Windows servers and the Ghostlink app on Windows will follow. Guide: [Ghostlink mesh](docs/deployment/mesh.md).
 
 Also available: [an Outline-compatible Shadowsocks server](docs/deployment/outline-server.md) generated offline and deployed with systemd/Ansible, and an optional OpenVPN PKI tool.
 
@@ -194,7 +216,7 @@ Pop-Location
 ./scripts/build-windows.ps1                           # optimized MSI + portable ZIP
 ```
 
-**Linux** needs Rust, Go, `pkg-config` and `libssl-dev`, plus [nfpm](https://nfpm.goreleaser.com/) 2.48 for packages (`go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0`). Run `bash scripts/build-linux.sh` to produce the client `.tar.gz`, `.deb` and `.rpm`, and `bash scripts/build-linux-server.sh` (also needs Docker) for the server image and its `.deb`/`.rpm`, all under `artifacts/linux-<arch>/`.
+**Linux** needs Rust, Go, `pkg-config` and `libssl-dev`, plus [nfpm](https://nfpm.goreleaser.com/) 2.48 for packages (`go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0`). Run `bash scripts/build-linux.sh` to produce the client `.tar.gz`, `.deb` and `.rpm`, `bash scripts/build-linux-server.sh` (also needs Docker) for the server image and its `.deb`/`.rpm`, and `bash scripts/build-linux-mesh.sh` for the mesh agent's `.deb`/`.rpm`, all under `artifacts/linux-<arch>/`. `sudo bash tests/mesh/e2e.sh DIR` runs the mesh end-to-end test (see `.github/workflows/mesh.yml`).
 
 **Tests.**
 
@@ -216,6 +238,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
 | Ghostlink server, management, monitoring | Server API, rules, limits, monitoring and all four protocols tested end to end with real clients; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
 | IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component. Installing on a real Apple device is checked by hand |
+| Mesh of Linux servers | Tested in CI with kernel WireGuard between network namespaces: direct and relayed paths through NAT, access rules, shared subnets, names, disable/remove and clean-up. Release CI installs the agent package, joins it to the installed server and removes it cleanly. Not yet run across real cloud servers. Windows nodes are planned |
 | Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
 
 The [changelog](CHANGELOG.md) lists what each release changed.
@@ -232,11 +255,12 @@ The [changelog](CHANGELOG.md) lists what each release changed.
 | Protocol design | [docs/architecture/protocols.md](docs/architecture/protocols.md) |
 | Security, dependencies, licensing | [model.md](docs/security/model.md) · [dependencies.md](docs/security/dependencies.md) · [licensing.md](docs/security/licensing.md) |
 | Ghostlink server | [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) |
+| Mesh of Linux servers | [docs/deployment/mesh.md](docs/deployment/mesh.md) |
 | Offline Outline-compatible server | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
 | Developer / AI-agent handover | [agent.md](agent.md) · [devjourney.md](devjourney.md) |
 
 ## License and acknowledgements
 
-Ghostlink's Rust service, CLI, MCP bridge and desktop UI are [MIT](LICENSE). The separate tunnel worker and the Ghostlink server (`core/outline-worker`) link GPL-3.0-or-later sing-box and are GPL-3.0-or-later; their corresponding source is published with every release. Dependencies and embedded drivers keep their own terms; see [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md).
+Ghostlink's Rust service, CLI, MCP bridge and desktop UI are [MIT](LICENSE). The separate tunnel worker, the Ghostlink server and the mesh agent (`core/outline-worker`) are GPL-3.0-or-later (the worker and server link GPL-3.0-or-later sing-box); their corresponding source is published with every release. Dependencies and embedded drivers keep their own terms; see [NOTICE.md](NOTICE.md) and [licensing notes](docs/security/licensing.md).
 
 Ghostlink builds on [sing-box](https://github.com/SagerNet/sing-box), [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go), [Wintun](https://www.wintun.net/), [Tauri](https://tauri.app/) and others, and is compatible with keys from [Outline](https://getoutline.org/) and [Amnezia](https://amnezia.org/). It is an independent project, not affiliated with or endorsed by any of them. "WireGuard" is a registered trademark of Jason A. Donenfeld.
