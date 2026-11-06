@@ -42,7 +42,8 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 - `user_update {user, change}`
 - `user_delete {user}`
 - `keys_list {user}`
-- `key_create {user, protocol, import_as?}`
+- `key_create {user, protocol, import_as?, auth?, server_address?, remote_identifier?, local_identifier?}`: `auth` and the identifiers only for `ikev2` (`eap` or `certificate`) and `ipsec` (`certificate` or `psk`); those keys can't be imported here
+- `key_profile {user, key, prompt_password, on_demand}`: an IKEv2/IPsec key's Apple configuration profile, answered as a string
 - `key_delete {user, key}`
 - `rules_get`
 - `rules_set {rules}`
@@ -53,7 +54,7 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 - `key_qr {user, key, format, content?}`: `format` `svg` or `text`; `content` `auto`, `key` or `conf`. Answered as a string.
 - `kit {user}`: the HTML connection kit, answered as a string
 
-User and key IDs must be decimal. `protocol` is `amneziawg`, `wireguard`, `vless` or `shadowsocks`. With `import_as`, the new key is also saved as a VPN server on this device. The answer then carries `imported` (the profile summary) or `import_error`, and the key is never lost.
+User and key IDs must be decimal. `protocol` is `amneziawg`, `wireguard`, `vless`, `shadowsocks`, `ikev2` or `ipsec`. `update` also takes `rotate_ipsec_psk`. With `import_as`, the new key is also saved as a VPN server on this device. The answer then carries `imported` (the profile summary) or `import_error`, and the key is never lost.
 
 The service makes these calls without holding its main lock, so a slow server never delays status, connect or disconnect. It keeps one pinned connection per managed server and reuses it, so polling `live` every few seconds does not repeat the TLS handshake. Replacing or removing the server drops the connection. A management key is parsed strictly:
 - only `apiUrl` and `certSha256` are allowed;
@@ -73,7 +74,7 @@ Extra error codes:
 
 A server's own validation message comes back as `invalid_request` (exit 2), and its `404` comes back as `not_found` (exit 2).
 
-CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove|qr|kit | rules show|set | usage | live | stats | clients`. `server set` also takes `--site-stats on|off`, `--history-days`, `--site-days` and `--history-max-mb`. `keys kit --output FILE` writes a NEW private file. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
+CLI: `ghostlink server install-help | add | list | remove | info | set | users list|add|update|remove | keys list|create|remove|qr|kit|profile | rules show|set | usage | live | stats | clients`. `server set` also takes `--site-stats on|off`, `--history-days`, `--site-days`, `--history-max-mb` and `--rotate-ipsec-psk`. `keys kit --output FILE` writes a NEW private file. `keys create --protocol ikev2|ipsec` takes `--auth`, `--server-address`, `--remote-id` and `--local-id`, and refuses `--output`/`--import`. `keys profile --key ID --output FILE [--prompt-password] [--on-demand]` saves the Apple profile to a NEW private file. The management key is read with `--key-file` or `--key-stdin` only. `keys list` hides key material unless `--show-keys` is given. `keys create` prints the key, unless `--output FILE` (a NEW private file, plus `FILE.conf` for WireGuard and AmneziaWG) or `--import` is used. The CLI never overwrites an existing file.
 
 `access_key_import` and `profile_import` take an optional `replace` boolean (default `false`). Without it, an existing ID returns `invalid_request` (exit 2) instead of overwriting the saved credential. The CLI exposes it as `--replace` on `key add` and `profile import`.
 

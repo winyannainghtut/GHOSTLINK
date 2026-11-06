@@ -269,11 +269,9 @@ func StrongswanConf(aggressivePSK bool) string {
 	if aggressivePSK {
 		c.set("i_dont_care_about_security_and_use_aggressive_mode_psk", "yes")
 	}
-	// A trailing "!" marks a plugin charon must not start without.
-	load := []string{"random", "nonce", "kdf", "constraints"}
-	for _, p := range requiredPlugins {
-		load = append(load, p+"!")
-	}
+	// Only these plugins load. The agent checks after start that every required one did
+	// (strongSwan's critical "!" mark would also demand optional features, such as DSA).
+	load := append([]string{"random", "nonce", "kdf", "constraints"}, requiredPlugins...)
 	c.set("load", strings.Join(load, " "))
 	c.open("plugins")
 	c.open("openssl")
