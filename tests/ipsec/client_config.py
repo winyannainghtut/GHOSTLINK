@@ -118,10 +118,12 @@ def main() -> None:
   }
   filelog {
     stderr {
-      default = 0
-      ike = 1
-      cfg = 1
-      knl = 1
+      default = 1
+      net = 0
+      enc = 0
+      asn = 0
+      job = 0
+      mgr = 0
     }
   }
 }

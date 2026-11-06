@@ -7,6 +7,7 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - a web dashboard served by the server.
 
 - **Protocols:** AmneziaWG (2.0 obfuscation), WireGuard, VLESS with REALITY, and Outline-compatible Shadowsocks. Each can be turned off or moved to another port.
+- **iPhone, iPad and Mac with no app:** optional IKEv2 and IPsec for Apple's built-in VPN, delivered as configuration profiles (see [iPhone, iPad and Mac](#iphone-ipad-and-mac-built-in-vpn)).
 - **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
@@ -121,6 +122,86 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
   - Rules for everyone.
   - Settings.
 
+## iPhone, iPad and Mac (built-in VPN)
+
+Apple devices have IKEv2 and IPsec built in (`NEVPNProtocolIKEv2` and `NEVPNProtocolIPSec`). Ghostlink can serve both and hand each user a **configuration profile** (`.mobileconfig`). Opening it installs the VPN in Settings, with the password or certificate kept in the device's Keychain. No app, App Store account or Apple Developer account is needed.
+
+| Key | Sign-in | Notes |
+|---|---|---|
+| **IKEv2** (recommended) | Username and password (EAP-MSCHAPv2), the default | AES-256-GCM, SHA2-256, DH group 19, PFS |
+| | Certificate | A client certificate per key, issued by the server's own CA |
+| **IPsec** (IKEv1, "Cisco IPsec"; older) | Certificate + XAuth password, the default | For devices or tools that only offer IPsec |
+| | Shared group key + XAuth password | **Weak** (see below); the API returns a warning |
+
+Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`).
+
+### Turn it on
+
+IKEv2/IPsec run in the kernel and need network privileges the main container does not have. They come as an optional **IPsec component**: strongSwan in a second container, shipped inside the same package.
+
+```sh
+sudo ghostlink-server ipsec enable                 # checks the kernel, turns on IPv4 forwarding, starts it
+sudo ghostlink-server set --enable ikev2           # and/or --enable ipsec
+sudo ghostlink-server key add Alice ikev2          # --auth certificate, --address, --remote-id, --local-id
+sudo ghostlink-server profile Alice 7 --output alice.mobileconfig
+sudo ghostlink-server ipsec status | ipsec logs | ipsec disable
+```
+
+Open **UDP 500 and UDP 4500** in the host firewall and the cloud security group. The ports are fixed, because Apple devices cannot use others. Ghostlink always encapsulates in UDP, so ESP (IP protocol 50) does not need to be open.
+
+- **App:** Keys → choose IKEv2 or IPsec, then the sign-in method and optional identifiers, then **Save iPhone/Mac profile** (it goes to Downloads).
+- **CLI:** `ghostlink server keys create --protocol ikev2 [--auth certificate] [--server-address H] [--remote-id ID] [--local-id ID]`, then `ghostlink server keys profile --key ID --output FILE`.
+- **Dashboard:** Users → Keys → **Download profile**.
+
+### Install on the device
+
+1. Send the file privately: AirDrop, Mail or Files. It contains the user's password or certificate, like any other key.
+2. **iPhone/iPad:** open it. Settings shows **Profile Downloaded**; tap it, then **Install** (iOS 16 and later: Settings → General → **VPN & Device Management**). **Mac:** double-click it, then open System Settings → Privacy & Security → **Profiles**.
+3. Turn the VPN on in Settings → **VPN**.
+
+The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA, trusted only for this VPN profile's server certificate. `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
+
+### What applies to IKEv2/IPsec users
+
+| Feature | IKEv2/IPsec |
+|---|---|
+| Data limits, usage, live speed, online state, "connected from" | Yes: the component reports each session's bytes every 5 s |
+| Disable/remove/over the limit | Their sessions end within seconds. Passwords are withdrawn, and certificates are put on hold or revoked in the CRL |
+| Blocked IPs, blocked ports, SMTP block, always-blocked internal ranges and the server itself | Yes (firewall rules) |
+| Blocked sites | Yes, through DNS: every DNS query (any resolver, port 53) goes to the server's DNS with the rules for everyone |
+| Per-user rules, exemption, BitTorrent blocking, traffic types, top services | **No.** This traffic is handled by the kernel, not the Ghostlink engine, so it shows as "IPsec (not inspected)" |
+| IPv6 inside the tunnel | No. Devices with IPv6 may send IPv6 outside the VPN |
+
+### How the component is isolated
+
+- The main server stays unprivileged. It writes the desired settings to `/var/lib/ghostlink-server/ipsec/desired.json` (mode 0640, shared only with its own group). They contain NT hashes of the EAP passwords, never the passwords themselves, and the CA's certificate but not its key.
+- The component runs `ghostlink-ipsec-agent` as root inside its container, in the server account's group, with:
+  - only `NET_ADMIN`, `NET_RAW` and `NET_BIND_SERVICE`;
+  - `--read-only`, `no-new-privileges`, host networking;
+  - only the `ipsec` directory mounted.
+- **What the agent does:**
+  - re-validates every field: identities, ranges, ports, hashes, PEM;
+  - uses only algorithms fixed in its own code;
+  - writes strongSwan's configuration and its own iptables chains (`GHOSTLINK-IPSEC-*`), with one jump from each built-in chain;
+  - creates a dummy interface `glipsec0` for the pool gateways;
+  - reports sessions in `status.json`.
+- **Stopping and pools:** stopping it (`ipsec disable`, an upgrade or removal) removes its chains and interface. Address pools are `10.79.0.0/20` (IKEv2) and `10.80.0.0/20` (IPsec).
+- **What `ipsec enable` changes on the host:**
+  - writes `/etc/sysctl.d/90-ghostlink-ipsec.conf` (`net.ipv4.ip_forward = 1`), which `disable` and package removal delete;
+  - loads the needed kernel modules when possible.
+- **Kernel:** container-based VPS types (OpenVZ, LXC) usually lack IPsec support. `ipsec enable` says so.
+- **The image:** it holds only `charon`, `swanctl`, the strongSwan plugins used, the iptables binaries and their libraries, all from Alpine Linux 3.24. There is no shell or package manager. strongSwan and iptables are GPL-2.0-or-later, and their complete corresponding source is published with each release (`Ghostlink-<version>-ipsec-component-source-<arch>.tar.gz`).
+
+### Security notes
+
+- Prefer IKEv2. IPsec with a shared group key is weak:
+  - everyone holding the group key can impersonate the server to other IPsec users;
+  - Aggressive Mode exposes material that allows offline guessing of the key.
+
+  Use certificates if you need IPsec. `set --rotate-ipsec-psk` replaces the group key, after which every IPsec PSK profile must be reinstalled.
+- The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes. Client certificates last 5 years; removing the key revokes them.
+- Apple behaviour (installing profiles, connecting) is verified by hand, not by CI. CI runs a real strongSwan client with each profile's exact parameters against the component; see the [verification ledger](../development/verification.md).
+
 ## Monitoring and privacy
 
 What the server records, all of it stored only on the server in `/var/lib/ghostlink-server/history.json` (mode 0600):
@@ -151,7 +232,8 @@ What it can't see: VPN traffic is encrypted, so the server never sees page conte
 | `sudo ghostlink-server logs [N]` | Last N log lines (warnings and errors only; no traffic logging) |
 | `sudo ghostlink-server setup [--hostname H]` | Reload the bundled image and recreate the container, keeping all data |
 | `sudo ghostlink-server restart` / `stop` | Restart or stop the container |
-| `sudo ghostlink-server remove` | Remove the container and image; keep users and keys |
+| `sudo ghostlink-server remove` | Remove the containers and images; keep users and keys |
+| `sudo ghostlink-server ipsec enable\|disable\|status\|logs` | The optional IPsec component for iPhone, iPad and Mac |
 
 ## Ports
 
@@ -165,12 +247,13 @@ Every port is random on first install (10000–32000, all different) and shown b
 | VLESS-REALITY | TCP |
 | WireGuard | UDP |
 | AmneziaWG | UDP |
+| IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
 
 Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities.
 
 ## Upgrade and remove
 
-- **Upgrade:** install the newer package. It loads the new image and recreates the container. Users, keys, rules and the management key are kept.
+- **Upgrade:** install the newer package. It loads the new images and recreates the containers, including the IPsec component if it was enabled. Users, keys, rules and the management key are kept.
 - **Remove:** `sudo apt remove ghostlink-server` stops and removes the container and image, and keeps `/var/lib/ghostlink-server`.
 - **Purge:** `sudo apt purge ghostlink-server` also deletes the state and the system account. On RPM systems, removal keeps the state; delete `/var/lib/ghostlink-server` yourself if you want it gone.
 
@@ -212,7 +295,7 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 |---|---|
 | `GET` / `PATCH /server` | Name, hostname used in keys, VLESS-REALITY site, each protocol's `enabled` and `port` |
 | `GET` / `POST /users`, `GET` / `PATCH` / `DELETE /users/{id}` | Users: `name`, `enabled`, `data_limit_bytes`, `exempt_from_global_rules`, `rules`, `reset_usage` |
-| `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}` |
+| `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}`, or `{"protocol":"ikev2"\|"ipsec","auth":…}` with optional `server_address`, `remote_identifier`, `local_identifier` |
 | `GET` / `PUT /rules` | Rules for everyone: `blocked_domains`, `blocked_ips`, `blocked_ports`, `block_bittorrent`, `block_smtp` |
 | `GET /metrics` | Per-user and total bytes |
 | `GET /live` | Speeds, open connections, online users, the last 2 minutes of server rates, health |
@@ -220,9 +303,10 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET /clients[?user=ID]` | Addresses users connected from |
 | `GET /users/{id}/keys/{key}/qr?format=svg\|text&content=auto\|key\|conf` | A key's QR code |
 | `GET /users/{id}/kit` | The HTML connection kit |
+| `GET /users/{id}/keys/{key}/profile[?prompt_password=1&on_demand=1]` | An IKEv2/IPsec key's Apple profile (`application/x-apple-aspen-config`) |
 | `GET /dashboard` | Dashboard port, mode and login token |
 
-`PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public` and `reset_dashboard_token`. User names are unique, ignoring case.
+`PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token` and `rotate_ipsec_psk`. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
 
 The Ghostlink service is the only intended client. It pins the certificate during the TLS handshake, so the secret path is never sent to a server that cannot prove it holds the certificate's key.
 
@@ -231,6 +315,7 @@ The Ghostlink service is the only intended client. It pins the certificate durin
 - **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server.
 - **REALITY site:** VLESS-REALITY borrows the TLS 1.3 handshake of a public site, `www.googletagmanager.com` by default. Choose a site that is reachable from the server and not blocked where your users are.
 - **Amnezia apps:** the `vpn://` keys follow Amnezia's export format for AmneziaWG and WireGuard, with no SSH credentials. Importing them into Amnezia's own apps has not been verified yet.
+- **IKEv2/IPsec:** see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users). Apple-device behaviour is checked by hand.
 - **Not in this version:** IPv6 inside the tunnels, automatic updates, per-user speed and device limits, monthly limit resets, subscription links, and alerts.
 
 Security details: [security model](../security/model.md). What has been tested: [verification ledger](../development/verification.md).

@@ -282,10 +282,11 @@ func StrongswanConf(aggressivePSK bool) string {
 	c.close()
 	c.open("filelog")
 	c.open("stderr")
-	c.set("default", "0")
-	c.set("ike", "1")
-	c.set("cfg", "1")
-	c.set("knl", "1")
+	// Level 1 shows start-up and connection events; packets, encodings and jobs stay quiet.
+	c.set("default", "1")
+	for _, quiet := range []string{"net", "enc", "asn", "job", "mgr"} {
+		c.set(quiet, "0")
+	}
 	c.set("ike_name", "yes")
 	c.close()
 	c.close()
