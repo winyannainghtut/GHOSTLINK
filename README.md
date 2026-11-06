@@ -162,9 +162,11 @@ Details: [security model](docs/security/model.md) · [dependency scans](docs/sec
 **The Ghostlink server** runs AmneziaWG, WireGuard, VLESS-REALITY and Shadowsocks in one hardened Docker container on Linux (x64 or arm64). Since v0.5.0 it can also run IKEv2/IPsec for Apple devices in an optional second container. The package carries both images, so nothing is downloaded from a registry:
 
 ```sh
-sudo apt install ./ghostlink-server_<version>-1_amd64.deb      # or: sudo dnf install ./ghostlink-server-<version>-1.x86_64.rpm
-sudo ghostlink-server show-key                               # prints the management key again
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
+# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --open-firewall  --help
 ```
+
+The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
 
 Paste the key into **Servers I run → Add server** (or `ghostlink server add`). You can also manage everything on the server itself (`sudo ghostlink-server users`, `key add`, `top`…) or in its web dashboard (`sudo ghostlink-server dashboard`). From there:
 - **Users:** add users, with optional data limits.

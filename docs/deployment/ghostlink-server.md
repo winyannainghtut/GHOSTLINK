@@ -28,6 +28,35 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 
 ## Install
 
+**One command** (Debian, Ubuntu, Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux, Amazon Linux; x86_64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
+# with your public address, IKEv2/IPsec for Apple devices, and the ports opened in ufw/firewalld:
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --hostname vpn.example.com --ipsec --open-firewall
+```
+
+[`scripts/install-server.sh`](../../scripts/install-server.sh) does the following:
+- picks the right package for the distribution and CPU, and installs Docker from the distribution if it is missing;
+- downloads the newest **published** release's package and checks it against that release's `SHA256SUMS.txt`, which protects against corrupted downloads, not against a compromised GitHub account;
+- installs it, then prints the management key and every port to allow.
+
+Run it again to upgrade; users, keys and rules are kept.
+
+| Option | Use |
+|---|---|
+| `--version X.Y.Z` | Install that release |
+| `--package FILE` | Install a package you already have (offline) |
+| `--hostname HOST` | Set the address in keys |
+| `--ipsec` | Start the IKEv2/IPsec component and turn on IKEv2 |
+| `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
+| `--no-docker` | Never install Docker |
+| `--reinstall` | Install even if this version is already installed |
+
+The installer refuses Docker from the Snap store, which cannot mount `/var/lib/ghostlink-server`. To read the script before running it, download it first: `curl -fsSLO …/install-server.sh && less install-server.sh && sudo bash install-server.sh`.
+
+**By hand:** download the `ghostlink-server` package for your system from the [releases](https://github.com/winyannainghtut/GHOSTLINK/releases). The files without `-server` are the client. Then:
+
 ```sh
 sudo apt install ./ghostlink-server_<version>-1_amd64.deb     # or _arm64.deb
 sudo dnf install ./ghostlink-server-<version>-1.x86_64.rpm     # or .aarch64.rpm

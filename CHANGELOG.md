@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+### Added
+
+- **One-command server install:** `curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash`.
+  - It picks the `.deb` or `.rpm` for the distribution and CPU, installs Docker if needed and verifies the package against the release checksums.
+  - It prints the management key and the ports to open.
+  - Options: `--hostname`, `--ipsec`, `--open-firewall` (only for an active ufw or firewalld), `--version`, `--package` for offline installs.
+  - Running it again upgrades.
+
+### Fixed
+
+- `sudo ghostlink-server --json users` (and the other admin commands) failed with a usage message, although the guide documents it; the host command now passes `--json` through. This takes effect with the next server package.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

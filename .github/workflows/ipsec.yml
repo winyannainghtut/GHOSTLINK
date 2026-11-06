@@ -10,6 +10,7 @@ on:
       - 'tests/ipsec/**'
       - 'scripts/build-linux-server.sh'
       - 'scripts/ipsec-source.sh'
+      - 'scripts/install-server.sh'
       - '.github/workflows/ipsec.yml'
   pull_request:
   workflow_dispatch:
@@ -42,6 +43,26 @@ jobs:
           cat artifacts/linux-x64/ipsec-packages-x64.txt
       - name: Interop test
         run: sudo bash tests/ipsec/interop.sh artifacts/linux-x64/ghostlink-server_*.deb
+      - name: Installer script (with the package just built)
+        run: |
+          set -eu
+          shellcheck --severity=warning scripts/install-server.sh packages/linux/server/ghostlink-server.sh
+          bash scripts/install-server.sh --help | grep -q -- '--open-firewall'
+          deb=$(ls "$PWD"/artifacts/linux-x64/ghostlink-server_*.deb)
+          sudo bash scripts/install-server.sh --package "$deb" --hostname 127.0.0.1 | tee install.log
+          grep -q '"apiUrl":"https://127.0.0.1:' install.log
+          grep -Eq '^  [0-9]+/udp  AmneziaWG$' install.log && grep -Eq '^  [0-9]+/tcp  management API' install.log
+          # A second run changes nothing; machine-readable admin output works through the host command.
+          sudo bash scripts/install-server.sh --package "$deb" | tee again.log
+          grep -q 'is already installed' again.log
+          sudo ghostlink-server --json users | jq -e 'type == "array"'
+          # Piped, as with curl | sudo bash, adding IKEv2/IPsec.
+          sudo bash -s -- --package "$deb" --ipsec < scripts/install-server.sh | tee ipsec.log
+          grep -q '500/udp  IKEv2/IPsec' ipsec.log
+          sudo ghostlink-server settings | grep -q 'IPsec component: running'
+          sudo ghostlink-server ipsec disable
+          sudo apt-get purge -y ghostlink-server >/dev/null
+          test ! -e /var/lib/ghostlink-server
       - name: GPL source of the IPsec component
         env:
           VERSION: ${{ steps.build.outputs.version }}
