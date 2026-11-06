@@ -60,6 +60,10 @@ The login link signed in and the fragment was removed. Overview (live cards, cha
 
 Rust fmt and clippy clean (root and desktop); 33 Rust unit tests passed; Go vet clean; all Go tests passed; `govulncheck` **No vulnerabilities found**; server cross-builds for linux/amd64 and arm64
 
+### Release dry run
+
+The first dry run of this commit built and passed Linux x64 and arm64: client and server packages, the server install, the admin commands and the dashboard checks. The Windows job failed, correctly, at the corresponding-source build check: the bundle copied only `.go`/`.mod`/`.sum`/`.md` files and missed the dashboard pages that the server embeds (`pattern dashboard: no matching files found`). The script now copies every module file except `vendor/` and binaries; the local rerun built from the staged copy.
+
 ### Not verified
 
 Health readings on a real Linux host (CPU, memory and network come from `/proc`; unavailable on Windows dev); the dashboard over a real SSH tunnel; public dashboard mode in a browser; top-services accuracy for apps using ECH
