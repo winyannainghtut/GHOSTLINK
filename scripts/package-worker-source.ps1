@@ -15,11 +15,14 @@ if (Test-Path -LiteralPath $sourceDirectory) {
     Remove-Item -LiteralPath $sourceDirectory -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $sourceDirectory | Out-Null
-# The whole Go module: the worker, the server command and every internal package (with tests).
+# The whole Go module: the worker, the server command, every internal package (with tests) and
+# embedded files such as the dashboard's web pages. Only vendored copies and built binaries
+# are left out; the build check below proves nothing needed is missing.
 $moduleRoot = [IO.Path]::GetFullPath((Join-Path $repository 'core\outline-worker'))
 $moduleFiles = Get-ChildItem -LiteralPath $moduleRoot -Recurse -File | Where-Object {
     $relative = $_.FullName.Substring($moduleRoot.Length + 1)
-    ($_.Extension -in '.go', '.mod', '.sum', '.md') -and -not $relative.StartsWith('vendor' + [IO.Path]::DirectorySeparatorChar)
+    -not $relative.StartsWith('vendor' + [IO.Path]::DirectorySeparatorChar) -and
+        ($_.Extension -notin '.exe', '.dll', '.so', '.test', '.out')
 }
 foreach ($file in $moduleFiles) {
     $relative = $file.FullName.Substring($moduleRoot.Length + 1)
