@@ -36,6 +36,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The server's address (10.99.0.1) must exist before anything calls its API.
+ip link add glh0 type veth peer name glc0
+ip addr add 10.99.0.1/24 dev glh0 && ip link set glh0 up
+
 step "Install the server package and enable the IPsec component"
 GHOSTLINK_SERVER_HOSTNAME=10.99.0.1 apt-get install -y "$deb" >/dev/null
 ghostlink-server ipsec enable | tee "$work/enable.txt"
@@ -53,7 +57,7 @@ test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 && test -f /etc/sysctl.d/90-ghos
 key=$(ghostlink-server show-key | grep '^{')
 url=$(echo "$key" | jq -r .apiUrl)
 api() { # METHOD PATH [JSON]
-    curl -sk --fail-with-body -X "$1" ${3:+-d "$3"} "$url$2"
+    curl -sk --fail-with-body --connect-timeout 5 --max-time 90 -X "$1" ${3:+-d "$3"} "$url$2"
 }
 api PATCH /server '{"protocols":{"ikev2":{"enabled":true},"ipsec":{"enabled":true}}}' | jq -e '.protocols.ikev2.enabled and .protocols.ipsec.enabled and .ipsec_component.running' >/dev/null
 api PUT /rules '{"blocked_domains":["blocked.example"],"blocked_ports":["8081"]}' >/dev/null
@@ -63,7 +67,7 @@ for spec in ikev2-eap:ikev2:eap ikev2-cert:ikev2:certificate ipsec-cert:ipsec:ce
     IFS=: read -r name protocol auth <<<"$spec"
     created=$(api POST "/users/$user/keys" "{\"protocol\":\"$protocol\",\"auth\":\"$auth\"}")
     key_id[$name]=$(echo "$created" | jq -r .id)
-    curl -sk --fail -o "$work/$name.mobileconfig" -w '%{content_type}\n' "$url/users/$user/keys/${key_id[$name]}/profile" | grep -qx 'application/x-apple-aspen-config'
+    curl -sk --fail --max-time 60 -o "$work/$name.mobileconfig" -w '%{content_type}\n' "$url/users/$user/keys/${key_id[$name]}/profile" | grep -qx 'application/x-apple-aspen-config'
 done
 api POST "/users/$user/keys" '{"protocol":"ipsec","auth":"psk"}' | jq -e '.warning | test("weak")' >/dev/null
 
@@ -82,9 +86,7 @@ docker run --detach --name glclient --network none --cap-drop ALL --cap-add NET_
     --entrypoint /usr/lib/strongswan/charon "$image" >/dev/null
 pid=$(docker inspect --format '{{.State.Pid}}' glclient)
 in_client() { nsenter --target "$pid" --net "$@"; }
-ip link add glh0 type veth peer name glc0
 ip link set glc0 netns "$pid"
-ip addr add 10.99.0.1/24 dev glh0 && ip link set glh0 up
 in_client ip addr add 10.99.0.2/24 dev glc0
 in_client ip link set glc0 up
 in_client ip link set lo up

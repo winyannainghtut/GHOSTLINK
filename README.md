@@ -34,6 +34,7 @@
 - **Your own server, Outline-style:** install one `.deb`/`.rpm` on a Linux machine with Docker (the image is inside the package), paste the management key it prints into the app, then create users and keys and set traffic rules from **Servers I run** or `ghostlink server`.
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
 - **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
+- **iPhone, iPad and Mac with no app:** the server can also serve Apple's built-in IKEv2 and IPsec VPN, and hands each person a configuration profile (`.mobileconfig`) that installs it in Settings. Sign-in is by password or certificate.
 - **Three ways to manage your server:** the app, `sudo ghostlink-server …` commands on the server (with QR codes in the terminal and a live `top`), or a web dashboard on its own port (private behind an SSH tunnel by default).
 - **Easy sharing:** QR codes for every key and a one-page connection kit per person, for the Outline, WireGuard, AmneziaVPN and v2ray-family apps on any phone.
 - **Honest status:** "Connected" means the tunnel was observed up and an HTTPS request through it succeeded. Nothing is reported that was not measured.
@@ -53,6 +54,7 @@ Pre-release builds are attached to [GitHub Releases](https://github.com/winyanna
 | Server, Debian/Ubuntu (x64, arm64) | `ghostlink-server_<version>-1_<amd64\|arm64>.deb` | The Ghostlink server with its Docker image included ([guide](docs/deployment/ghostlink-server.md)) |
 | Server, Fedora/RHEL family (x64, arm64) | `ghostlink-server-<version>-1.<x86_64\|aarch64>.rpm` | The same, as an RPM |
 | Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker and the server |
+| Source | `Ghostlink-<version>-ipsec-component-source-<x64\|arm64>.tar.gz` | GPL source of strongSwan, iptables and the other copyleft packages in the server's IPsec image |
 
 **Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Open **Ghostlink** from the Start menu or the desktop shortcut. Windows SmartScreen warns about unsigned builds. Use v0.3.1 or later on Windows: in earlier installers, the app could not reach the installed service.
 
@@ -157,7 +159,7 @@ Details: [security model](docs/security/model.md) · [dependency scans](docs/sec
 
 ## Running your own server
 
-**The Ghostlink server** (v0.3.0) runs AmneziaWG, WireGuard, VLESS-REALITY and Shadowsocks in one hardened Docker container on Linux (x64 or arm64). The package carries the image, so nothing is downloaded from a registry:
+**The Ghostlink server** runs AmneziaWG, WireGuard, VLESS-REALITY and Shadowsocks in one hardened Docker container on Linux (x64 or arm64). Since v0.5.0 it can also run IKEv2/IPsec for Apple devices in an optional second container. The package carries both images, so nothing is downloaded from a registry:
 
 ```sh
 sudo apt install ./ghostlink-server_<version>-1_amd64.deb      # or: sudo dnf install ./ghostlink-server-<version>-1.x86_64.rpm
@@ -170,6 +172,7 @@ Paste the key into **Servers I run → Add server** (or `ghostlink server add`).
 - **Rules:** block sites, IPs, ports, BitTorrent or outgoing mail for everyone or for one user.
 - **Usage and monitoring:** see live speeds, who is online, data used, traffic types and, if you turn it on, each user's top services.
 - **Sharing:** show a key's QR code, or save a connection kit page for each person.
+- **iPhone, iPad, Mac:** run `sudo ghostlink-server ipsec enable` once and open UDP 500 and 4500. Then create IKEv2 (or IPsec) keys and save each as a profile to send.
 
 Upgrading the package keeps everything. Full guide: [Ghostlink server](docs/deployment/ghostlink-server.md).
 
@@ -210,7 +213,8 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
 | Ghostlink server, management, monitoring | Server API, rules, limits, monitoring and all four protocols tested end to end with real clients; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
-| macOS, Android, iOS | Not started |
+| IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component. Installing on a real Apple device is checked by hand |
+| Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
 
 The [changelog](CHANGELOG.md) lists what each release changed.
 
