@@ -8,6 +8,15 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: first hosted CI of v0.2.0 and documentation pass
+
+- **CI failure on Linux:** the new real-engine tests failed because Go raises SIGPIPE when writing to a closed stderr. The tests had dropped the pipe, but a crashed daemon could do the same to a real worker, so the worker now ignores SIGPIPE on Unix. The tests drain events, warm up the tunnel and run serially in CI.
+- **Documentation:**
+  - the README was rewritten as a proper project README;
+  - `CHANGELOG.md` was added, and the release workflow puts each version's section into its release notes;
+  - `docs/architecture/protocols.md` records the protocol and split-tunnel design and pitfalls;
+  - the worker README, Windows guide and handover were brought up to date.
+
 ### Later on November 6: v0.2.0 — WireGuard, AmneziaWG, VLESS-REALITY, Amnezia import, split tunneling
 
 The approved plan is in four phases: (1) client protocols, (2) client split tunneling, (3) an Outline-style Ghostlink server shipped as `.deb`/`.rpm` packages with the Docker image included, and (4) server management from the app. Phases 1–2 are implemented as **v0.2.0**; phases 3–4 are next (v0.3.0).

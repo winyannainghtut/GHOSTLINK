@@ -103,7 +103,8 @@ jobs:
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.windows.outputs.version }}
         run: |
-          sed "s/@VERSION@/$VERSION/g" .github/release-notes.md > notes.md
+          node scripts/changelog-section.mjs "$VERSION" > changes.md
+          node -e 'const fs=require("fs");const t=fs.readFileSync(".github/release-notes.md","utf8").replaceAll("@VERSION@",process.argv[1]).replace("@CHANGES@",fs.readFileSync("changes.md","utf8").trim());fs.writeFileSync("notes.md",t)' "$VERSION"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
           else

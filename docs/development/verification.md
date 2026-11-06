@@ -2,6 +2,17 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## First hosted CI run of v0.2.0 (2026-11-06)
+
+- **What failed:** on GitHub's Ubuntu runner, two new real-engine tests failed; the Windows job was cancelled by the matrix.
+- **Cause:** the test helper dropped the worker's stderr pipe after the first event, so the worker's final event write raised **SIGPIPE** on Linux and killed it; Windows has no SIGPIPE. The split test's first tunneled request also outran its short retry budget under parallel load.
+- **Fixes:**
+  - the worker now ignores SIGPIPE on Unix, so a broken status pipe can never interrupt the engine's graceful close (a product hardening, not only a test fix);
+  - the tests drain worker events for the worker's lifetime and report its failure code;
+  - the split test waits for the tunnel through the always-tunneled health proxy before checking routes;
+  - CI runs these tests one at a time.
+- **Local result:** all three pass serially on Windows. The Linux result is pending the next CI run.
+
 ## Client split tunneling (2026-11-06)
 
 | Check | Result actually observed |

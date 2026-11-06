@@ -12,7 +12,7 @@ Start the daemon in one terminal:
 
 In another terminal run `./target/debug/ghostlink.exe status --json` and `./apps/desktop/src-tauri/target/debug/ghostlink-desktop.exe`. Use the actual checkout path on another machine. An unelevated daemon supports key/profile/agent management, but cannot create a privileged TUN adapter. There is no automatic UAC bypass.
 
-The optional OpenVPN executable path is only needed for that backend. The Outline-compatible path now requires the **managed Ghostlink worker**, not the unmodified standalone sing-box CLI; the managed worker supports graceful Windows shutdown and parent-death cleanup. `--sing-box` remains an argument alias for older development commands, but the binary must implement the managed worker interface.
+The optional OpenVPN executable path is only needed for that backend. Every other protocol (Shadowsocks, VLESS-REALITY, WireGuard, AmneziaWG) requires the **managed Ghostlink worker**, built with `-tags with_gvisor,with_utls,with_wireguard`, not a standalone sing-box CLI; the managed worker supports graceful Windows shutdown and parent-death cleanup. `--sing-box` remains an argument alias for older development commands, but the binary must implement the managed worker interface.
 
 ## Installer behavior
 
@@ -22,7 +22,7 @@ The MSI installs into 64-bit Program Files, adds the CLI directory to the machin
 
 ```powershell
 $vpnOwnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-msiexec.exe /i .\Ghostlink-0.1.0-windows-x64.msi "GHOSTLINK_OWNER_SID=$vpnOwnerSid"
+msiexec.exe /i .\Ghostlink-0.2.0-windows-x64.msi "GHOSTLINK_OWNER_SID=$vpnOwnerSid"
 ```
 
 Administrator consent is a human installation step. The owner SID must belong to the normal user who will run the GUI/CLI; do not substitute Everyone or another broad group. Use the installer repair/upgrade process with administrator access to change installation policy.

@@ -30,7 +30,7 @@ fn tool(name: &str, description: &str, control: bool, profile: bool) -> Value {
 fn tools(control: bool) -> Vec<Value> {
     let mut values = vec![
         tool("vpn_list_profiles", "List already imported profiles. Returns no keys or profile contents.", false, false),
-        tool("vpn_status", "Read the actual local VPN connection state (Outline-compatible or OpenVPN). Connected does not prove leak prevention.", false, false),
+        tool("vpn_status", "Read the actual local VPN connection state for any protocol. Connected does not prove leak prevention.", false, false),
         tool("vpn_diagnostics", "Run local installation diagnostics. No public-IP or external network requests are made.", false, false),
     ];
     if control {

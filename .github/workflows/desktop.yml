@@ -64,7 +64,7 @@ jobs:
           Expand-Archive '.tools/peer.zip' '.tools/peer'
           $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
           $env:GHOSTLINK_TEST_OUTLINE_WORKER = (Resolve-Path 'target/debug/ghostlink-tunnel.exe').Path
-          ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols '--' --ignored --nocapture
+          ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols '--' --ignored --nocapture --test-threads=1
       - name: Linux independent encrypted peer
         if: runner.os == 'Linux'
         run: |
@@ -74,7 +74,7 @@ jobs:
           tar -xzf .tools/peer.tar.gz -C .tools/peer
           export GHOSTLINK_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"
           export GHOSTLINK_TEST_OUTLINE_WORKER="$PWD/target/debug/ghostlink-tunnel"
-          cargo test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --nocapture
+          cargo test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --nocapture --test-threads=1
       - name: Windows GUI build
         if: runner.os == 'Windows'
         shell: pwsh
