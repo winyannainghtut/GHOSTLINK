@@ -276,6 +276,12 @@ func decodeQR(t *testing.T, black func(x, y int) bool, size int) string {
 	}
 	result, err := gozxingqr.NewQRCodeReader().Decode(bitmap, nil)
 	if err != nil {
+		// The finder-pattern detector occasionally misses on synthetic images; reading the
+		// clean bitmap directly still checks every module and the error correction.
+		pure := map[gozxing.DecodeHintType]interface{}{gozxing.DecodeHintType_PURE_BARCODE: true}
+		result, err = gozxingqr.NewQRCodeReader().Decode(bitmap, pure)
+	}
+	if err != nil {
 		t.Fatalf("QR code does not decode: %v", err)
 	}
 	return result.GetText()

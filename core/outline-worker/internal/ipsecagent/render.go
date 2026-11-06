@@ -269,9 +269,10 @@ func StrongswanConf(aggressivePSK bool) string {
 	if aggressivePSK {
 		c.set("i_dont_care_about_security_and_use_aggressive_mode_psk", "yes")
 	}
-	load := []string{"random", "nonce", "kdf", "gmp", "attr", "constraints"}
+	// A trailing "!" marks a plugin charon must not start without.
+	load := []string{"random", "nonce", "kdf", "constraints"}
 	for _, p := range requiredPlugins {
-		load = append(load, "!"+p)
+		load = append(load, p+"!")
 	}
 	c.set("load", strings.Join(load, " "))
 	c.open("plugins")

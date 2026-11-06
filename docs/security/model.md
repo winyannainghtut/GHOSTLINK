@@ -38,6 +38,28 @@ These mechanisms reduce specific failures; they do not certify the platform defi
   - `--reset-token` revokes every session.
 - **Page hardening:** a strict CSP (self only; images from blob/data), `frame-ancestors 'none'`, no external resources, and no user data inserted as HTML.
 
+**IKEv2/IPsec for iPhone, iPad and Mac (optional component).**
+- **Privilege split:**
+  - The main server never gains privileges. It writes a declarative settings file (`ipsec/desired.json`, mode 0640, readable only by its own group) and reads back a status file.
+  - `ghostlink-ipsec-agent` runs in a second container as root in that group with only `NET_ADMIN`, `NET_RAW` and `NET_BIND_SERVICE`, a read-only root, `no-new-privileges` and only the `ipsec` directory mounted.
+  - The agent re-validates every field: identities, CIDRs, ports, NT hashes, PEM types, version. Algorithms are fixed in its code, and settings never reach a shell. It changes only its own `GHOSTLINK-IPSEC-*` chains and the `glipsec0` interface, and removes them when it stops.
+  - A compromised server process can therefore change who may connect, but cannot add arbitrary firewall rules or strongSwan options.
+- **Credentials:**
+  - EAP-MSCHAPv2 passwords reach strongSwan only as NT hashes. An NT hash is still equivalent to the password for MSCHAPv2, so `desired.json` is a secret, like the server state.
+  - XAuth passwords and the IPsec group key are passed as they are, because strongSwan needs them.
+  - The CA's private key stays in the server state and is never given to the agent.
+- **Certificates:**
+  - a private RSA-3072 CA (20 years), with server certificates of 825 days carrying the IKE EKU, renewed automatically, and client certificates of 5 years;
+  - removed keys are revoked in a CRL that is reissued daily (7-day validity);
+  - certificates of disabled or over-limit users are put on hold in the same CRL, and strongSwan refuses them;
+  - the agent also ends established sessions whose identity is no longer allowed.
+- **Profiles are secrets:**
+  - A `.mobileconfig` carries the user's password or a PKCS#12 with an embedded random password. It can be saved without that password (the device then asks for it).
+  - Profiles are unsigned: there is no Apple Developer certificate yet, so iOS shows "Unverified".
+  - The profile installs the server's CA so the device can check the server certificate. iOS does not trust a profile-installed root for websites unless someone turns that on in Settings → General → About → Certificate Trust Settings, which nobody should do for this CA. Keep its key safe, because anyone holding it could issue VPN server certificates these devices accept.
+- **Weak option:** IPsec with a shared group key uses IKEv1 Aggressive Mode. Every holder of the group key can impersonate the server to other PSK users, and a passive observer can attempt offline guessing of the group key. It is off unless a PSK key exists, and the API returns a warning with every such key.
+- **Not inspected:** IKEv2/IPsec traffic is forwarded by the kernel. Only the rules for everyone (addresses, ports, SMTP, DNS-based site blocks), the always-blocked ranges and data limits apply. Per-user rules, BitTorrent blocking and traffic classification do not. IPv6 is not tunnelled.
+
 **Monitoring data.** The server keeps per-user usage, traffic-type and protocol totals, and the last 20 connecting addresses per user (30 days) on the server only.
 - **Top sites/services:** off by default. They are totals per service per day (never URLs or times), kept 30 days, and deleted at once when turned off.
 - **Rotation:** age limits, a hard size cap with a documented trimming order, and a low-disk guard that pauses detail recording below 500 MB or 5 % free.

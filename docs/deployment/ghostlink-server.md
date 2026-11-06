@@ -159,7 +159,7 @@ Open **UDP 500 and UDP 4500** in the host firewall and the cloud security group.
 2. **iPhone/iPad:** open it. Settings shows **Profile Downloaded**; tap it, then **Install** (iOS 16 and later: Settings → General → **VPN & Device Management**). **Mac:** double-click it, then open System Settings → Privacy & Security → **Profiles**.
 3. Turn the VPN on in Settings → **VPN**.
 
-The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA, trusted only for this VPN profile's server certificate. `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
+The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA so the device can check the server's certificate. iOS does not trust it for websites unless someone enables it under Settings → General → About → Certificate Trust Settings. Don't. `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
 
 ### What applies to IKEv2/IPsec users
 
