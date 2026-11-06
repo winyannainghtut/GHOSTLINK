@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright 2026 MyVPN contributors
+// Copyright 2026 Ghostlink contributors
 // A lifecycle adapter around unmodified sing-box libraries. No protocol or crypto changes.
 package main
 
@@ -35,7 +35,7 @@ import (
 	boxjson "github.com/sagernet/sing/common/json"
 )
 
-const version = "MyVPN tunnel worker 0.1.0; sing-box 1.14.4"
+const version = "Ghostlink tunnel worker 0.1.0; sing-box 1.14.4"
 
 func engineContext() context.Context {
 	in := inbound.NewRegistry()

@@ -8,9 +8,9 @@
       ansible.builtin.assert:
         that:
           - ansible_facts['distribution'] == 'Ubuntu'
-          - myvpn_public_interface is match('^[A-Za-z0-9_.:-]+$')
-          - myvpn_server_bundle is defined
-          - myvpn_public_interface in ansible_facts['interfaces']
+          - ghostlink_public_interface is match('^[A-Za-z0-9_.:-]+$')
+          - ghostlink_server_bundle is defined
+          - ghostlink_public_interface in ansible_facts['interfaces']
     - name: Install maintained distribution packages
       ansible.builtin.apt:
         name: [openvpn, nftables, python3]
@@ -25,7 +25,7 @@
         mode: '0755'
     - name: Deploy explicit server-only PKI bundle
       ansible.builtin.unarchive:
-        src: '{{ myvpn_server_bundle }}'
+        src: '{{ ghostlink_server_bundle }}'
         dest: /etc/openvpn/server
         owner: root
         group: root
@@ -49,7 +49,7 @@
     - name: Install server configuration
       ansible.builtin.copy:
         src: ../openvpn/server.conf
-        dest: /etc/openvpn/server/myvpn.conf
+        dest: /etc/openvpn/server/ghostlink.conf
         owner: root
         group: root
         mode: '0644'
@@ -63,35 +63,35 @@
         state: present
     - name: Install isolated VPN NAT rules
       ansible.builtin.template:
-        src: myvpn.nft.j2
-        dest: /etc/openvpn/myvpn.nft
+        src: ghostlink.nft.j2
+        dest: /etc/openvpn/ghostlink.nft
         owner: root
         group: root
         mode: '0600'
       notify: Reload VPN NAT
     - name: Install dedicated NAT unit
       ansible.builtin.copy:
-        src: myvpn-nat.service
-        dest: /etc/systemd/system/myvpn-nat.service
+        src: ghostlink-nat.service
+        dest: /etc/systemd/system/ghostlink-nat.service
         mode: '0644'
       register: nat_unit
     - name: Start NAT unit
       ansible.builtin.systemd:
-        name: myvpn-nat
+        name: ghostlink-nat
         daemon_reload: '{{ nat_unit.changed }}'
         enabled: true
         state: started
     - name: Start VPN
       ansible.builtin.systemd:
-        name: openvpn-server@myvpn
+        name: openvpn-server@ghostlink
         enabled: true
         state: started
   handlers:
     - name: Reload VPN NAT
       ansible.builtin.systemd:
-        name: myvpn-nat
+        name: ghostlink-nat
         state: reloaded
     - name: Restart VPN
       ansible.builtin.systemd:
-        name: openvpn-server@myvpn
+        name: openvpn-server@ghostlink
         state: restarted

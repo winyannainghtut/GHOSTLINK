@@ -1,0 +1,141 @@
+name: Release
+# Builds unsigned pre-release packages for every supported platform. Pushing a vX.Y.Z tag that
+# matches the Cargo workspace version also creates a DRAFT GitHub release for review; nothing
+# is public until a maintainer publishes the draft. A manual run only builds the artifacts.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64 (MSI, portable ZIP, worker source)
+    runs-on: windows-2022
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: core/outline-worker/go.sum
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup override set 1.92.0
+      - name: Check version declarations and tag
+        id: version
+        shell: pwsh
+        run: |
+          $tagArguments = if ($env:GITHUB_REF_TYPE -eq 'tag') { @('--tag', $env:GITHUB_REF_NAME) } else { @() }
+          $version = node scripts/release-version.mjs @tagArguments
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Pinned WiX tools
+        shell: pwsh
+        run: ./scripts/bootstrap-windows.ps1
+      - name: Unit tests
+        shell: pwsh
+        run: ./scripts/cargo.ps1 test --locked --workspace
+      - name: Installer and portable archive
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Version '${{ steps.version.outputs.version }}'
+      - name: Worker corresponding source (GPL)
+        shell: pwsh
+        run: ./scripts/package-worker-source.ps1 -Version '${{ steps.version.outputs.version }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          path: |
+            artifacts/windows-x64/*.msi
+            artifacts/windows-x64/*.zip
+            artifacts/source/*.zip
+
+  linux:
+    name: Linux ${{ matrix.arch }} (headless archive)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 builds link against glibc 2.35 / OpenSSL 3, so they also run on newer distros.
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: core/outline-worker/go.sum
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Install Rust toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup override set 1.92.0
+      - name: Check version declarations and tag
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then set -- --tag "$GITHUB_REF_NAME"; fi
+          echo "version=$(node scripts/release-version.mjs "$@")" >> "$GITHUB_OUTPUT"
+      - name: Unit tests
+        run: cargo test --locked --workspace
+      - name: Archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build-linux.sh "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: artifacts/linux-${{ matrix.arch }}/*.tar.gz
+
+  publish:
+    name: Draft GitHub release
+    if: github.ref_type == 'tag'
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+      - name: Collect files and checksums
+        run: |
+          mkdir release
+          find downloaded -type f -exec mv -t release {} +
+          (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.windows.outputs.version }}
+        run: |
+          sed "s/@VERSION@/$VERSION/g" .github/release-notes.md > notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+              --title "Ghostlink $VERSION" --notes-file notes.md
+          fi

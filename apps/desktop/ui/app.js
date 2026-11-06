@@ -1,4 +1,4 @@
-/* MyVPN desktop UI. Credentials are kept in memory only until private IPC import completes. */
+/* Ghostlink desktop UI. Credentials are kept in memory only until private IPC import completes. */
 'use strict';
 const $ = selector => document.querySelector(selector);
 const appState = { profiles: [], connection: null, info: null, refreshing: false, busy: false, selected: null, available: false, renderedServers: null };
@@ -6,7 +6,7 @@ const nativeInvoke = window.__TAURI__?.core?.invoke;
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 
 async function request(action) {
-  if (!nativeInvoke) throw new Error('Open the installed MyVPN desktop app to use the local VPN service.');
+  if (!nativeInvoke) throw new Error('Open the installed Ghostlink desktop app to use the local VPN service.');
   let response;
   try { response = await nativeInvoke('vpn_request', { action }); }
   catch { throw new Error('The desktop app could not reach the local VPN service.'); }
@@ -31,7 +31,7 @@ async function refresh() {
   } catch (error) {
     appState.available = false;
     $('#connection-state').textContent = 'VPN service unavailable';
-    $('#connection-caption').textContent = 'Start the installed MyVPN service, then try again.';
+    $('#connection-caption').textContent = 'Start the installed Ghostlink service, then try again.';
     $('#duration').textContent = '—'; $('#traffic').textContent = '—';
     notice(error.message); renderServers();
   } finally { appState.refreshing = false; }
@@ -101,7 +101,7 @@ function showDetails(profile) {
   for (const [name,value] of details) dl.append(el('dt','',name),el('dd','',value));
   $('#detail-content').replaceChildren(dl); $('#detail-dialog').showModal();
 }
-function theme(value) { document.documentElement.dataset.theme = value; localStorage.setItem('myvpn-theme',value); $('#theme').textContent = value === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'; }
+function theme(value) { document.documentElement.dataset.theme = value; localStorage.setItem('ghostlink-theme',value); $('#theme').textContent = value === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'; }
 
 $('#add').addEventListener('click',openKeyDialog); $('#empty-add').addEventListener('click',openKeyDialog);
 $('#search').addEventListener('input',renderServers);
@@ -137,8 +137,8 @@ $('#diagnostics').addEventListener('click', async () => {
 });
 $('#help').addEventListener('click', () => {
   $('#detail-title').textContent = 'Private by choice.';
-  const copy = el('p','field-note','MyVPN is an independent personal VPN client compatible with standard Outline access keys. Add a key supplied by your server administrator, then choose Connect. Keys are stored by your local service. Quitting the interface leaves the VPN service running; use Disconnect to stop your connection.');
+  const copy = el('p','field-note','Ghostlink is an independent personal VPN client compatible with standard Outline access keys. Add a key supplied by your server administrator, then choose Connect. Keys are stored by your local service. Quitting the interface leaves the VPN service running; use Disconnect to stop your connection.');
   $('#detail-content').replaceChildren(copy); $('#detail-dialog').showModal();
 });
-theme(localStorage.getItem('myvpn-theme') === 'dark' ? 'dark' : 'light');
+theme(localStorage.getItem('ghostlink-theme') === 'dark' ? 'dark' : 'light');
 refresh(); setInterval(refresh, 1500);

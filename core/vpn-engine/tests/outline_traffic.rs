@@ -1,5 +1,5 @@
 //! Real encrypted Shadowsocks interoperability; proxy-only, without changing OS routes.
-use myvpn_engine::{outline::AccessKey, outline_session, storage};
+use ghostlink_engine::{outline::AccessKey, outline_session, storage};
 use serde_json::json;
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
@@ -18,10 +18,11 @@ async fn free_port() -> u16 {
 }
 
 #[tokio::test]
-#[ignore = "requires MYVPN_TEST_OUTLINE_WORKER: built managed worker"]
+#[ignore = "requires GHOSTLINK_TEST_OUTLINE_WORKER: built managed worker"]
 async fn managed_worker_gracefully_closes_on_stop_and_parent_eof() {
     let engine = PathBuf::from(
-        std::env::var_os("MYVPN_TEST_OUTLINE_WORKER").expect("Set MYVPN_TEST_OUTLINE_WORKER"),
+        std::env::var_os("GHOSTLINK_TEST_OUTLINE_WORKER")
+            .expect("Set GHOSTLINK_TEST_OUTLINE_WORKER"),
     );
     let dir = tempfile::tempdir().unwrap();
     storage::private_dir(dir.path()).unwrap();
@@ -57,7 +58,7 @@ async fn managed_worker_gracefully_closes_on_stop_and_parent_eof() {
             event.get("vpn_ip").is_none(),
             "Proxy-only fixture must not report a TUN address"
         );
-        myvpn_engine::process::verify_listeners(pid, &[port]).unwrap();
+        ghostlink_engine::process::verify_listeners(pid, &[port]).unwrap();
         assert!(
             tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
                 .await
@@ -92,16 +93,17 @@ async fn managed_worker_gracefully_closes_on_stop_and_parent_eof() {
 }
 
 #[tokio::test]
-#[ignore = "requires MYVPN_TEST_OUTLINE_WORKER: built managed worker"]
+#[ignore = "requires GHOSTLINK_TEST_OUTLINE_WORKER: built managed worker"]
 async fn failed_engine_validation_removes_plaintext_configuration() {
     let engine = PathBuf::from(
-        std::env::var_os("MYVPN_TEST_OUTLINE_WORKER").expect("Set MYVPN_TEST_OUTLINE_WORKER"),
+        std::env::var_os("GHOSTLINK_TEST_OUTLINE_WORKER")
+            .expect("Set GHOSTLINK_TEST_OUTLINE_WORKER"),
     );
     let dir = tempfile::tempdir().unwrap();
     let mut key = AccessKey::parse("ss://aes-256-gcm:test-only-secret@127.0.0.1:1").unwrap();
     key.method = "invalid-test-cipher".into();
     let shared = std::sync::Arc::new(tokio::sync::RwLock::new(
-        myvpn_engine::management::Snapshot::default(),
+        ghostlink_engine::management::Snapshot::default(),
     ));
     let (events, _receiver) = tokio::sync::mpsc::channel(8);
     let result = outline_session::start(
@@ -135,10 +137,11 @@ fn spawn(engine: &PathBuf, path: &std::path::Path) -> Child {
 }
 
 #[tokio::test]
-#[ignore = "requires MYVPN_TEST_SING_BOX: unmodified sing-box 1.14.4"]
+#[ignore = "requires GHOSTLINK_TEST_SING_BOX: unmodified sing-box 1.14.4"]
 async fn outline_key_transports_real_http_and_rejects_wrong_password() {
-    let engine =
-        PathBuf::from(std::env::var_os("MYVPN_TEST_SING_BOX").expect("Set MYVPN_TEST_SING_BOX"));
+    let engine = PathBuf::from(
+        std::env::var_os("GHOSTLINK_TEST_SING_BOX").expect("Set GHOSTLINK_TEST_SING_BOX"),
+    );
     let dir = tempfile::tempdir().unwrap();
     storage::private_dir(dir.path()).unwrap();
     let ss_port = free_port().await;
@@ -177,7 +180,7 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
     });
     let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))
         .unwrap()
-        .basic_auth("myvpn", "local-test-controller-password");
+        .basic_auth("ghostlink", "local-test-controller-password");
     let http = reqwest::Client::builder()
         .proxy(proxy)
         .timeout(Duration::from_secs(2))

@@ -2,7 +2,9 @@ $CargoArgs = $args
 $ErrorActionPreference = 'Stop'
 if ($IsWindows -or $env:OS -eq 'Windows_NT') {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (-not (Get-Command link.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $vswhere)) {
+    # Probe cl.exe rather than link.exe: Git for Windows ships an unrelated coreutils link.exe
+    # on PATH, which would otherwise skip MSVC setup and break every Rust link step.
+    if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $vswhere)) {
         $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
         if ($installation) {
             $localSdk = Join-Path (Split-Path $PSScriptRoot) '.tools\winsdk\c'

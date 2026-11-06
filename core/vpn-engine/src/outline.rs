@@ -105,8 +105,9 @@ impl AccessKey {
             label,
         })
     }
-    pub fn summary(&self, name: &str, source: &str) -> crate::profile::ProfileSummary {
-        use sha2::{Digest, Sha256};
+    /// `fingerprint` must not be derived from the credential alone: summaries are visible to
+    /// read-only agents, and a plain hash of the key would let them test password guesses.
+    pub fn summary(&self, name: &str, fingerprint: String) -> crate::profile::ProfileSummary {
         crate::profile::ProfileSummary {
             name: name.into(),
             kind: "outline".into(),
@@ -118,8 +119,7 @@ impl AccessKey {
             }],
             tunnel_mode: "full".into(),
             certificate_expires_unix: None,
-            // Fingerprint contains no reversible access credential.
-            sha256: hex::encode(Sha256::digest(source.as_bytes())),
+            sha256: fingerprint,
             is_default: false,
         }
     }

@@ -1,6 +1,6 @@
 use crate::Args;
 use anyhow::{ensure, Result};
-use myvpn_contracts::Stream;
+use ghostlink_contracts::Stream;
 
 #[cfg(windows)]
 pub struct Listener {
@@ -62,7 +62,7 @@ impl Listener {
             args.endpoint.starts_with(r"\\.\pipe\") && !args.endpoint[9..].contains(['\\', '/']),
             "Only local pipe endpoints are permitted"
         );
-        let current = myvpn_engine::storage::current_sid()?;
+        let current = ghostlink_engine::storage::current_sid()?;
         let owner = args.owner_sid.clone().unwrap_or_else(|| current.clone());
         ensure!(
             owner.starts_with("S-1-")

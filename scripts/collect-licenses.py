@@ -42,7 +42,7 @@ def main():
         if not line.strip():
             continue
         name, version, directory = line.split("|", 2)
-        if name.startswith("myvpn.local/"):
+        if name.startswith("ghostlink.local/"):
             continue
         key = "go-" + name.replace("/", "_") + "-" + version
         notices = copy_notices(Path(directory), DEST / key, recursive=True)

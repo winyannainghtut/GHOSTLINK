@@ -1,4 +1,4 @@
-module myvpn.local/outline-worker
+module ghostlink.local/outline-worker
 
 go 1.26.0
 

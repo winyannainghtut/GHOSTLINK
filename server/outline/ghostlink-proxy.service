@@ -3,9 +3,9 @@ Description=Personal Outline-compatible Shadowsocks server
 After=network-online.target
 Wants=network-online.target
 [Service]
-User=myvpn-proxy
-Group=myvpn-proxy
-ExecStart=/usr/local/lib/myvpn-server/sing-box run -c /etc/myvpn-server/config.json
+User=ghostlink-proxy
+Group=ghostlink-proxy
+ExecStart=/usr/local/lib/ghostlink-server/sing-box run -c /etc/ghostlink-server/config.json
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15

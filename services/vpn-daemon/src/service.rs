@@ -13,7 +13,7 @@ use windows_service::{
 
 define_windows_service!(ffi_main, service_main);
 pub fn dispatch() -> Result<()> {
-    service_dispatcher::start("MyVPN", ffi_main)?;
+    service_dispatcher::start("Ghostlink", ffi_main)?;
     Ok(())
 }
 fn status(state: ServiceState) -> ServiceStatus {
@@ -34,19 +34,20 @@ fn status(state: ServiceState) -> ServiceStatus {
 fn service_main(_arguments: Vec<OsString>) {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut sender = Some(sender);
-    let handle = match service_control_handler::register("MyVPN", move |control| match control {
-        ServiceControl::Stop | ServiceControl::Shutdown => {
-            if let Some(sender) = sender.take() {
-                let _ = sender.send(());
+    let handle =
+        match service_control_handler::register("Ghostlink", move |control| match control {
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(());
+                }
+                ServiceControlHandlerResult::NoError
             }
-            ServiceControlHandlerResult::NoError
-        }
-        ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-        _ => ServiceControlHandlerResult::NotImplemented,
-    }) {
-        Ok(handle) => handle,
-        Err(_) => return,
-    };
+            ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+            _ => ServiceControlHandlerResult::NotImplemented,
+        }) {
+            Ok(handle) => handle,
+            Err(_) => return,
+        };
     let _ = handle.set_service_status(status(ServiceState::StartPending));
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,

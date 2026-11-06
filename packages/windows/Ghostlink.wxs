@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Ghostlink" Language="1033" Version="$(var.Version)" Manufacturer="Ghostlink contributors" UpgradeCode="4F528F86-19CA-46DC-83EA-6B8784640206">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="Personal Outline-compatible VPN client" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Ghostlink is already installed." Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="ARPNOREPAIR" Value="yes" />
+    <Property Id="GHOSTLINK_OWNER_SID" Secure="yes">
+      <RegistrySearch Id="ExistingOwner" Root="HKLM" Key="Software\Ghostlink" Name="OwnerSID" Type="raw" Win64="yes" />
+    </Property>
+    <SetProperty Id="GHOSTLINK_OWNER_SID" Value="[UserSID]" Before="LaunchConditions" Sequence="both">NOT GHOSTLINK_OWNER_SID</SetProperty>
+    <Property Id="WINDOWS_BUILD"><RegistrySearch Id="WindowsBuildSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Win64="yes" /></Property>
+    <Condition Message="Ghostlink supports Windows 10/11 x64."><![CDATA[Installed OR (VersionNT64 AND WINDOWS_BUILD >= 10240)]]></Condition>
+    <Condition Message="The authorized user's SID is required. Supply GHOSTLINK_OWNER_SID when installing unattended.">Installed OR GHOSTLINK_OWNER_SID</Condition>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="Ghostlink">
+        <Component Id="Desktop" Guid="*" Win64="yes">
+          <File Id="DesktopExe" Source="$(var.Stage)\ghostlink-desktop.exe" KeyPath="yes"><Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Ghostlink" WorkingDirectory="INSTALLFOLDER" Advertise="yes" /></File>
+        </Component>
+        <Component Id="Cli" Guid="*" Win64="yes">
+          <File Id="CliExe" Source="$(var.Stage)\ghostlink.exe" KeyPath="yes" />
+          <Environment Id="GhostlinkPath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" System="yes" Permanent="no" />
+        </Component>
+        <Component Id="Mcp" Guid="*" Win64="yes"><File Source="$(var.Stage)\ghostlink-mcp.exe" KeyPath="yes" /></Component>
+        <Component Id="Daemon" Guid="*" Win64="yes">
+          <File Id="DaemonExe" Source="$(var.Stage)\ghostlinkd.exe" KeyPath="yes" />
+          <ServiceInstall Id="InstallService" Name="Ghostlink" DisplayName="Ghostlink" Description="Privileged local Ghostlink tunnel service" Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--service --owner-sid &quot;[GHOSTLINK_OWNER_SID]&quot; --outline-engine &quot;[INSTALLFOLDER]engine\ghostlink-tunnel.exe&quot; --data-dir &quot;[CommonAppDataFolder]Ghostlink&quot;" Vital="yes" />
+          <ServiceControl Id="ServiceControl" Name="Ghostlink" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+        <Component Id="InstallationMetadata" Guid="*" Win64="yes">
+          <RegistryValue Root="HKLM" Key="Software\Ghostlink" Name="OwnerSID" Value="[GHOSTLINK_OWNER_SID]" Type="string" KeyPath="yes" />
+        </Component>
+        <Directory Id="EngineFolder" Name="engine"><Component Id="TunnelWorker" Guid="*" Win64="yes"><File Id="WorkerExe" Source="$(var.Stage)\engine\ghostlink-tunnel.exe" KeyPath="yes" /></Component></Directory>
+        <Directory Id="LicensesFolder" Name="licenses" />
+      </Directory></Directory>
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+    <Feature Id="MainFeature" Title="Ghostlink" Level="1">
+      <ComponentRef Id="Desktop" /><ComponentRef Id="Cli" /><ComponentRef Id="Mcp" /><ComponentRef Id="Daemon" /><ComponentRef Id="TunnelWorker" /><ComponentRef Id="InstallationMetadata" />
+      <ComponentGroupRef Id="LicenseFiles" />
+    </Feature>
+    <Icon Id="GhostlinkIcon" SourceFile="$(var.Root)\apps\desktop\src-tauri\icons\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="GhostlinkIcon" />
+  </Product>
+</Wix>

@@ -6,12 +6,12 @@
     - name: Require a trusted generated configuration and x64 Linux host
       ansible.builtin.assert:
         that:
-          - myvpn_outline_config is defined
+          - ghostlink_outline_config is defined
           - ansible_facts['architecture'] == 'x86_64'
           - ansible_facts['system'] == 'Linux'
     - name: Create an unprivileged server identity
       ansible.builtin.user:
-        name: myvpn-proxy
+        name: ghostlink-proxy
         system: true
         shell: /usr/sbin/nologin
         create_home: false
@@ -23,23 +23,23 @@
         group: '{{ item.group }}'
         mode: '{{ item.mode }}'
       loop:
-        - {path: /usr/local/lib/myvpn-server, group: root, mode: '0755'}
-        - {path: /etc/myvpn-server, group: myvpn-proxy, mode: '0750'}
+        - {path: /usr/local/lib/ghostlink-server, group: root, mode: '0755'}
+        - {path: /etc/ghostlink-server, group: ghostlink-proxy, mode: '0750'}
     - name: Download the pinned upstream engine and verify its release digest
       ansible.builtin.get_url:
         url: https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz
-        dest: /usr/local/lib/myvpn-server/upstream.tar.gz
+        dest: /usr/local/lib/ghostlink-server/upstream.tar.gz
         checksum: sha256:699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
         mode: '0644'
     - name: Extract the pinned upstream archive
       ansible.builtin.unarchive:
-        src: /usr/local/lib/myvpn-server/upstream.tar.gz
-        dest: /usr/local/lib/myvpn-server
+        src: /usr/local/lib/ghostlink-server/upstream.tar.gz
+        dest: /usr/local/lib/ghostlink-server
         remote_src: true
     - name: Install the engine at a stable path
       ansible.builtin.copy:
-        src: /usr/local/lib/myvpn-server/sing-box-1.14.4-linux-amd64/sing-box
-        dest: /usr/local/lib/myvpn-server/sing-box
+        src: /usr/local/lib/ghostlink-server/sing-box-1.14.4-linux-amd64/sing-box
+        dest: /usr/local/lib/ghostlink-server/sing-box
         remote_src: true
         owner: root
         group: root
@@ -47,28 +47,28 @@
       notify: Restart proxy
     - name: Install generated private configuration with engine validation
       ansible.builtin.copy:
-        src: '{{ myvpn_outline_config }}'
-        dest: /etc/myvpn-server/config.json
+        src: '{{ ghostlink_outline_config }}'
+        dest: /etc/ghostlink-server/config.json
         owner: root
-        group: myvpn-proxy
+        group: ghostlink-proxy
         mode: '0640'
-        validate: /usr/local/lib/myvpn-server/sing-box check -c %s
+        validate: /usr/local/lib/ghostlink-server/sing-box check -c %s
       no_log: true
       notify: Restart proxy
     - name: Install service
       ansible.builtin.copy:
-        src: myvpn-proxy.service
-        dest: /etc/systemd/system/myvpn-proxy.service
+        src: ghostlink-proxy.service
+        dest: /etc/systemd/system/ghostlink-proxy.service
         mode: '0644'
       register: proxy_unit
     - name: Start proxy service
       ansible.builtin.systemd:
-        name: myvpn-proxy
+        name: ghostlink-proxy
         daemon_reload: '{{ proxy_unit.changed }}'
         enabled: true
         state: started
   handlers:
     - name: Restart proxy
       ansible.builtin.systemd:
-        name: myvpn-proxy
+        name: ghostlink-proxy
         state: restarted

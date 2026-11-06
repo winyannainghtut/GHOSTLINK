@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import net from 'node:net';
 import readline from 'node:readline';
@@ -11,12 +12,12 @@ import Ajv from 'ajv/dist/2020.js';
 const root = path.resolve(import.meta.dirname, '../..');
 const windows = process.platform === 'win32';
 const suffix = windows ? '.exe' : '';
-const bin = path.join(root, 'target', process.env.MYVPN_BUILD_PROFILE || 'debug');
+const bin = path.join(root, 'target', process.env.GHOSTLINK_BUILD_PROFILE || 'debug');
 const temp = path.join(root, `.state-test-${process.pid}`);
 const state = path.join(temp, 'daemon');
-const endpoint = windows ? `\\\\.\\pipe\\myvpn-test-${process.pid}` : path.join(temp, 'control.sock');
-const engine = process.env.MYVPN_TEST_ENGINE || (windows ? path.join(root, '.tools/openvpn-bin/openvpn.exe') : '/usr/sbin/openvpn');
-const outlineEngine = process.env.MYVPN_TEST_OUTLINE_WORKER || path.join(bin, `myvpn-tunnel${suffix}`);
+const endpoint = windows ? `\\\\.\\pipe\\ghostlink-test-${process.pid}` : path.join(temp, 'control.sock');
+const engine = process.env.GHOSTLINK_TEST_ENGINE || (windows ? path.join(root, '.tools/openvpn-bin/openvpn.exe') : '/usr/sbin/openvpn');
+const outlineEngine = process.env.GHOSTLINK_TEST_OUTLINE_WORKER || path.join(bin, `ghostlink-tunnel${suffix}`);
 const openssl = process.env.OPENSSL || (windows ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe' : 'openssl');
 const ajv = new Ajv({ strict: false });
 const validateResponse = ajv.compile(JSON.parse(await fs.readFile(path.join(root, 'packages/shared-contracts/response.schema.json'))));
@@ -27,7 +28,7 @@ let profile;
 
 function cli(args, expected = 0) {
   return new Promise((resolve, reject) => {
-    const child = spawn(path.join(bin, `myvpn${suffix}`), ['--endpoint', endpoint, '--json', ...args], { windowsHide: true });
+    const child = spawn(path.join(bin, `ghostlink${suffix}`), ['--endpoint', endpoint, '--json', ...args], { windowsHide: true });
     let stdout = '', stderr = '';
     child.stdout.on('data', data => stdout += data);
     child.stderr.on('data', data => stderr += data);
@@ -53,9 +54,9 @@ function rpc(request) {
     socket.on('error', reject);
   });
 }
-async function start() {
+async function start({ openvpn = engine } = {}) {
   daemonErrors = '';
-  daemon = spawn(path.join(bin, `myvpnd${suffix}`), ['--endpoint', endpoint, '--data-dir', state, '--openvpn', engine, '--outline-engine', outlineEngine, '--connection-timeout-seconds', '3'], { windowsHide: true });
+  daemon = spawn(path.join(bin, `ghostlinkd${suffix}`), ['--endpoint', endpoint, '--data-dir', state, '--openvpn', openvpn, '--outline-engine', outlineEngine, '--connection-timeout-seconds', '3'], { windowsHide: true });
   daemon.stderr.on('data', data => daemonErrors += data);
   daemon.on('error', () => {});
   for (let i = 0; i < 80; i++) {
@@ -74,7 +75,7 @@ async function stop() {
 before(async () => {
   await fs.mkdir(temp, { mode: 0o700 });
   await fs.writeFile(path.join(temp, 'openssl.cnf'), '[req]\ndistinguished_name=dn\n[dn]\n');
-  execFileSync(openssl, ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2', '-subj', '/CN=myvpn-test', '-config', path.join(temp, 'openssl.cnf'), '-keyout', path.join(temp, 'client.key'), '-out', path.join(temp, 'client.crt')], { windowsHide: true, stdio: 'pipe' });
+  execFileSync(openssl, ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2', '-subj', '/CN=ghostlink-test', '-config', path.join(temp, 'openssl.cnf'), '-keyout', path.join(temp, 'client.key'), '-out', path.join(temp, 'client.crt')], { windowsHide: true, stdio: 'pipe' });
   const cert = await fs.readFile(path.join(temp, 'client.crt'), 'utf8');
   const key = await fs.readFile(path.join(temp, 'client.key'), 'utf8');
   profile = `client\ndev tun\nproto udp\nremote 127.0.0.1 1\nremote-cert-tls server\nconnect-timeout 1\nconnect-retry-max 1\n<ca>\n${cert}</ca>\n<cert>\n${cert}</cert>\n<key>\n${key}</key>\n`;
@@ -135,12 +136,12 @@ test('read-only agent token is explicit, scoped, audited and revocable', async (
 });
 test('MCP advertises restricted tools and routes actual tool calls through the service', async () => {
   const tokenPath = path.join(temp, 'mcp.token'); await cli(['agent', 'grant', '--name', 'mcp', '--token-file', tokenPath]);
-  const child = spawn(path.join(bin, `myvpn-mcp${suffix}`), ['--endpoint', endpoint, '--token-file', tokenPath], { windowsHide: true });
+  const child = spawn(path.join(bin, `ghostlink-mcp${suffix}`), ['--endpoint', endpoint, '--token-file', tokenPath], { windowsHide: true });
   const lines = readline.createInterface({input: child.stdout}); const pending = [];
   lines.on('line', line => pending.shift()?.(JSON.parse(line)));
   const request = value => new Promise(resolve => { pending.push(resolve); child.stdin.write(JSON.stringify(value) + '\n'); });
   try {
-    const init = await request({jsonrpc:'2.0', id:1, method:'initialize', params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}}}); assert.equal(init.result.serverInfo.name, 'myvpn');
+    const init = await request({jsonrpc:'2.0', id:1, method:'initialize', params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}}}); assert.equal(init.result.serverInfo.name, 'ghostlink');
     const list = await request({jsonrpc:'2.0', id:2, method:'tools/list'}); assert.equal(list.result.tools.length, 3);
     const status = await request({jsonrpc:'2.0', id:3, method:'tools/call', params:{name:'vpn_status',arguments:{}}}); assert.equal(status.result.structuredContent.data.status, 'disconnected');
     const denied = await request({jsonrpc:'2.0', id:4, method:'tools/call', params:{name:'vpn_connect',arguments:{profile:'singapore'}}}); assert.equal(denied.error.code, -32602);
@@ -158,6 +159,39 @@ test('state survives a daemon restart without pretending a tunnel survived', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
   assert.equal((await cli(['status'])).data.status, 'disconnected');
 });
+test('a failed autoconnect at startup keeps the service reachable and reports the failure', async () => {
+  await cli(['autoconnect', 'enable']);
+  await stop();
+  // Make engine start fail with an internal error before anything is spawned: the private
+  // runtime directory path is occupied by a regular file.
+  const run = path.join(state, 'run');
+  await fs.rm(run, { recursive: true, force: true }); await fs.writeFile(run, '');
+  try {
+    // Any existing absolute file passes the engine-path check; it is never executed here.
+    await start({ openvpn: process.execPath });
+    const status = (await cli(['status'])).data;
+    assert.equal(status.status, 'failed'); assert.equal(status.last_error, 'autoconnect_failed'); assert.equal(status.vpn_ip, null);
+    assert.equal((await cli(['autoconnect', 'disable'])).data.autoconnect, false);
+    const logs = (await cli(['logs'])).data.entries;
+    assert.ok(logs.some(e => e.operation === 'autoconnect' && e.outcome === 'error'));
+  } finally {
+    await stop(); await fs.rm(run, { force: true }); await start();
+  }
+  assert.equal((await cli(['status'])).data.status, 'disconnected');
+});
+test('crash leftovers are removed at startup and do not block state writes', async () => {
+  await stop();
+  await fs.mkdir(path.join(state, 'run'), { recursive: true });
+  await fs.writeFile(path.join(state, 'state.pending'), 'uncommitted');
+  await fs.writeFile(path.join(state, 'run', 'outline.json'), '{"password":"stale-plaintext-credential"}');
+  await fs.writeFile(path.join(state, 'run', 'outline.pending'), '');
+  await start();
+  for (const leftover of ['state.pending', path.join('run', 'outline.json'), path.join('run', 'outline.pending')]) {
+    await assert.rejects(fs.access(path.join(state, leftover)), `${leftover} should be removed`);
+  }
+  await cli(['profile', 'default', 'singapore']);
+  assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
+});
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
   assert.equal((await cli(['version'])).data.version, '0.1.0');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
@@ -171,12 +205,19 @@ test('Outline access keys import privately, rename, select default and remove th
   const r = await cli(['key','add','--name','outline-singapore','--file',keyPath]);
   assert.equal(r.data.kind,'outline'); assert.equal(r.data.display_name,'Singapore'); assert.equal(r.data.certificate_expires_unix,null);
   assert.ok(!JSON.stringify(r).includes(secret)); assert.ok(!JSON.stringify(r).includes(credential));
+  // The fingerprint visible to read-only agents must not be a plain hash of the credential.
+  const plainHash = createHash('sha256').update(await fs.readFile(keyPath, 'utf8')).digest('hex');
+  assert.match(r.data.sha256, /^[0-9a-f]{64}$/); assert.notEqual(r.data.sha256, plainHash);
+  // An existing server ID is never silently overwritten.
+  assert.equal((await cli(['key','add','--name','outline-singapore','--file',keyPath], 2)).error.code, 'invalid_request');
+  assert.equal((await cli(['key','add','--name','outline-singapore','--file',keyPath,'--replace'])).data.name, 'outline-singapore');
+  assert.equal((await cli(['profile','import',path.join(temp,'singapore.ovpn')], 2)).error.code, 'invalid_request');
   const renamed = await rpc({schema_version:1,action:{type:'profile_rename',name:'outline-singapore',display_name:'My Singapore'}}); assert.equal(renamed.data.display_name,'My Singapore');
   await cli(['profile','default','outline-singapore']);
   await cli(['autoconnect','enable']); assert.equal((await cli(['info'])).data.autoconnect,true);
   await cli(['autoconnect','disable']);
   const metadata = await cli(['profile','list']); assert.ok(!JSON.stringify(metadata).includes(secret));
-  if (process.env.MYVPN_TEST_EXPECT_UNPRIVILEGED === '1') {
+  if (process.env.GHOSTLINK_TEST_EXPECT_UNPRIVILEGED === '1') {
     const failure = await cli(['connect','--profile','outline-singapore','--timeout','25'],1);
     assert.equal(failure.error.code,'connection_failed');
     const status = (await cli(['status'])).data;

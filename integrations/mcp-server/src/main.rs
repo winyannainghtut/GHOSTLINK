@@ -1,5 +1,5 @@
 use clap::Parser;
-use myvpn_contracts::{Action, Request, SCHEMA_VERSION};
+use ghostlink_contracts::{Action, Request, SCHEMA_VERSION};
 use serde_json::{json, Value};
 use std::{path::PathBuf, time::Duration};
 use tokio::io::BufReader;
@@ -7,12 +7,12 @@ use tokio::io::BufReader;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Restricted MyVPN stdio MCP server; an explicit agent token is required"
+    about = "Restricted Ghostlink stdio MCP server; an explicit agent token is required"
 )]
 struct Args {
-    #[arg(long, env = "MYVPN_ENDPOINT", default_value_t = myvpn_contracts::default_endpoint())]
+    #[arg(long, env = "GHOSTLINK_ENDPOINT", default_value_t = ghostlink_contracts::default_endpoint())]
     endpoint: String,
-    #[arg(long, env = "MYVPN_AGENT_TOKEN_FILE")]
+    #[arg(long, env = "GHOSTLINK_AGENT_TOKEN_FILE")]
     token_file: PathBuf,
     /// Expose connection tools in addition to read-only tools. The daemon still enforces token scope.
     #[arg(long)]
@@ -30,7 +30,7 @@ fn tool(name: &str, description: &str, control: bool, profile: bool) -> Value {
 fn tools(control: bool) -> Vec<Value> {
     let mut values = vec![
         tool("vpn_list_profiles", "List already imported profiles. Returns no keys or profile contents.", false, false),
-        tool("vpn_status", "Read actual local OpenVPN connection state. Connected does not prove leak prevention.", false, false),
+        tool("vpn_status", "Read the actual local VPN connection state (Outline-compatible or OpenVPN). Connected does not prove leak prevention.", false, false),
         tool("vpn_diagnostics", "Run local installation diagnostics. No public-IP or external network requests are made.", false, false),
     ];
     if control {
@@ -61,14 +61,14 @@ async fn main() -> anyhow::Result<()> {
     let mut output = tokio::io::stdout();
     let mut initialized = false;
     loop {
-        let bytes = match myvpn_contracts::read_frame(&mut input).await {
+        let bytes = match ghostlink_contracts::read_frame(&mut input).await {
             Ok(bytes) => bytes,
             Err(_) => break,
         };
         let request: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(_) => {
-                myvpn_contracts::write_frame(&mut output, &json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}})).await?;
+                ghostlink_contracts::write_frame(&mut output, &json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}})).await?;
                 continue;
             }
         };
@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         "2025-06-18"
                     };
-                    response["result"] = json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"myvpn","version":env!("CARGO_PKG_VERSION")}});
+                    response["result"] = json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"ghostlink","version":env!("CARGO_PKG_VERSION")}});
                     initialized = true;
                 }
                 "ping" => response["result"] = json!({}),
@@ -127,14 +127,16 @@ async fn main() -> anyhow::Result<()> {
                         _ => None,
                     };
                     if let Some(action) = action.filter(|_| allowed && valid) {
-                        let result = myvpn_contracts::call(
+                        let result = ghostlink_contracts::call(
                             &args.endpoint,
                             Request {
                                 schema_version: SCHEMA_VERSION,
                                 agent_token: Some(token.clone()),
                                 action,
                             },
-                            Duration::from_secs(20),
+                            // Match the CLI default: a connect can legitimately wait behind
+                            // another operation and a dynamic-key fetch before it is accepted.
+                            Duration::from_secs(75),
                         )
                         .await;
                         response["result"] = json!({"content":[{"type":"text","text":serde_json::to_string(&result)?}],"structuredContent":result,"isError":!result.success});
@@ -147,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        myvpn_contracts::write_frame(&mut output, &response).await?;
+        ghostlink_contracts::write_frame(&mut output, &response).await?;
     }
     Ok(())
 }

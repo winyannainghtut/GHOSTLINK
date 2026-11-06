@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use myvpn_contracts::{Action, Request, Response, SCHEMA_VERSION};
+use ghostlink_contracts::{Action, Request, Response, SCHEMA_VERSION};
 use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -18,9 +18,9 @@ async fn vpn_request(action: Action) -> Response {
             "Use the CLI for administrator and OpenVPN profile operations",
         );
     }
-    let endpoint =
-        std::env::var("MYVPN_ENDPOINT").unwrap_or_else(|_| myvpn_contracts::default_endpoint());
-    myvpn_contracts::call(
+    let endpoint = std::env::var("GHOSTLINK_ENDPOINT")
+        .unwrap_or_else(|_| ghostlink_contracts::default_endpoint());
+    ghostlink_contracts::call(
         &endpoint,
         Request {
             schema_version: SCHEMA_VERSION,
@@ -36,13 +36,13 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![vpn_request])
         .setup(|app| {
-            let show = MenuItem::with_id(app, "show", "Open MyVPN", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Open Ghostlink", true, None::<&str>)?;
             let disconnect =
                 MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit MyVPN", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Ghostlink", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &disconnect, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("MyVPN")
+                .tooltip("Ghostlink")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -73,5 +73,5 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("MyVPN desktop could not start");
+        .expect("Ghostlink desktop could not start");
 }

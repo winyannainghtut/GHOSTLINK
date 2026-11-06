@@ -33,7 +33,7 @@ data "aws_ami" "ubuntu" {
   }
 }
 resource "aws_security_group" "vpn" {
-  name_prefix = "myvpn-"
+  name_prefix = "ghostlink-"
   description = "Personal VPN and restricted administration"
   vpc_id      = var.vpc_id
   ingress {
@@ -67,7 +67,7 @@ resource "aws_instance" "vpn" {
     volume_type = "gp3"
     volume_size = 12
   }
-  tags = { Name = "MyVPN" }
+  tags = { Name = "Ghostlink" }
   lifecycle { ignore_changes = [ami] }
 }
 resource "aws_eip" "vpn" {

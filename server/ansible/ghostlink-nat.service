@@ -1,0 +1,12 @@
+[Unit]
+Description=Ghostlink dedicated IPv4 NAT rules
+Before=openvpn-server@ghostlink.service
+After=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/openvpn/ghostlink.nft
+ExecReload=/usr/sbin/nft -f /etc/openvpn/ghostlink.nft
+ExecStop=-/usr/sbin/nft delete table ip ghostlink_nat
+[Install]
+WantedBy=multi-user.target

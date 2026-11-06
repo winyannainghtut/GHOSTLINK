@@ -4,7 +4,7 @@ use crate::{
     storage,
 };
 use anyhow::{ensure, Result};
-use myvpn_contracts::ConnectionState;
+use ghostlink_contracts::ConnectionState;
 use rand::{rngs::OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -19,7 +19,7 @@ use tokio::{
     sync::mpsc,
 };
 
-pub const WORKER_VERSION: &str = "MyVPN tunnel worker 0.1.0; sing-box 1.14.4";
+pub const WORKER_VERSION: &str = "Ghostlink tunnel worker 0.1.0; sing-box 1.14.4";
 
 pub async fn worker_available(executable: &Path) -> bool {
     if !executable.is_absolute() || !executable.is_file() {
@@ -41,18 +41,18 @@ pub fn config(
     tunnel: bool,
 ) -> Value {
     let mut inbounds = vec![
-        json!({"type":"mixed","tag":"health-proxy","listen":"127.0.0.1","listen_port":proxy_port,"users":[{"username":"myvpn","password":secret}]}),
+        json!({"type":"mixed","tag":"health-proxy","listen":"127.0.0.1","listen_port":proxy_port,"users":[{"username":"ghostlink","password":secret}]}),
     ];
     if tunnel {
-        inbounds.push(json!({"type":"tun","tag":"myvpn-tun","interface_name":"MyVPN","address":["172.28.85.1/30","fdfe:85:85::1/126"],"auto_route":true,"strict_route":true,"dns_mode":"hijack","mtu":1500,"stack":"mixed"}));
+        inbounds.push(json!({"type":"tun","tag":"ghostlink-tun","interface_name":"Ghostlink","address":["172.28.85.1/30","fdfe:85:85::1/126"],"auto_route":true,"strict_route":true,"dns_mode":"hijack","mtu":1500,"stack":"mixed"}));
     }
     json!({
         "log":{"level":"info","timestamp":false,"disabled":false},
         "dns":{"servers":[{"type":"https","tag":"vpn-dns","server":"1.1.1.1","path":"/dns-query","tls":{"enabled":true,"server_name":"cloudflare-dns.com"},"detour":"outline"},{"type":"local","tag":"bootstrap"}],"final":"vpn-dns","strategy":"ipv4_only"},
         "inbounds":inbounds,
         "outbounds":[{"type":"shadowsocks","tag":"outline","server":key.server,"server_port":key.port,"method":key.method,"password":key.password}],
-        "route":{"auto_detect_interface":tunnel,"default_domain_resolver":{"server":"bootstrap","strategy":"ipv4_only"},"rules":[{"inbound":"myvpn-tun","ip_version":6,"action":"reject"},{"protocol":"dns","action":"hijack-dns"}],"final":"outline"},
-        "experimental":{"clash_api":{"external_controller":format!("127.0.0.1:{api_port}"),"secret":secret,"access_control_allow_origin":["http://myvpn.invalid"],"access_control_allow_private_network":false}}
+        "route":{"auto_detect_interface":tunnel,"default_domain_resolver":{"server":"bootstrap","strategy":"ipv4_only"},"rules":[{"inbound":"ghostlink-tun","ip_version":6,"action":"reject"},{"protocol":"dns","action":"hijack-dns"}],"final":"outline"},
+        "experimental":{"clash_api":{"external_controller":format!("127.0.0.1:{api_port}"),"secret":secret,"access_control_allow_origin":["http://ghostlink.invalid"],"access_control_allow_private_network":false}}
     })
 }
 
@@ -67,7 +67,7 @@ pub async fn start(
 ) -> Result<Session> {
     ensure!(
         worker_available(executable).await,
-        "Install the pinned managed MyVPN tunnel worker"
+        "Install the pinned managed Ghostlink tunnel worker"
     );
     storage::private_dir(run_dir)?;
     let mut random = [0; 32];
@@ -91,8 +91,8 @@ pub async fn start(
         checked.status.success(),
         "Managed Outline engine rejected configuration"
     );
-    let proxy =
-        reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))?.basic_auth("myvpn", &secret);
+    let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{proxy_port}"))?
+        .basic_auth("ghostlink", &secret);
     let health = reqwest::Client::builder()
         .proxy(proxy)
         .timeout(Duration::from_secs(8))
@@ -191,7 +191,9 @@ pub async fn start(
                             let _ = events.try_send("outline_connected_health_verified");
                         }
                         connected_once = true;
-                    } else {
+                    } else if connected_once {
+                        // Only a session that was verified healthy can be "reconnecting"; before
+                        // that it stays "connecting" until success or the deadline.
                         snapshot.status.status = ConnectionState::Reconnecting;
                         snapshot.status.last_error = Some("outline_health_check_failed".into());
                         snapshot.status.vpn_ip = None; snapshot.connected_since = None;
