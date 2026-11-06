@@ -4,6 +4,8 @@ Last updated: **2026-11-06, Asia/Singapore**.
 
 The user resumed work with **“continue”** and selected **“Continue with local test servers for now”**. Keep using local isolated test peers; no real Outline key is required at this stage. This current handoff supersedes the archived October snapshot below. Do not restart the project or replace the real service with a mockup.
 
+The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-06. It consolidates the current architecture, source map, exact workflows, verified results, artifacts, security/licensing boundaries and continuation plan; this file retains the chronological history.
+
 ## Current handoff — November 6
 
 ### Product direction and implemented state
