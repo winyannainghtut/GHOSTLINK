@@ -4,6 +4,7 @@
 package awg
 
 import (
+	"os"
 	"sync"
 
 	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
@@ -17,6 +18,11 @@ type tunAdapter struct {
 	events    chan awgtun.Event
 	done      chan struct{}
 	closeOnce sync.Once
+	// amneziawg-go closes the TUN before it stops its peers, so a peer can still deliver a packet
+	// after Close. The userspace stack drops its packet dispatcher when it closes, so such a late
+	// write would crash; state makes Close wait for writes in flight and refuses later ones.
+	state  sync.RWMutex
+	closed bool
 }
 
 func newTunAdapter(device wireguard.Device) *tunAdapter {
@@ -50,7 +56,19 @@ func (a *tunAdapter) Events() <-chan awgtun.Event {
 	return a.events
 }
 
+func (a *tunAdapter) Write(bufs [][]byte, offset int) (int, error) {
+	a.state.RLock()
+	defer a.state.RUnlock()
+	if a.closed {
+		return 0, os.ErrClosed
+	}
+	return a.Device.Write(bufs, offset)
+}
+
 func (a *tunAdapter) Close() error {
 	a.closeOnce.Do(func() { close(a.done) })
+	a.state.Lock()
+	a.closed = true
+	a.state.Unlock()
 	return a.Device.Close()
 }

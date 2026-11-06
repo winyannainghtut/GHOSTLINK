@@ -31,8 +31,15 @@ contents:
   - src: @STAGE@/lib/ghostlink/ghostlink-tunnel
     dst: /usr/lib/ghostlink/ghostlink-tunnel
     file_info: {mode: 0755}
+  # Debian/Ubuntu register units under /lib (a symlink to /usr/lib on merged systems), so a
+  # /usr/lib path would make dpkg treat the shared unit directory as ours.
+  - src: @PKG@/ghostlinkd.service
+    dst: /lib/systemd/system/ghostlinkd.service
+    packager: deb
+    file_info: {mode: 0644}
   - src: @PKG@/ghostlinkd.service
     dst: /usr/lib/systemd/system/ghostlinkd.service
+    packager: rpm
     file_info: {mode: 0644}
   - src: @PKG@/ghostlinkd.env
     dst: /etc/ghostlink/ghostlinkd.env
