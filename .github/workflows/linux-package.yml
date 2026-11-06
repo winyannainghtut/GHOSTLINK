@@ -1,0 +1,55 @@
+name: Linux package
+# Reusable: builds the headless Linux archive on the given runner and uploads it as the
+# workflow artifact "linux-<arch>". Called by release.yml.
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Linux ${{ inputs.arch }} (headless archive)
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: core/outline-worker/go.sum
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Install Rust toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup override set 1.92.0
+      - name: Check version declarations and tag
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then set -- --tag "$GITHUB_REF_NAME"; fi
+          echo "version=$(node scripts/release-version.mjs "$@")" >> "$GITHUB_OUTPUT"
+      - name: Unit tests
+        run: cargo test --locked --workspace
+      - name: Archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build-linux.sh "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ inputs.arch }}
+          if-no-files-found: error
+          path: artifacts/linux-${{ inputs.arch }}/*.tar.gz
