@@ -15,8 +15,19 @@ if (Test-Path -LiteralPath $sourceDirectory) {
     Remove-Item -LiteralPath $sourceDirectory -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $sourceDirectory | Out-Null
-Copy-Item -Path (Join-Path $repository 'core\outline-worker\*.go') -Destination $sourceDirectory
-foreach ($file in @('go.mod','go.sum','README.md')) { Copy-Item -LiteralPath (Join-Path $repository "core\outline-worker\$file") -Destination $sourceDirectory }
+# The whole Go module: the worker, the server command and every internal package (with tests).
+$moduleRoot = [IO.Path]::GetFullPath((Join-Path $repository 'core\outline-worker'))
+$moduleFiles = Get-ChildItem -LiteralPath $moduleRoot -Recurse -File | Where-Object {
+    $relative = $_.FullName.Substring($moduleRoot.Length + 1)
+    ($_.Extension -in '.go', '.mod', '.sum', '.md') -and -not $relative.StartsWith('vendor' + [IO.Path]::DirectorySeparatorChar)
+}
+foreach ($file in $moduleFiles) {
+    $relative = $file.FullName.Substring($moduleRoot.Length + 1)
+    $target = Join-Path $sourceDirectory $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+    Copy-Item -LiteralPath $file.FullName -Destination $target
+}
+if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory 'internal\awg\endpoint.go'))) { throw 'internal packages are missing from the source bundle' }
 Copy-Item -LiteralPath (Join-Path $repository 'LICENSES\GPL-3.0.txt') -Destination (Join-Path $sourceDirectory 'COPYING')
 Copy-Item -LiteralPath (Join-Path $repository 'NOTICE.md'),(Join-Path $repository 'LICENSES\sing-box.txt'),(Join-Path $repository 'LICENSES\Wintun-0.14.1.txt') -Destination $sourceDirectory
 Push-Location (Join-Path $repository 'core\outline-worker')
@@ -24,8 +35,22 @@ try {
     & go mod vendor -o (Join-Path $sourceDirectory 'vendor')
     if ($LASTEXITCODE -ne 0) { throw 'Dependency source vendoring failed' }
 } finally { Pop-Location }
+# Prove the bundle is complete: build every command from the staged copy alone.
+$verifyDirectory = Join-Path ([IO.Path]::GetTempPath()) ("ghostlink-source-check-" + [Guid]::NewGuid())
+New-Item -ItemType Directory -Path $verifyDirectory | Out-Null
+Push-Location $sourceDirectory
+$previousGoFlags = $env:GOFLAGS
+try {
+    $env:GOFLAGS = '-mod=vendor'
+    & go build -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -o ($verifyDirectory + [IO.Path]::DirectorySeparatorChar) ./...
+    if ($LASTEXITCODE -ne 0) { throw 'The staged corresponding source does not build' }
+} finally {
+    $env:GOFLAGS = $previousGoFlags
+    Pop-Location
+    Remove-Item -LiteralPath $verifyDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}
 $instructions = @"
-Ghostlink outline worker $Version corresponding source
+Ghostlink $Version corresponding source: tunnel worker (ghostlink-tunnel) and server (ghostlink-server)
 
 Build toolchain: Go 1.26.10 (pinned in go.mod).
 Windows x64: CGO_ENABLED=0 GOOS=windows GOARCH=amd64
@@ -34,6 +59,10 @@ Linux x64: CGO_ENABLED=0 GOOS=linux GOARCH=amd64
   go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-tunnel .
 Linux arm64: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
   go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-tunnel .
+Server (Linux x64/arm64, as above with the matching GOARCH):
+  go build -mod=vendor -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags "-s -w" -o ghostlink-server ./cmd/ghostlink-server
+  The server image adds this binary and its notices to gcr.io/distroless/static-debian12:nonroot
+  (see packages/linux/server/Dockerfile in the Ghostlink repository).
 
 Set those variables using your shell's environment syntax. The vendor directory contains
 the actual engine/dependency source used by this worker and required embedded resources.
@@ -44,5 +73,16 @@ The parent must keep stdin open; EOF or a stop message triggers graceful Close()
 "@
 [IO.File]::WriteAllText((Join-Path $sourceDirectory 'BUILD.txt'),$instructions)
 $archive = Join-Path $artifactRoot "Ghostlink-$Version-worker-corresponding-source.zip"
-Compress-Archive -LiteralPath $sourceDirectory -DestinationPath $archive -Force
+# Entry names use "/" so the archive unpacks cleanly everywhere (Windows PowerShell's
+# Compress-Archive and ZipFile.CreateFromDirectory write backslashes).
+if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$archiveBase = Split-Path $sourceDirectory
+$zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($file in Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File -Force) {
+        $entryName = $file.FullName.Substring($archiveBase.Length + 1).Replace('\', '/')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $entryName, [IO.Compression.CompressionLevel]::Optimal)
+    }
+} finally { $zip.Dispose() }
 Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Format-List
