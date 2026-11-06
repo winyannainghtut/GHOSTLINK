@@ -33,10 +33,11 @@ case "$reported" in
   *) echo "ghostlink-server reports '$reported', expected version $version" >&2; exit 1 ;;
 esac
 
-# Notices for everything inside the image: the GPL server and its Go dependencies.
+# Notices for everything inside the image: the GPL server, its Go dependencies and the npm
+# packages bundled into its dashboard.
 cp NOTICE.md LICENSES/GPL-3.0.txt LICENSES/sing-box.txt "$work/context/licenses/"
 mkdir -p "$work/context/licenses/dependencies"
-for notice in LICENSES/dependencies/go-*; do
+for notice in LICENSES/dependencies/go-* LICENSES/dependencies/npm-*; do
   cp -R "$notice" "$work/context/licenses/dependencies/"
 done
 cat > "$work/context/licenses/SOURCE.txt" <<EOF

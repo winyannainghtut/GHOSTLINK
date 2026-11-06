@@ -2,6 +2,24 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.7.0 Frosted-glass UI for the desktop app and the dashboard (2026-11-07)
+
+| Check | Result actually observed |
+|---|---|
+| Builds | `npm ci --ignore-scripts` (43 packages), TypeScript 7 typecheck, Vite 8 builds of both apps: one script (dashboard 324 KB, desktop 363 KB), one stylesheet and three `.woff2` fonts each. Builds on Windows and in the Linux **Web UI** workflow were byte-identical, so the workflow's check of the committed output passes. Rebuilding from the source zip's `web-ui/` copy gave identical files |
+| CSP | The built CSS has no `data:` URLs (fonts are files), there is no `eval`, and `index.html` has no inline script or style (`TestDashboardBuildIsCompleteAndCSPSafe`). No console or CSP errors in either app during the GUI checks below |
+| Dashboard, in the isolated WebView2 against a local server (clients, keys, real Shadowsocks traffic of about 18 MB from Cloudflare's speed endpoint through the server, fake mesh nodes) | <ul><li>**Overview:** KPIs live (2–3 online, up to 12 Mbit/s; address pool 2 of 8,186), the live, 1 h and 24 h charts, health and usage breakdowns.</li><li>**Clients:** six cards with tunnel IPs from the pools; the Idle filter showed 3; the list view.</li><li>**Client sheet:** keys with their actions; usage (bars over the whole period after the sparse-bucket fix) and connected-from.</li><li>**New client:** the next tunnel address shown before creating (10.78.0.3/32), then the QR code and .conf.</li><li>**Network:** protocols with switches and ports, pools, rules for everyone, the mesh map with node details, invites and rules; the Island's protocol panel.</li><li>All three finishes. A frosted card's computed `backdrop-filter` is `blur(40px) saturate(1.5)` (the first build lost it).</li></ul> |
+| Desktop app (debug build, isolated dev service and local server) | <ul><li>Add key: a Shadowsocks key became a card.</li><li>The card menu as a frosted popover; split tunneling per server (follow all, then mode and lists); the connection Island with a server switcher.</li><li>**Servers I run → Manage:** the admin views over the service; live KPIs.</li><li>**Use on this device:** profiles went from 1 to 2.</li><li>QR as a `data:` URL; the New client .conf saved to Downloads through `save_download`, containing `[Interface]` (the file was then deleted).</li><li>**Settings** and diagnostics.</li><li>**Full screen:** the nav button set the window full screen (`isFullscreen` true), reverted at once.</li><li>At 2560 px, five cards a row in both apps after the rem-breakpoint fix.</li></ul> |
+| Request mapping (`npm test`) | 4 tests: every request the admin views make maps to the expected `server_call` operation, with only fields `ServerOp` declares (read from `packages/shared-contracts`). Dot segments, empty segments, escapes, backslashes, unknown paths and methods are refused. This found and fixed `/users/1/../2/keys` being normalized into `/users/2/keys` |
+| API additions (Go) | `TestMinuteAverages`: per-second samples fold into per-minute averages, an hour plus the current minute. `TestAddressPools`: used, capacity 4093 for a /20, next address. Server package tests pass with the new embedded build |
+| Dependencies | `npm audit` (all) and `npm audit --omit=dev`: 0 vulnerabilities. The license inventory has the 8 bundled npm packages |
+
+### Not verified
+
+- The redesigned app installed from the MSI. The checks used the debug build.
+- Screen readers. Keyboard focus and ARIA roles exist on controls and the map, but have not been audited.
+- Very small windows below 620 px.
+
 ## v0.6.0 Mesh of Linux servers (2026-11-06)
 
 ### Kernel WireGuard end to end (CI, `tests/mesh/e2e.sh`, Ubuntu 24.04)

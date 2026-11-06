@@ -382,3 +382,43 @@ func adapterContext(user, protocol string) adapterMetadata {
 	metadata.User, metadata.Protocol, metadata.Inbound = user, protocol, Shadowsocks
 	return metadata
 }
+
+// The live chart's 1 h view: per-second samples fold into per-minute averages, an hour kept.
+func TestMinuteAverages(t *testing.T) {
+	m := NewMonitor()
+	start := time.Unix(1_800_000_000/60*60, 0)
+	for i := 0; i < 60; i++ {
+		m.addMinute(start.Add(time.Duration(i)*time.Second), 100, 300)
+	}
+	m.addMinute(start.Add(61*time.Second), 10, 20)
+	got := m.Minutes()
+	if len(got) != 2 || got[0] != (rateSample{start.Unix(), 100, 300}) || got[1] != (rateSample{start.Unix() + 60, 10, 20}) {
+		t.Fatalf("minutes: %+v", got)
+	}
+	for i := 0; i < 90; i++ {
+		m.addMinute(start.Add(time.Duration(2+i)*time.Minute), 1, 1)
+	}
+	if got := m.Minutes(); len(got) != minuteSamples+1 || got[len(got)-1].T != start.Add(91*time.Minute).Unix() {
+		t.Fatalf("an hour plus the current minute: %d, last %d", len(got), got[len(got)-1].T)
+	}
+}
+
+// Address pools report how full each WireGuard-family subnet is and the next address.
+func TestAddressPools(t *testing.T) {
+	state, err := NewState(InitOptions{Hostname: "203.0.113.7", PortFree: func(string, uint16) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Users = []*User{{ID: "1", Name: "a", Keys: []*Key{{ID: "2", Protocol: WireGuard, Address: "10.77.0.2"}, {ID: "3", Protocol: WireGuard, Address: "10.77.0.3"}}}}
+	pools := state.addressPools()
+	if len(pools) != 2 {
+		t.Fatalf("pools: %+v", pools)
+	}
+	wg := pools[1]
+	if wg.Protocol != WireGuard || wg.CIDR != "10.77.0.0/20" || wg.Used != 2 || wg.Capacity != 4093 || wg.Next != "10.77.0.4" {
+		t.Fatalf("wireguard pool: %+v", wg)
+	}
+	if pools[0].Protocol != AmneziaWG || pools[0].Used != 0 || pools[0].Next != "10.78.0.2" {
+		t.Fatalf("amneziawg pool: %+v", pools[0])
+	}
+}

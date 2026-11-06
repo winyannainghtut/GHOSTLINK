@@ -147,11 +147,13 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
   - The page exchanges it for a session cookie (HttpOnly, SameSite=Strict, 12 hours).
   - Requests also need a dashboard header (protection against cross-site requests) and must name `127.0.0.1`/`localhost` (or, when public, the server's address) as the host, which stops DNS rebinding.
   - 20 wrong tokens in a minute block that address for the rest of the minute.
-- **Pages:**
-  - Overview: live traffic chart, online users, server health, today's users, traffic types, protocols, top services.
-  - Users: live speed, usage and limits; keys with QR codes, copy and kit download; per-user statistics and rules.
-  - Rules for everyone.
-  - Settings.
+- **The page** (since 0.7.0 the same frosted-glass views as the app's **Servers I run**):
+  - **Navigation bar:** Overview, Clients and Network. A live capsule shows whether the server is live, who is online and the current speed. Opening it gives a switch for each protocol; pausing one disconnects its users until it is back on. Server settings sit on the right.
+  - **Overview:** active tunnels, live throughput, server uptime and the address pool, then throughput for the last 60 seconds, hour or 24 hours. Below that: server health, today by client, traffic types, protocols and top services.
+  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, last handshake, live speed and data used. Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
+  - **New client:** a name, a protocol and an optional data limit; the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
+  - **Network:** protocols (on/off and ports), the address pools, the rules for everyone and the [mesh](mesh.md) map.
+  - **Appearance:** Obsidian, Titanium or Daylight; background waves Subtle, Calm or Still. These are kept in the browser.
 
 ## iPhone, iPad and Mac (built-in VPN)
 
@@ -343,6 +345,8 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `PATCH` / `DELETE /mesh/nodes/{id}` | A node: `name`, `tags`, `status` (`active`/`disabled`), `relay`, `approved_routes`, `masquerade`; or remove it |
 | `GET` / `PUT /mesh/rules` | Access rules: `{"rules":[{"from":"tag:web","to":"tag:db","protocol":"tcp","ports":["5432"]}]}` |
 | `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
+
+`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour.
 
 `PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token` and `rotate_ipsec_psk`. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
 

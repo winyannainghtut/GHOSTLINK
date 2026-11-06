@@ -13,8 +13,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -231,29 +229,5 @@ func TestMeshCoordinator(t *testing.T) {
 	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": false}, nil)
 	if _, err := web.client.Get(web.url + "/v1/sync"); err == nil {
 		t.Fatal("the mesh port still answers after turning the mesh off")
-	}
-}
-
-// The dashboard and the desktop app draw the mesh with the same file.
-func TestMeshMapMatchesTheDesktopCopy(t *testing.T) {
-	embedded, err := dashboardFiles.ReadFile("dashboard/mesh-map.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	index, _ := dashboardFiles.ReadFile("dashboard/index.html")
-	for _, script := range []string{`src="mesh-map.js"`, `src="mesh.js"`} {
-		if !bytes.Contains(index, []byte(script)) {
-			t.Fatalf("dashboard index.html does not load %s", script)
-		}
-	}
-	desktop, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "apps", "desktop", "ui", "mesh-map.js"))
-	if os.IsNotExist(err) {
-		t.Skip("desktop sources are not in this checkout")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(bytes.ReplaceAll(desktop, []byte("\r\n"), []byte("\n")), bytes.ReplaceAll(embedded, []byte("\r\n"), []byte("\n"))) {
-		t.Fatal("internal/server/dashboard/mesh-map.js differs from apps/desktop/ui/mesh-map.js; copy the desktop file over")
 	}
 }

@@ -32,16 +32,20 @@ type Monitor struct {
 	siteStats    atomic.Bool
 	detailPaused atomic.Bool
 
-	samples    []rateSample // server totals, one per second, newest last
-	lastUp     map[string]int64
-	lastDown   map[string]int64
-	rates      map[string][2]int64
-	sampleDay  int64
-	historyMu  sync.Mutex
-	history    *History
-	flushedUp  map[string]int64
-	flushedDn  map[string]int64
-	flushedDet map[detailKey]int64
+	samples []rateSample // server totals, one per second, newest last
+	// minutes are per-minute averages for the last hour; minute accumulates the current one.
+	minutes     []rateSample
+	minute      rateSample
+	minuteCount int64
+	lastUp      map[string]int64
+	lastDown    map[string]int64
+	rates       map[string][2]int64
+	sampleDay   int64
+	historyMu   sync.Mutex
+	history     *History
+	flushedUp   map[string]int64
+	flushedDn   map[string]int64
+	flushedDet  map[detailKey]int64
 }
 
 type userCounters struct {
@@ -68,6 +72,8 @@ type rateSample struct {
 const (
 	maxSitesPerUserDay = 500
 	rateSamples        = 120
+	// minuteSamples keeps an hour of per-minute averages for the live chart's 1 h view.
+	minuteSamples = 60
 )
 
 var _ adapter.ConnectionTracker = (*Monitor)(nil)
@@ -299,6 +305,7 @@ func (m *Monitor) Sample(now time.Time) {
 	if len(m.samples) > rateSamples {
 		m.samples = m.samples[len(m.samples)-rateSamples:]
 	}
+	m.addMinute(now, totalUp, totalDown)
 	if day := dayStart(now); day != m.sampleDay {
 		m.sampleDay = day
 		m.sites = map[string]map[string]bool{}
@@ -322,6 +329,36 @@ func (m *Monitor) Live() (map[string]UserLive, []rateSample) {
 		users[tag] = UserLive{UpBps: rate[0], DownBps: rate[1], Active: u.active.Load(), LastActive: u.lastActive.Load()}
 	}
 	return users, append([]rateSample(nil), m.samples...)
+}
+
+// addMinute folds a per-second sample into the current minute; a finished minute is kept as
+// its average rate (bytes per second), so the last hour costs 60 points.
+func (m *Monitor) addMinute(now time.Time, up, down int64) {
+	minute := now.Unix() / 60 * 60
+	if m.minute.T != minute {
+		if m.minuteCount > 0 {
+			m.minutes = append(m.minutes, rateSample{m.minute.T, m.minute.Up / m.minuteCount, m.minute.Down / m.minuteCount})
+			if len(m.minutes) > minuteSamples {
+				m.minutes = m.minutes[len(m.minutes)-minuteSamples:]
+			}
+		}
+		m.minute, m.minuteCount = rateSample{T: minute}, 0
+	}
+	m.minute.Up += up
+	m.minute.Down += down
+	m.minuteCount++
+}
+
+// Minutes returns up to an hour of per-minute average rates, oldest first, ending with the
+// minute in progress.
+func (m *Monitor) Minutes() []rateSample {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := append([]rateSample(nil), m.minutes...)
+	if m.minuteCount > 0 {
+		out = append(out, rateSample{m.minute.T, m.minute.Up / m.minuteCount, m.minute.Down / m.minuteCount})
+	}
+	return out
 }
 
 // SetSiteStats turns site statistics on or off; turning them off forgets every site counted.

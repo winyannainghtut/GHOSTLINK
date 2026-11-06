@@ -4,6 +4,36 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-07
+
+### Added
+
+- **A new look: frosted glass.** The server dashboard and the desktop app are rebuilt on one component library: React, TypeScript, Tailwind CSS and Lucide icons, built with Vite (`ui/`).
+  - **Materials:** frosted, translucent surfaces with crisp edges, generous rounded corners and pill controls, over three slow, faint glass waves.
+  - **Waves:** the background control sets them to Subtle, Calm or Still, and they are still when the system asks for reduced motion.
+  - **Finishes:** three of them, Obsidian, Titanium and Daylight.
+  - **Type:** labels in sentence case; a monospace face only for addresses, keys and ports; steady tabular figures for every live number.
+  - **Fonts:** Plus Jakarta Sans and JetBrains Mono, both self-hosted, so the pages load nothing from outside.
+- **Dashboard and the app's "Servers I run":** the same views, with the same features as before plus:
+  - **Live capsule:** a floating navigation bar with a Dynamic Island-style capsule that shows live state and opens a switch for each protocol.
+  - **Overview:** a bento of KPIs (active tunnels, live throughput, uptime, address pool), plus a throughput chart for the last 60 seconds, hour or 24 hours.
+  - **Clients:** cards or a list, with search, Online/Idle/Paused filters and an access switch. Each shows its tunnel IP, last endpoint, last handshake and live speed, with quick QR, .conf, copy and revoke actions.
+  - **New client:** shows the next free tunnel address before creating; then the server issues the key and the sheet shows the QR code and the .conf at once.
+  - **Network:** protocols with switches and ports, the address pools, the rules for everyone and the mesh map, in one place.
+- **Full window:** both apps use the whole window. On wide screens, client and server cards go up to five a row and the protocol tiles to one row. The desktop app has a full-screen mode: F11 or the button in the navigation bar, with Escape to leave.
+- **Desktop app:** My servers has a connection hero with a large power control, live speed and server cards with a menu. The Island shows the connection and switches servers. Settings now has the finish and motion controls.
+- **API:**
+  - `GET /server` reports `address_pools` (WireGuard and AmneziaWG subnets: in use, capacity, next address);
+  - key summaries carry their tunnel `address`;
+  - `/live` adds an hour of per-minute averages (`minutes`).
+
+### Changed
+
+- The dashboard (`internal/server/dashboard`) and the desktop UI (`apps/desktop/ui`) are now build output of `ui/`, committed so the Go module and the Tauri app build without Node. The new **Web UI** workflow rebuilds both and fails if the committed files differ. A Go test checks the embedded dashboard is complete and CSP-safe.
+- The desktop app maps the admin views' requests onto the local service's typed operations through one table. A test checks the table against the Rust contract, and paths that are not plain are refused.
+- The desktop shell can save `.conf` files to Downloads.
+- The worker corresponding-source zip includes the UI source (`web-ui/`), and the license inventory and server image include the notices of the bundled npm packages and fonts.
+
 ## [0.6.0] - 2026-11-06
 
 ### Added

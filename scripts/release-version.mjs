@@ -15,7 +15,7 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 const declared = {
   'apps/desktop/src-tauri/Cargo.toml': capture('apps/desktop/src-tauri/Cargo.toml', /^version\s*=\s*"([^"]+)"/m),
   'apps/desktop/src-tauri/tauri.conf.json': JSON.parse(read('apps/desktop/src-tauri/tauri.conf.json')).version,
-  'apps/desktop/ui/index.html': capture('apps/desktop/ui/index.html', /PERSONAL VPN · ([^<\s]+)/),
+  'ui/desktop/src/version.ts': capture('ui/desktop/src/version.ts', /VERSION = '([^']+)'/),
   // The daemon only runs a worker whose version line matches exactly, so these must agree.
   'core/outline-worker/internal/version/version.go': capture('core/outline-worker/internal/version/version.go', /Ghostlink = "([^"]+)"/),
   'core/vpn-engine/src/worker_session.rs': capture('core/vpn-engine/src/worker_session.rs', /tunnel worker ([^;"]+);/),

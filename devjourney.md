@@ -8,6 +8,39 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### November 7: v0.7.0 — frosted-glass UI for the app and the dashboard
+
+The user asked for an iOS/visionOS-style frosted-glass redesign in React (Vite), TypeScript, Tailwind and Lucide, with the full spec in the request:
+- glass cards and pill controls;
+- three slow glass-wave ribbons with Subtle/Calm/Still;
+- the Obsidian, Titanium and Daylight finishes;
+- sentence-case labels, monospace only for addresses and keys, tabular figures;
+- a floating nav with Overview, Clients and Network, a live island and New client;
+- bento KPIs, a throughput chart, client cards and a list, and provisioning that leads to the QR code and .conf.
+
+They chose **both** the dashboard and the desktop app, after v0.6.0.
+
+Delivered:
+- **`ui/`:**
+  - `shared` is the glass kit;
+  - `admin` holds the server views for both apps behind a transport (REST in the dashboard, typed `server_call` operations in the app);
+  - `dashboard` and `desktop` are the two shells.
+- **Committed builds:** committed into the Go embed directory and `apps/desktop/ui`, checked by the Web UI workflow, plus Go and Node tests (CSP-safe build; mapping against the Rust contract).
+- **Server API:** address pools, key addresses, an hour of per-minute rates.
+- **Packaging:** npm notices, the UI source in the GPL source zip, `.conf` saving in the app.
+- **README:** screenshots added at the user's request.
+
+Fixed during GUI checks:
+- `backdrop-filter` was lost to a later `-webkit-` declaration;
+- Tailwind utilities collided with class names (`grid`, `ring`);
+- nested frosted panels can't blur through their parent, so popovers render in a portal;
+- sparse usage buckets drew one bar across the whole chart;
+- the dashboard's 1440 px cap left full-screen windows half empty (the user asked why full screen wasn't supported). It now spans the window, the grids add columns, and the app has F11 full screen;
+- px breakpoints sorted before rem ones;
+- a path with `..` was normalized by URL parsing (now refused).
+
+**Next (user, for November 8):** migrate from a running Outline server into Ghostlink (see agent.md).
+
 ### Later on November 6: v0.6.0 — mesh of Linux servers
 
 The user asked to use Ghostlink as a "service mesh": an internal overlay between servers, easy to set up, and visible as a graphical map in the app. They chose:
