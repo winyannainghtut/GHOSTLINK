@@ -8,7 +8,7 @@
 | Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz` |
 | Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz` |
 
-The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the tunnel worker, the systemd unit, notices and `INSTALL.txt`). Building on Ubuntu 22.04 links against glibc 2.35 and OpenSSL 3, so the binaries also run on newer distributions. Linux arm64 runners are free for public repositories; a private repository needs a plan that provides them, or remove that matrix entry.
+The Linux archives are headless (`ghostlink`, `ghostlinkd`, `ghostlink-mcp`, the tunnel worker, the systemd unit, notices and `INSTALL.txt`). Building on Ubuntu 22.04 links against glibc 2.35 and OpenSSL 3, so the binaries also run on newer distributions. Both Linux archives come from the reusable `.github/workflows/linux-package.yml`. The arm64 job never gates the draft release: `publish` waits only for Windows and Linux x64, and `attach-linux-arm64` adds the arm64 archive and its checksum line when it finishes. If hosted arm64 runners are unavailable to the repository, that job stays queued; cancel it and the draft is unaffected.
 
 ## Cutting a release
 

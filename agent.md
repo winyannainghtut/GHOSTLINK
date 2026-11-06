@@ -638,7 +638,7 @@ Each job runs `node scripts/release-version.mjs` first. The root `[workspace.pac
 
 Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md`. A maintainer must review and publish the draft. A manual `workflow_dispatch` run only produces workflow artifacts. Neither the workflow nor any agent has pushed a tag or created a release yet.
 
-Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), DEB/RPM packages (Linux runtime unverified), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). Arm64 Linux runners are free for public repositories; a private repository needs a plan that provides them, or remove that matrix entry.
+Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), DEB/RPM packages (Linux runtime unverified), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
 
 ### Artifacts actually produced
 

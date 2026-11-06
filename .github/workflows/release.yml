@@ -60,59 +60,25 @@ jobs:
             artifacts/windows-x64/*.zip
             artifacts/source/*.zip
 
-  linux:
-    name: Linux ${{ matrix.arch }} (headless archive)
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 22.04 builds link against glibc 2.35 / OpenSSL 3, so they also run on newer distros.
-          - arch: x64
-            runner: ubuntu-22.04
-          - arch: arm64
-            runner: ubuntu-22.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.10'
-          cache-dependency-path: core/outline-worker/go.sum
-      - name: Build dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-      - name: Install Rust toolchain
-        run: |
-          if ! command -v rustup >/dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.cargo/bin:$PATH"
-          fi
-          rustup toolchain install 1.92.0 --profile minimal
-          rustup override set 1.92.0
-      - name: Check version declarations and tag
-        id: version
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then set -- --tag "$GITHUB_REF_NAME"; fi
-          echo "version=$(node scripts/release-version.mjs "$@")" >> "$GITHUB_OUTPUT"
-      - name: Unit tests
-        run: cargo test --locked --workspace
-      - name: Archive
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: bash scripts/build-linux.sh "$VERSION"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.arch }}
-          if-no-files-found: error
-          path: artifacts/linux-${{ matrix.arch }}/*.tar.gz
+  # Ubuntu 22.04 builds link against glibc 2.35 / OpenSSL 3, so they also run on newer distros.
+  linux-x64:
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      runner: ubuntu-22.04
+      arch: x64
+
+  # Hosted arm64 runners may be unavailable (for example in some private repositories), so this
+  # job never gates the draft release; attach-linux-arm64 adds its archive when it finishes.
+  linux-arm64:
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      runner: ubuntu-22.04-arm
+      arch: arm64
 
   publish:
     name: Draft GitHub release
     if: github.ref_type == 'tag'
-    needs: [windows, linux]
+    needs: [windows, linux-x64]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -120,7 +86,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: downloaded
+          name: windows-x64
+          path: downloaded/windows-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: downloaded/linux-x64
       - name: Collect files and checksums
         run: |
           mkdir release
@@ -139,3 +110,27 @@ jobs:
             gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
               --title "Ghostlink $VERSION" --notes-file notes.md
           fi
+
+  attach-linux-arm64:
+    name: Attach Linux arm64 to the draft release
+    if: github.ref_type == 'tag'
+    needs: [publish, linux-arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: arm64
+      - name: Upload archive and refresh checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir sums
+          # Idempotent on re-runs: replace any previous arm64 line instead of appending twice.
+          grep -vF -- '-linux-arm64.tar.gz' sums/SHA256SUMS.txt > sums/next.txt || true
+          (cd arm64 && sha256sum -- *.tar.gz) >> sums/next.txt
+          mv sums/next.txt sums/SHA256SUMS.txt && cat sums/SHA256SUMS.txt
+          gh release upload "$TAG" arm64/*.tar.gz sums/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
