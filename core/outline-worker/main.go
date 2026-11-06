@@ -39,7 +39,7 @@ import (
 	"ghostlink.local/outline-worker/internal/awg"
 )
 
-const version = "Ghostlink tunnel worker 0.2.0; sing-box 1.14.4; amneziawg-go 3.1.20260828"
+const version = "Ghostlink tunnel worker 0.2.1; sing-box 1.14.4; amneziawg-go 3.1.20260828"
 
 func engineContext() context.Context {
 	in := inbound.NewRegistry()

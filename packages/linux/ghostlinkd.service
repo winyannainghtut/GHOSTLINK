@@ -5,7 +5,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/ghostlink/ghostlinkd.env
-ExecStart=/usr/local/bin/ghostlinkd --owner-uid ${GHOSTLINK_OWNER_UID} --outline-engine /usr/local/lib/ghostlink/ghostlink-tunnel
+ExecStart=/usr/local/bin/ghostlinkd --owner-uid ${GHOSTLINK_OWNER_UID} --outline-engine /usr/local/lib/ghostlink/ghostlink-tunnel $GHOSTLINK_FLAGS
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=25

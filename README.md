@@ -42,12 +42,22 @@ Pre-release builds are attached to [GitHub Releases](https://github.com/winyanna
 |---|---|---|
 | Windows 10/11 x64 | `Ghostlink-<version>-windows-x64.msi` | Desktop app, CLI, MCP bridge, tunnel worker and the `Ghostlink` service |
 | Windows 10/11 x64 | `Ghostlink-<version>-windows-x64-portable.zip` | The same programs, without installing the service |
-| Linux x64 / arm64 | `ghostlink-<version>-linux-<arch>.tar.gz` | CLI, service, MCP bridge, tunnel worker and systemd unit (no desktop app yet) |
+| Linux x64 / arm64 (Debian, Ubuntu) | `ghostlink_<version>-1_<amd64\|arm64>.deb` | CLI, service, MCP bridge and tunnel worker (no desktop app yet) |
+| Linux x64 / arm64 (Fedora, RHEL family) | `ghostlink-<version>-1.<x86_64\|aarch64>.rpm` | The same, as an RPM |
+| Linux x64 / arm64 (any) | `ghostlink-<version>-linux-<arch>.tar.gz` | The same files for a manual install |
 | Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker |
 
 **Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Windows SmartScreen warns about unsigned builds.
 
-**Linux.** Unpack the archive and follow its `INSTALL.txt`. You will copy the binaries, install the systemd unit and set `GHOSTLINK_OWNER_UID` to your user ID. Full-tunnel routing is off by default on Linux until you protect your SSH route and enable it ([details](docs/development/linux.md)).
+**Linux.** Install the package for your distribution with `sudo`. It sets you as the owner and starts the `ghostlinkd` service:
+
+```sh
+sudo apt install ./ghostlink_<version>-1_amd64.deb       # Debian / Ubuntu
+sudo dnf install ./ghostlink-<version>-1.x86_64.rpm      # Fedora / RHEL family
+ghostlink status
+```
+
+Full-tunnel routing is off on Linux until you add `GHOSTLINK_FLAGS=--allow-full-tunnel` to `/etc/ghostlink/ghostlinkd.env` and restart the service. Protect your SSH access first if the machine is remote. The `.tar.gz` contains the same files plus an `INSTALL.txt` for a manual install ([details](docs/development/linux.md)).
 
 ## Quick start
 
@@ -153,7 +163,7 @@ Pop-Location
 ./scripts/build-windows.ps1                           # optimized MSI + portable ZIP
 ```
 
-**Linux** needs Rust, Go, `pkg-config` and `libssl-dev`. Run `bash scripts/build-linux.sh` to produce `artifacts/linux-<arch>/ghostlink-<version>-linux-<arch>.tar.gz`.
+**Linux** needs Rust, Go, `pkg-config` and `libssl-dev`, plus [nfpm](https://nfpm.goreleaser.com/) 2.48 for packages (`go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0`). Run `bash scripts/build-linux.sh` to produce the `.tar.gz`, `.deb` and `.rpm` under `artifacts/linux-<arch>/`.
 
 **Tests.**
 
@@ -172,7 +182,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Windows app, service, CLI, MCP | Built and packaged (MSI); installer and full-device routing need an administrator test |
 | Protocols | Shadowsocks, VLESS-REALITY, WireGuard, AmneziaWG: encrypted traffic tested against upstream implementations. OpenVPN: optional |
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
-| Linux | CLI/service/worker build and tests pass in CI; runtime not yet verified on a real host; no desktop app yet |
+| Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
 | Ghostlink server + management from the app | In progress (v0.3.0) |
 | macOS, Android, iOS | Not started |
 
