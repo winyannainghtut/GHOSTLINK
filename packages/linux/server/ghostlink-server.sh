@@ -25,6 +25,26 @@ usage: sudo ghostlink-server <command>
   remove                   remove the container and image (keeps users and keys)
   version                  print the bundled server version
 
+Users, keys, rules and monitoring (also available in the Ghostlink app and the dashboard):
+
+  users                                list users, usage and status
+  user add NAME [--limit 50GB] [--exempt]
+  user enable|disable|remove|reset NAME
+  user rename NAME NEW-NAME | user limit NAME 50GB|none | user exempt NAME on|off
+  key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks; prints a QR code
+  keys NAME [--show]                   list keys (key text only with --show)
+  key qr NAME ID | key remove NAME ID
+  kit NAME --output FILE               HTML page with all of NAME's keys, QR codes and app help
+  rules [--user NAME]                  show traffic rules
+  rules set [--user NAME] [--block-site S]... [--block-ip CIDR]... [--block-port P]...
+            [--block-bittorrent] [--block-smtp]
+  usage | stats [NAME] [--range 7d] | clients [NAME]
+  top [--once]                         live speed per user (Ctrl+C to quit)
+  settings | set [--hostname H] [--enable P] [--disable P] [--port P=N] [--history-days N] ...
+  site-stats on|off                    record top sites per user (off deletes them)
+  dashboard [--port N] [--public|--private] [--reset-token]
+                                       web dashboard: prints the SSH tunnel command and login link
+
 HOST is the public IP or DNS name VPN clients use. Without --hostname, setup keeps the
 stored one or, on first run, asks api.ipify.org / icanhazip.com for this server's IP.
 EOF
@@ -134,9 +154,52 @@ setup() {
     show_key
 }
 
+# admin runs a management command inside the running container, against its local API.
+admin() {
+    need_root "$1"
+    need_docker
+    running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+    [ "$running" = "true" ] || die "the server is not running (start it: sudo ghostlink-server setup)"
+    if [ -t 0 ] && [ -t 1 ]; then
+        docker exec -it "$CONTAINER" /usr/bin/ghostlink-server admin --state "$STATE" "$@"
+    else
+        docker exec "$CONTAINER" /usr/bin/ghostlink-server admin --state "$STATE" "$@"
+    fi
+}
+
+# kit writes a user's connection kit to a new private file on the host.
+kit() {
+    [ $# -ge 1 ] || die "usage: sudo ghostlink-server kit NAME --output FILE"
+    name=$1
+    shift
+    output=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --output) [ $# -ge 2 ] || die "--output needs a file name"; output=$2; shift 2 ;;
+            --output=*) output=${1#--output=}; shift ;;
+            *) die "unknown option $1" ;;
+        esac
+    done
+    [ -n "$output" ] || die "choose a file: sudo ghostlink-server kit $name --output $name.html"
+    [ ! -e "$output" ] || die "$output already exists; choose a new file name"
+    previous=$(umask)
+    umask 077
+    if admin kit "$name" > "$output"; then
+        umask "$previous"
+        echo "Saved $output. Send it privately to $name; it contains their keys."
+    else
+        umask "$previous"
+        rm -f "$output"
+        exit 1
+    fi
+}
+
 command=${1:-}
 [ $# -gt 0 ] && shift
 case "$command" in
+    users | user | key | keys | rules | usage | stats | clients | top | settings | set | site-stats | dashboard)
+        admin "$command" "$@" ;;
+    kit) need_root kit; kit "$@" ;;
     setup) setup "$@" ;;
     show-key) need_root show-key; show_key ;;
     status)

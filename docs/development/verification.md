@@ -2,6 +2,68 @@
 
 Updated 2026-11-06 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.4.0 Monitoring, server-side admin and dashboard (2026-11-06)
+
+Observed on the Windows development host (unelevated, loopback only). The release CI server test now also runs the admin commands and dashboard checks on Ubuntu with Docker.
+
+### Monitoring with real clients (Go)
+
+An unmodified Shadowsocks client and a WireGuard client reached the server:
+
+- Alice's live download rate was measured above 100 KB/s, and she showed online.
+- An open CONNECT tunnel counted as 1 active connection and dropped to 0 after closing.
+- Traffic counted under "Web (HTTP)" and "shadowsocks" (Bob's under "wireguard"), with an hourly series.
+- With site stats on, Host `www.youtube.com` was counted as "YouTube".
+- Client addresses: Alice `shadowsocks 127.0.0.1` from the inbound, Bob `wireguard 127.0.0.1` from the parsed UAPI endpoint.
+- History saved and reloaded into a new monitor; turning site stats off removed every stored site
+
+### Rotation
+
+Retention kept exactly 30 daily buckets and removed site totals older than the 10-day site retention. A cap 200 bytes under the full size trimmed site data before breakdowns while keeping all days, and a 400-byte cap was honored. Client records outside 30 days were dropped. A simulated low disk paused detail recording (no detail counters created), and it resumed when space returned
+
+### QR codes and kit
+
+For all four protocols, both the SVG (path parsed back to modules) and the terminal half-block output decoded with an independent decoder (gozxing) to exactly the key or `.conf`. The kit contains every key, one QR code per key and the privacy note, with no script
+
+### Dashboard
+
+Index served with a strict CSP:
+
+- **Auth:** no session 401; wrong token 401; the right token gave a 204 with an HttpOnly, SameSite=Strict cookie; a missing CSRF header 403; a foreign Host 403; the API and kit worked through the dashboard.
+- **Ports:** 443, 80, the API port and a protocol port were refused as dashboard ports; moving the port closed the old one; a token reset signed sessions out.
+- **Public mode:** TLS 1.3 with the pinned certificate and a Secure cookie; back to private worked.
+- **Throttling:** 20 bad tokens returned 429 even for the right token
+
+### Server commands
+
+Against the real API listener:
+
+- **Users and keys:** user add (with a limit), a duplicate-name refusal, key add (key, `.conf` and terminal QR), keys list with and without `--show`, key qr.
+- **Rules:** per-user and global rules.
+- **Monitoring:** site-stats, settings, top --once, stats, usage, clients.
+- **Sharing and dashboard:** the kit; dashboard (tunnel command and link); a `--port 443` refusal; a token reset.
+- **Settings and users:** set including the retention cross-check; user limit, disable and remove; JSON output. On Windows the same commands ran against a live local server
+
+### Daemon/CLI (Node, real server)
+
+`server live`, `stats` (and an invalid range refused through IPC), `clients`, `keys qr` (terminal QR), `keys kit` (a new file with keys and QR SVGs), and `set --site-stats on --history-days 60` reflected in `info`. Agents were refused for live and kit; 19/19 process tests passed
+
+### App GUI (WebView2 DevTools, isolated profile)
+
+Server page live panel, per-user online and speed lines, the Stats dialog, the AmneziaWG QR dialog, and Server settings with the monitoring section. **Save connection kit** wrote `Downloads\Alice-vpn.html` (2 QR codes, test keys for the local test server), which was then deleted. The first attempt with a `blob:` download failed in WebView2 and was replaced by a desktop save command
+
+### Web dashboard (in the app's isolated WebView2)
+
+The login link signed in and the fragment was removed. Overview (live cards, chart, server card, empty breakdowns), Users (status, offline, actions), Keys (QR `.conf`/`vpn://`, copy, kit) and Settings (protocols, monitoring, retention, dashboard port note) were inspected
+
+### Static checks
+
+Rust fmt and clippy clean (root and desktop); 33 Rust unit tests passed; Go vet clean; all Go tests passed; `govulncheck` **No vulnerabilities found**; server cross-builds for linux/amd64 and arm64
+
+### Not verified
+
+Health readings on a real Linux host (CPU, memory and network come from `/proc`; unavailable on Windows dev); the dashboard over a real SSH tunnel; public dashboard mode in a browser; top-services accuracy for apps using ECH
+
 ## v0.3.1 Windows installed-service fix (2026-11-06)
 
 First real MSI installation, on the user's Windows 11 machine by the user.

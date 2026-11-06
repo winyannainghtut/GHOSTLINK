@@ -7,6 +7,7 @@ The scan found and fixed vulnerable locked dependencies before producing the fin
 - For v0.3.0 the module also builds `ghostlink-server`. `govulncheck` 1.9.0 over `./...` (worker, server and all internal packages) reported **No vulnerabilities found**.
 - New Rust dependencies for the pinned management client: `rustls` 0.23.46 with the `ring` 0.17.14 provider (TLS 1.3 only, no aws-lc), `tokio-rustls` 0.26.6, `hyper-rustls` 0.27.10 and `rustls-webpki` 0.103.16 through reqwest's `rustls-tls-manual-roots` feature. `rcgen` 0.13.2 is a test-only dependency, so no certificate fixture is committed.
 - The server image base is pinned by digest: `gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` (index with amd64 and arm64). Re-pin it when distroless publishes security updates.
+- v0.4.0 adds `rsc.io/qr` 0.2.0 (BSD-3-Clause, pure Go QR encoder) to the server. `github.com/makiuchi-d/gozxing` 0.1.1 (Apache-2.0) is a **test-only** QR decoder and is not compiled into any shipped binary. `govulncheck` over the whole module: **No vulnerabilities found**.
 - `npm audit`: **zero known vulnerabilities** in the verification tooling dependency tree.
 - `python scripts/audit-lockfiles.py`: queries OSV for **472** unique registry package versions in both Cargo locks, including non-Windows targets. Initially found eight OpenSSL advisory IDs; updated the root lock from `openssl` 0.10.75 / `openssl-sys` 0.9.111 to 0.10.82 / 0.9.118. Rescan removed those findings.
 

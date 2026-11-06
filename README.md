@@ -33,6 +33,9 @@
 - **One service, three front ends:** the desktop app, the `ghostlink` CLI and an optional restricted MCP bridge for AI agents all control the same local service.
 - **Your own server, Outline-style:** install one `.deb`/`.rpm` on a Linux machine with Docker (the image is inside the package), paste the management key it prints into the app, then create users and keys and set traffic rules from **Servers I run** or `ghostlink server`.
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
+- **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
+- **Three ways to manage your server:** the app, `sudo ghostlink-server …` commands on the server (with QR codes in the terminal and a live `top`), or a web dashboard on its own port (private behind an SSH tunnel by default).
+- **Easy sharing:** QR codes for every key and a one-page connection kit per person, for the Outline, WireGuard, AmneziaVPN and v2ray-family apps on any phone.
 - **Honest status:** "Connected" means the tunnel was observed up and an HTTPS request through it succeeded. Nothing is reported that was not measured.
 - **Safe imports:** script hooks, plaintext VLESS, insecure TLS, obsolete ciphers and Amnezia "full access" keys that carry an SSH login are refused.
 
@@ -108,6 +111,7 @@ The CLI talks to the same service as the app. Keys are read from a file or stdin
 | Split tunneling | `ghostlink split set --mode bypass --site netflix.com --ip 192.168.1.0/24 --app steam.exe --lan-direct` · `split show` · `split clear` (add `--profile NAME` for one server) |
 | Start-up connection | `ghostlink autoconnect enable` / `disable` |
 | Manage your server | `ghostlink server add --name home --key-file key.json` · `server users add --server home --name Alice` · `server keys create --server home --user 1 --protocol amneziawg --import alice` · `server rules set --server home --block-site ads.example` · `server usage --server home` (`ghostlink server install-help` for setup) |
+| Monitor and share | `ghostlink server live --server home` · `server stats --server home --user 1 --range 7d` · `server clients --server home` · `server keys qr --server home --user 1 --key 2` · `server keys kit --server home --user 1 --output alice.html` |
 
 Add `--json` for a versioned machine-readable envelope ([CLI contract](docs/development/cli-contract.md)). `connect` waits until the tunnel is verified; `--no-wait` returns immediately. Exit codes: 0 ok, 1 connection/internal failure, 2 invalid input, 3 permission denied, 4 service or engine unavailable, 5 timeout, 6 busy, 130 interrupted.
 
@@ -160,11 +164,12 @@ sudo apt install ./ghostlink-server_<version>-1_amd64.deb      # or: sudo dnf in
 sudo ghostlink-server show-key                               # prints the management key again
 ```
 
-Paste the key into **Servers I run → Add server** (or `ghostlink server add`). From there:
+Paste the key into **Servers I run → Add server** (or `ghostlink server add`). You can also manage everything on the server itself (`sudo ghostlink-server users`, `key add`, `top`…) or in its web dashboard (`sudo ghostlink-server dashboard`). From there:
 - **Users:** add users, with optional data limits.
 - **Keys:** issue keys per protocol. You can copy them, share a `.conf` for WireGuard/AmneziaWG apps, or use one on this device.
 - **Rules:** block sites, IPs, ports, BitTorrent or outgoing mail for everyone or for one user.
-- **Usage:** see how much data each user has used.
+- **Usage and monitoring:** see live speeds, who is online, data used, traffic types and, if you turn it on, each user's top services.
+- **Sharing:** show a key's QR code, or save a connection kit page for each person.
 
 Upgrading the package keeps everything. Full guide: [Ghostlink server](docs/deployment/ghostlink-server.md).
 
@@ -204,7 +209,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Protocols | Shadowsocks, VLESS-REALITY, WireGuard, AmneziaWG: encrypted traffic tested against upstream implementations. OpenVPN: optional |
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
-| Ghostlink server + management from the app | v0.3.0: server API, rules, limits and all four protocols tested end to end with real clients; release CI installs the server `.deb` with Docker and exercises the API; a real internet-facing VPS deployment is not yet verified |
+| Ghostlink server, management, monitoring | Server API, rules, limits, monitoring and all four protocols tested end to end with real clients; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
 | macOS, Android, iOS | Not started |
 
 The [changelog](CHANGELOG.md) lists what each release changed.

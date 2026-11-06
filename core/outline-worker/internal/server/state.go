@@ -6,6 +6,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,8 +157,79 @@ type State struct {
 	WireGuard     WireGuardServer   `json:"wireguard"`
 	AmneziaWG     AmneziaWGServer   `json:"amneziawg"`
 	Rules         Rules             `json:"rules"`
+	Monitor       MonitorSettings   `json:"monitor"`
+	Dashboard     DashboardConfig   `json:"dashboard"`
 	Users         []*User           `json:"users"`
 	NextID        int               `json:"next_id"`
+}
+
+// MonitorSettings control what the server records about traffic and for how long.
+type MonitorSettings struct {
+	// SiteStats records per-user totals per site/service. Off by default.
+	SiteStats bool `json:"site_stats"`
+	// Retention in days; zero means the default.
+	HistoryDays int `json:"history_days,omitempty"`
+	SiteDays    int `json:"site_days,omitempty"`
+	// HistoryMaxMB caps history.json; zero means the default.
+	HistoryMaxMB int `json:"history_max_mb,omitempty"`
+}
+
+const (
+	defaultHistoryDays  = 90
+	defaultSiteDays     = 30
+	defaultHistoryMaxMB = 20
+	hourlyDays          = 7
+	clientDays          = 30
+	clientsPerUser      = 20
+)
+
+func (m MonitorSettings) historyDays() int {
+	if m.HistoryDays > 0 {
+		return m.HistoryDays
+	}
+	return defaultHistoryDays
+}
+
+func (m MonitorSettings) siteDays() int {
+	if m.SiteDays > 0 {
+		return m.SiteDays
+	}
+	return defaultSiteDays
+}
+
+func (m MonitorSettings) historyMaxBytes() int {
+	if m.HistoryMaxMB > 0 {
+		return m.HistoryMaxMB << 20
+	}
+	return defaultHistoryMaxMB << 20
+}
+
+// DashboardConfig is the admin web dashboard. Private mode serves plain HTTP on 127.0.0.1 only
+// (reach it through an SSH tunnel); public mode serves HTTPS on all addresses.
+type DashboardConfig struct {
+	Port   uint16 `json:"port"`
+	Public bool   `json:"public"`
+	// Token is the login secret. The state file is as sensitive as the management key.
+	Token string `json:"token"`
+}
+
+// ensureDashboard gives servers created before the dashboard existed a port and token.
+func (s *State) ensureDashboard(free func(string, uint16) bool) (bool, error) {
+	changed := false
+	if s.Dashboard.Token == "" {
+		s.Dashboard.Token = base64.RawURLEncoding.EncodeToString(random(16))
+		changed = true
+	}
+	if s.Dashboard.Port == 0 {
+		used := map[uint16]bool{s.API.Port: true, s.Shadowsocks.Port: true, s.VLESS.Port: true, s.WireGuard.Port: true, s.AmneziaWG.Port: true}
+		port, err := pickPort(used, free, "tcp")
+		if err != nil {
+			return false, err
+		}
+		s.Dashboard.Port = port
+		changed = true
+	}
+	return changed, nil
 }
 
 func (s *State) newID() string {

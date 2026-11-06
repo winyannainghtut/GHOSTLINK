@@ -266,12 +266,12 @@ func newTestServer(t *testing.T, mutate func(*State)) *testServer {
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
-	usage := NewUsage()
+	monitor := NewMonitor()
 	logLevel := "off"
 	if os.Getenv("GHOSTLINK_TEST_SERVER_LOG") != "" {
 		logLevel = "debug"
 	}
-	service := NewService(store, NewEngine(usage, logLevel), usage)
+	service := NewService(store, NewEngine(monitor, logLevel), monitor)
 	if err := service.Start(); err != nil {
 		t.Fatalf("start engine: %v", err)
 	}

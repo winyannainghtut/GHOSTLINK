@@ -25,4 +25,22 @@ These mechanisms reduce specific failures; they do not certify the platform defi
 - **What the server stores:** the server keeps every user's key material in its state, so keys can be shown again. Protect the host and its backups accordingly.
 - **Logs and first install:** logs contain warnings and errors only, not traffic. On first install the server may contact `api.ipify.org` and `ipv4.icanhazip.com` to learn its public IP; set the hostname yourself to avoid that.
 
+**Server administration and the dashboard.**
+- **Server commands:** `sudo ghostlink-server` admin commands run inside the container and use the management API on loopback, with the management key's pin. Only root on the host can run them.
+- **Dashboard port:** the dashboard has its own port (not 443, never shared). By default it listens only on 127.0.0.1, so it is reachable only through an SSH tunnel; VPN users cannot reach host loopback.
+- **Public mode:** opt-in; HTTPS (TLS 1.3) with the pinned self-signed certificate.
+- **Sign-in:**
+  - a 128-bit login token, stored in the server state like the management secret and sent after `#` so it is never in a request line;
+  - an HttpOnly, SameSite=Strict, in-memory 12-hour session;
+  - a required custom header on API calls (CSRF);
+  - a Host check against DNS rebinding;
+  - throttling after 20 bad tokens per minute;
+  - `--reset-token` revokes every session.
+- **Page hardening:** a strict CSP (self only; images from blob/data), `frame-ancestors 'none'`, no external resources, and no user data inserted as HTML.
+
+**Monitoring data.** The server keeps per-user usage, traffic-type and protocol totals, and the last 20 connecting addresses per user (30 days) on the server only.
+- **Top sites/services:** off by default. They are totals per service per day (never URLs or times), kept 30 days, and deleted at once when turned off.
+- **Rotation:** age limits, a hard size cap with a documented trimming order, and a low-disk guard that pauses detail recording below 500 MB or 5 % free.
+- **Exposure:** the history file is 0600 in the 0700 state directory. Connection addresses identify people's networks: share the dashboard login link and management key only with administrators.
+
 Do not commit state, PKI, access keys, token files or build tools. Keep offline CA backups encrypted and separate from server backups. The optional OpenVPN PKI bundle explicitly excludes CA and client private keys. Update CRLs on the server after revocation and before their expiry.

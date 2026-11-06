@@ -22,6 +22,9 @@ var internalRanges = []string{
 
 type object = map[string]any
 
+// listenAddress is where inbounds listen; tests use loopback so no firewall prompt appears.
+var listenAddress = "::"
+
 // testInternalPort lets package tests reach one loopback port; it is never set otherwise.
 var testInternalPort uint16
 
@@ -74,7 +77,7 @@ func (s *State) inbounds() []any {
 			users = append(users, object{"name": entry.user.Tag(), "password": entry.key.Password})
 		}
 		inbounds = append(inbounds, object{
-			"type": "shadowsocks", "tag": Shadowsocks, "listen": "::", "listen_port": s.Shadowsocks.Port,
+			"type": "shadowsocks", "tag": Shadowsocks, "listen": listenAddress, "listen_port": s.Shadowsocks.Port,
 			"method": s.Shadowsocks.Method, "users": users,
 		})
 	}
@@ -84,7 +87,7 @@ func (s *State) inbounds() []any {
 			users = append(users, object{"name": entry.user.Tag(), "uuid": entry.key.UUID, "flow": "xtls-rprx-vision"})
 		}
 		inbounds = append(inbounds, object{
-			"type": "vless", "tag": VLESS, "listen": "::", "listen_port": s.VLESS.Port, "users": users,
+			"type": "vless", "tag": VLESS, "listen": listenAddress, "listen_port": s.VLESS.Port, "users": users,
 			"tls": object{
 				"enabled": true, "server_name": s.VLESS.Handshake,
 				"reality": object{
@@ -253,6 +256,9 @@ func (s *State) EngineConfig(logLevel string) ([]byte, error) {
 // Listening describes the ports the engine needs, for conflict checks.
 func (s *State) Listening() map[string]string {
 	ports := map[string]string{"api": "tcp/" + strconv.Itoa(int(s.API.Port))}
+	if s.Dashboard.Port != 0 {
+		ports["dashboard"] = "tcp/" + strconv.Itoa(int(s.Dashboard.Port))
+	}
 	if s.Shadowsocks.Enabled {
 		ports[Shadowsocks] = "tcp+udp/" + strconv.Itoa(int(s.Shadowsocks.Port))
 	}
@@ -282,7 +288,10 @@ func portsConflict(a, b string) bool {
 // CheckPorts rejects port collisions between the API and enabled protocols.
 func (s *State) CheckPorts() error {
 	ports := s.Listening()
-	names := []string{"api", Shadowsocks, VLESS, WireGuard, AmneziaWG}
+	if s.Dashboard.Port != 0 && (s.Dashboard.Port < 1024 || s.Dashboard.Port == 443) {
+		return fmt.Errorf("the dashboard needs its own port from 1024 to 65535 (not 443)")
+	}
+	names := []string{"api", "dashboard", Shadowsocks, VLESS, WireGuard, AmneziaWG}
 	for i, a := range names {
 		for _, b := range names[i+1:] {
 			pa, okA := ports[a]

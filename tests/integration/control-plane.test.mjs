@@ -41,7 +41,7 @@ function cli(args, expected = 0) {
         assert.ok(validateResponse(response), JSON.stringify(validateResponse.errors));
         assert.ok(!stdout.includes('BEGIN PRIVATE KEY'));
         resolve(response);
-      } catch (e) { reject(e); }
+      } catch (e) { e.message += ` [ghostlink ${args.join(' ')}: stdout=${stdout.slice(0, 300)} stderr=${stderr.slice(0, 300)}]`; reject(e); }
     });
   });
 }
@@ -194,7 +194,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.3.1');
+  assert.equal((await cli(['version'])).data.version, '0.4.0');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -357,6 +357,25 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   assert.equal((await cli(['server', 'users', 'update', '--server', 'home', '--user', user, '--disable'])).data.enabled, false);
   assert.equal((await cli(['server', 'users', 'update', '--server', 'home', '--user', '99', '--enable'], 2)).error.code, 'not_found');
   assert.equal((await cli(['server', 'info', '--server', 'missing'], 2)).error.code, 'not_found');
+
+  // Monitoring, QR codes and connection kits through the daemon.
+  const live = await cli(['server', 'live', '--server', 'home']);
+  assert.equal(live.data.users[0].name, 'Alice'); assert.equal(typeof live.data.health.uptime_seconds, 'number');
+  const stats = await cli(['server', 'stats', '--server', 'home', '--user', user, '--range', '24h']);
+  assert.equal(stats.data.range, '24h'); assert.equal(stats.data.site_stats, false); assert.ok(Array.isArray(stats.data.types));
+  assert.equal((await rpc({ schema_version: 1, action: { type: 'server_call', server: 'home', op: { op: 'stats', range: 'forever' } } })).error.code, 'invalid_request');
+  assert.ok(Array.isArray((await cli(['server', 'clients', '--server', 'home'])).data.clients));
+  const qr = await cli(['server', 'keys', 'qr', '--server', 'home', '--user', user, '--key', keys.data[0].id]);
+  assert.ok(qr.data.help_text.includes('▀') || qr.data.help_text.includes('█'));
+  const kitFile = path.join(temp, 'alice-kit.html');
+  assert.equal((await cli(['server', 'keys', 'kit', '--server', 'home', '--user', user, '--output', kitFile])).data.saved_to, kitFile);
+  const kit = await fs.readFile(kitFile, 'utf8');
+  assert.ok(kit.includes('<!doctype html>') && kit.includes('vless://') && kit.includes('<svg'));
+  assert.equal((await cli(['server', 'set', '--server', 'home', '--site-stats', 'on', '--history-days', '60'])).data.site_stats, true);
+  assert.equal((await cli(['server', 'info', '--server', 'home'])).data.history_days, 60);
+  for (const op of [{ op: 'live' }, { op: 'kit', user }]) {
+    assert.equal((await rpc({ schema_version: 1, agent_token: 'x'.repeat(64), action: { type: 'server_call', server: 'home', op } })).error.code, 'permission_denied');
+  }
 
   // A server that cannot prove it holds the pinned certificate never receives the key.
   const wrongPin = await cli(['server', 'add', '--name', 'evil', '--key-file', await write('wrong-pin.json', JSON.stringify({ ...management, certSha256: '00'.repeat(32) }))], 1);

@@ -136,6 +136,31 @@ pub enum ServerOp {
         rules: TrafficRules,
     },
     Metrics,
+    /// Live speeds, open connections, online users and server health.
+    Live,
+    /// Recorded traffic: `range` is 24h, 7d, 30d or 90d; without `user`, everyone.
+    Stats {
+        #[serde(default)]
+        user: Option<String>,
+        range: String,
+    },
+    /// Addresses users connected from (last 30 days).
+    Clients {
+        #[serde(default)]
+        user: Option<String>,
+    },
+    /// A key's QR code: `format` svg or text; `content` auto, key or conf.
+    KeyQr {
+        user: String,
+        key: String,
+        format: String,
+        #[serde(default)]
+        content: Option<String>,
+    },
+    /// A self-contained HTML page with all of a user's keys, QR codes and app help.
+    Kit {
+        user: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -150,6 +175,15 @@ pub struct ServerPatch {
     pub vless_handshake: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocols: Option<std::collections::BTreeMap<String, ProtocolPatch>>,
+    /// Record per-user top sites; turning it off deletes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_stats: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_max_mb: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -287,6 +321,11 @@ impl ServerOp {
             Self::RulesGet => "server_rules_get",
             Self::RulesSet { .. } => "server_rules_set",
             Self::Metrics => "server_metrics",
+            Self::Live => "server_live",
+            Self::Stats { .. } => "server_stats",
+            Self::Clients { .. } => "server_clients",
+            Self::KeyQr { .. } => "server_key_qr",
+            Self::Kit { .. } => "server_kit",
         }
     }
 }
@@ -590,6 +629,14 @@ mod tests {
             Action::ServerCall {
                 server: "x".into(),
                 op: ServerOp::Metrics,
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::Live,
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::Kit { user: "1".into() },
             },
         ];
         for action in actions {

@@ -271,6 +271,22 @@ func (e *Endpoint) PeerTransfer() (map[string][2]uint64, error) {
 	return parseTransfer(state), nil
 }
 
+// PeerStatus returns each peer's counters, current address and last handshake, keyed by its
+// base64 public key.
+func (e *Endpoint) PeerStatus() (map[string]PeerStatus, error) {
+	e.stateAccess.Lock()
+	awgDevice := e.device
+	e.stateAccess.Unlock()
+	if awgDevice == nil {
+		return nil, E.New("AmneziaWG is not running")
+	}
+	state, err := awgDevice.IpcGet()
+	if err != nil {
+		return nil, err
+	}
+	return parsePeers(state), nil
+}
+
 // InterfaceUpdated re-binds sockets after a network change.
 func (e *Endpoint) InterfaceUpdated(context.Context) {
 	e.stateAccess.Lock()

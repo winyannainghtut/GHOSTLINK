@@ -6,6 +6,7 @@ package server
 import (
 	"crypto/subtle"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 )
 
 const maxRequestBytes = 64 << 10
+
+// apiListenHost is empty (all addresses) in production; tests use loopback.
+var apiListenHost = ""
 
 // API is the management interface: HTTPS with a pinned self-signed certificate, under a
 // secret path. Anyone with the management key is the server's administrator.
@@ -50,6 +54,12 @@ func NewAPI(service *Service, version string) *API {
 		"GET /rules":                      a.getRules,
 		"PUT /rules":                      a.putRules,
 		"GET /metrics":                    a.metrics,
+		"GET /live":                       a.live,
+		"GET /stats":                      a.stats,
+		"GET /clients":                    a.clients,
+		"GET /users/{id}/keys/{keyID}/qr": a.keyQR,
+		"GET /users/{id}/kit":             a.kit,
+		"GET /dashboard":                  a.dashboardInfo,
 	}
 	for pattern, handler := range routes {
 		a.mux.HandleFunc(pattern, a.wrap(handler))
@@ -79,6 +89,13 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *API) wrap(handler func(*http.Request) (int, any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status, body, err := handler(r)
+		if raw, ok := body.(rawBody); ok && err == nil {
+			w.Header().Set("Content-Type", raw.contentType)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, raw.data)
+			return
+		}
 		if err != nil {
 			var input InputError
 			switch {
@@ -122,7 +139,7 @@ func (a *API) Listen() (*http.Server, net.Listener, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", apiListenHost, port))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -157,7 +174,16 @@ type serverInfo struct {
 	VLESSHandshake    string                  `json:"vless_handshake"`
 	ShadowsocksMethod string                  `json:"shadowsocks_method"`
 	Users             int                     `json:"users"`
+	SiteStats         bool                    `json:"site_stats"`
+	HistoryDays       int                     `json:"history_days"`
+	SiteDays          int                     `json:"site_days"`
+	HistoryMaxMB      int                     `json:"history_max_mb"`
+	DashboardPort     uint16                  `json:"dashboard_port"`
+	DashboardPublic   bool                    `json:"dashboard_public"`
 }
+
+// rawBody is a non-JSON answer (SVG, terminal text, HTML).
+type rawBody struct{ contentType, data string }
 
 func (a *API) serverInfo(s *State) serverInfo {
 	return serverInfo{
@@ -169,6 +195,8 @@ func (a *API) serverInfo(s *State) serverInfo {
 			Shadowsocks: {s.Shadowsocks.Enabled, s.Shadowsocks.Port},
 		},
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
+		SiteStats: s.Monitor.SiteStats, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
+		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
 	}
 }
 
@@ -188,6 +216,15 @@ type serverPatch struct {
 	Hostname       *string                  `json:"hostname"`
 	VLESSHandshake *string                  `json:"vless_handshake"`
 	Protocols      map[string]protocolPatch `json:"protocols"`
+	// Monitoring: turning site_stats off deletes every recorded site.
+	SiteStats    *bool `json:"site_stats"`
+	HistoryDays  *int  `json:"history_days"`
+	SiteDays     *int  `json:"site_days"`
+	HistoryMaxMB *int  `json:"history_max_mb"`
+	// Dashboard: its own port (never 443), private (127.0.0.1) or public (HTTPS).
+	DashboardPort       *uint16 `json:"dashboard_port"`
+	DashboardPublic     *bool   `json:"dashboard_public"`
+	ResetDashboardToken bool    `json:"reset_dashboard_token"`
 }
 
 func (s *State) protocolSettings(protocol string) (*bool, *uint16) {
@@ -230,6 +267,39 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 				return InputError{errors.New("the REALITY handshake site must be a public DNS name such as www.example.com")}
 			}
 			s.VLESS.Handshake = *patch.VLESSHandshake
+		}
+		if patch.SiteStats != nil {
+			s.Monitor.SiteStats = *patch.SiteStats
+		}
+		if patch.HistoryDays != nil {
+			if *patch.HistoryDays < 7 || *patch.HistoryDays > 365 {
+				return InputError{errors.New("history_days must be 7-365")}
+			}
+			s.Monitor.HistoryDays = *patch.HistoryDays
+		}
+		if patch.SiteDays != nil {
+			if *patch.SiteDays < 1 || *patch.SiteDays > 90 {
+				return InputError{errors.New("site_days must be 1-90")}
+			}
+			s.Monitor.SiteDays = *patch.SiteDays
+		}
+		if s.Monitor.siteDays() > s.Monitor.historyDays() {
+			return InputError{errors.New("site_days cannot be longer than history_days")}
+		}
+		if patch.HistoryMaxMB != nil {
+			if *patch.HistoryMaxMB < 1 || *patch.HistoryMaxMB > 1024 {
+				return InputError{errors.New("history_max_mb must be 1-1024")}
+			}
+			s.Monitor.HistoryMaxMB = *patch.HistoryMaxMB
+		}
+		if patch.DashboardPort != nil {
+			s.Dashboard.Port = *patch.DashboardPort
+		}
+		if patch.DashboardPublic != nil {
+			s.Dashboard.Public = *patch.DashboardPublic
+		}
+		if patch.ResetDashboardToken {
+			s.Dashboard.Token = base64.RawURLEncoding.EncodeToString(random(16))
 		}
 		for protocol, change := range patch.Protocols {
 			enabled, port := s.protocolSettings(protocol)
@@ -326,12 +396,25 @@ type userChange struct {
 	ResetUsage            bool    `json:"reset_usage"`
 }
 
-func (c userChange) apply(u *User) error {
+// UserByName finds a user by name, ignoring case.
+func (s *State) UserByName(name string) *User {
+	for _, u := range s.Users {
+		if strings.EqualFold(u.Name, strings.TrimSpace(name)) {
+			return u
+		}
+	}
+	return nil
+}
+
+func (c userChange) apply(s *State, u *User) error {
 	if c.Name != nil {
 		if err := ValidName(*c.Name); err != nil {
 			return InputError{err}
 		}
-		u.Name = *c.Name
+		if other := s.UserByName(*c.Name); other != nil && other != u {
+			return InputError{fmt.Errorf("another user is already called %q", other.Name)}
+		}
+		u.Name = strings.TrimSpace(*c.Name)
 	}
 	if c.Enabled != nil {
 		u.Enabled = *c.Enabled
@@ -371,7 +454,7 @@ func (a *API) createUser(r *http.Request) (int, any, error) {
 		}
 		u := &User{ID: s.newID(), CreatedUnix: time.Now().Unix(), Enabled: true, Keys: []*Key{},
 			Rules: Rules{BlockedDomains: []string{}, BlockedIPs: []string{}, BlockedPorts: []string{}}}
-		if err := change.apply(u); err != nil {
+		if err := change.apply(s, u); err != nil {
 			return err
 		}
 		s.Users = append(s.Users, u)
@@ -395,7 +478,7 @@ func (a *API) patchUser(r *http.Request) (int, any, error) {
 		if u == nil {
 			return fmt.Errorf("user %w", errNotFound)
 		}
-		if err := change.apply(u); err != nil {
+		if err := change.apply(s, u); err != nil {
 			return err
 		}
 		view = viewUser(u)
@@ -562,6 +645,166 @@ func (a *API) metrics(*http.Request) (int, any, error) {
 		}
 	})
 	return http.StatusOK, result, nil
+}
+
+// --- monitoring ---
+
+type liveUser struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	UpBps      int64  `json:"up_bps"`
+	DownBps    int64  `json:"down_bps"`
+	Active     int64  `json:"active"`
+	Online     bool   `json:"online"`
+	LastActive int64  `json:"last_active_unix"`
+}
+
+func (a *API) live(*http.Request) (int, any, error) {
+	users, series := a.service.monitor.Live()
+	now := time.Now().Unix()
+	result := struct {
+		Time    int64        `json:"time_unix"`
+		UpBps   int64        `json:"up_bps"`
+		DownBps int64        `json:"down_bps"`
+		Active  int64        `json:"active"`
+		Online  int          `json:"online_users"`
+		Series  []rateSample `json:"series"`
+		Users   []liveUser   `json:"users"`
+		Health  Health       `json:"health"`
+	}{Time: now, Series: series, Users: []liveUser{}, Health: a.service.Health()}
+	if n := len(series); n > 0 {
+		result.UpBps, result.DownBps = series[n-1].Up, series[n-1].Down
+	}
+	a.service.Read(func(s *State) {
+		for _, u := range s.Users {
+			live := users[u.Tag()]
+			online := live.Active > 0 || (live.LastActive > 0 && now-live.LastActive <= 60)
+			if !online && live.LastActive > 0 && now-live.LastActive <= 180 {
+				// A WireGuard handshake within its rekey interval also means connected.
+				online = true
+			}
+			result.Users = append(result.Users, liveUser{u.ID, u.Name, live.UpBps, live.DownBps, live.Active, online, live.LastActive})
+			result.Active += live.Active
+			if online {
+				result.Online++
+			}
+		}
+	})
+	return http.StatusOK, result, nil
+}
+
+// statsUser resolves an optional ?user= to a tag, refusing unknown users.
+func (a *API) statsUser(r *http.Request) (string, error) {
+	id := r.URL.Query().Get("user")
+	if id == "" {
+		return "", nil
+	}
+	found := false
+	a.service.Read(func(s *State) { found = s.User(id) != nil })
+	if !found {
+		return "", fmt.Errorf("user %w", errNotFound)
+	}
+	return tagOf(id), nil
+}
+
+func (a *API) stats(r *http.Request) (int, any, error) {
+	tag, err := a.statsUser(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	rangeName := r.URL.Query().Get("range")
+	if rangeName == "" {
+		rangeName = "7d"
+	}
+	a.service.Record(time.Now())
+	var result StatsResult
+	a.service.Read(func(s *State) { result, err = a.service.monitor.Stats(s, rangeName, tag, time.Now()) })
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, result, nil
+}
+
+func (a *API) clients(r *http.Request) (int, any, error) {
+	tag, err := a.statsUser(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	a.service.Record(time.Now())
+	var clients []clientView
+	a.service.Read(func(s *State) { clients = a.service.monitor.Clients(s, tag) })
+	return http.StatusOK, map[string]any{"clients": clients}, nil
+}
+
+func (a *API) keyQR(r *http.Request) (int, any, error) {
+	var issued IssuedKey
+	var err error
+	found := false
+	a.service.Read(func(s *State) {
+		u := s.User(r.PathValue("id"))
+		if u == nil {
+			return
+		}
+		for _, k := range u.Keys {
+			if k.ID == r.PathValue("keyID") {
+				found = true
+				issued, err = s.Render(u, k)
+			}
+		}
+	})
+	if !found {
+		return 0, nil, fmt.Errorf("key %w", errNotFound)
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	content, err := qrContent(issued, r.URL.Query().Get("content"))
+	if err != nil {
+		return 0, nil, err
+	}
+	switch r.URL.Query().Get("format") {
+	case "", "svg":
+		svg, err := QRSVG(content)
+		if err != nil {
+			return 0, nil, InputError{err}
+		}
+		return http.StatusOK, rawBody{"image/svg+xml", svg}, nil
+	case "text":
+		text, err := QRText(content)
+		if err != nil {
+			return 0, nil, InputError{err}
+		}
+		return http.StatusOK, rawBody{"text/plain; charset=utf-8", text}, nil
+	}
+	return 0, nil, InputError{errors.New("format must be svg or text")}
+}
+
+func (a *API) kit(r *http.Request) (int, any, error) {
+	var page string
+	var err error
+	found := false
+	a.service.Read(func(s *State) {
+		if u := s.User(r.PathValue("id")); u != nil {
+			found = true
+			page, err = s.Kit(u)
+		}
+	})
+	if !found {
+		return 0, nil, fmt.Errorf("user %w", errNotFound)
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, rawBody{"text/html; charset=utf-8", page}, nil
+}
+
+// dashboardInfo gives the administrator what is needed to open the dashboard.
+func (a *API) dashboardInfo(*http.Request) (int, any, error) {
+	var info map[string]any
+	a.service.Read(func(s *State) {
+		info = map[string]any{"port": s.Dashboard.Port, "public": s.Dashboard.Public, "token": s.Dashboard.Token, "hostname": s.Hostname}
+	})
+	return http.StatusOK, info, nil
 }
 
 // --- throttling ---

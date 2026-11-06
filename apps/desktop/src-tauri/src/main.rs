@@ -37,9 +37,57 @@ async fn vpn_request(action: Action) -> Response {
     .await
 }
 
+/// Saves a connection kit page in the user's Downloads folder. WebView2 cannot download blob:
+/// links from the app's custom scheme, so the shell writes the file itself: an HTML name built
+/// from safe characters, never overwriting an existing file, at most 4 MiB.
+#[tauri::command]
+fn save_download(app: tauri::AppHandle, name: String, content: String) -> Result<String, String> {
+    use std::io::Write;
+    if content.len() > 4 << 20 {
+        return Err("The file is too large".into());
+    }
+    let stem: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(60)
+        .collect();
+    let stem = if stem.is_empty() {
+        "ghostlink-kit".to_string()
+    } else {
+        stem
+    };
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|_| "Could not find your Downloads folder".to_string())?;
+    for n in 0..100 {
+        let file_name = if n == 0 {
+            format!("{stem}.html")
+        } else {
+            format!("{stem} ({n}).html")
+        };
+        let path = dir.join(file_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(content.as_bytes())
+                    .and_then(|_| file.sync_all())
+                    .map_err(|_| "Could not write the file".to_string())?;
+                return Ok(path.display().to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err("Could not create the file in Downloads".into()),
+        }
+    }
+    Err("Too many files with this name in Downloads".into())
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![vpn_request])
+        .invoke_handler(tauri::generate_handler![vpn_request, save_download])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Open Ghostlink", true, None::<&str>)?;
             let disconnect =

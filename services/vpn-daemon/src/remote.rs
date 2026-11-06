@@ -33,6 +33,7 @@ enum Plan {
     Call {
         key: ManagementKey,
         op: ServerOp,
+        client: server_admin::AdminClient,
     },
 }
 
@@ -105,7 +106,7 @@ pub(crate) async fn handle(daemon: &Mutex<Daemon>, request: Request) -> Response
                 .finish_add(name, key, replace, &info)
                 .unwrap_or_else(|_| Response::err("internal", "Service storage failed")),
         },
-        Plan::Call { key, op } => match server_admin::call(&key, &op).await {
+        Plan::Call { key, op, client } => match client.call(&key, &op).await {
             Err(error) => admin_error(error),
             Ok(value) => match op {
                 // 3. Saving a new key on this device needs the lock again.
@@ -186,7 +187,21 @@ impl Daemon {
                         ));
                     }
                 }
-                Ok(Plan::Call { key, op })
+                // Reuse this server's client while its key is unchanged.
+                let identity = format!("{}|{}", key.api_url, key.cert_sha256);
+                let mut clients = self
+                    .admin_clients
+                    .lock()
+                    .map_err(|_| Response::err("internal", "Service state is unavailable"))?;
+                let client = match clients.get(&server) {
+                    Some((known, client)) if *known == identity => client.clone(),
+                    _ => {
+                        let client = server_admin::AdminClient::new(&key).map_err(admin_error)?;
+                        clients.insert(server.clone(), (identity, client.clone()));
+                        client
+                    }
+                };
+                Ok(Plan::Call { key, op, client })
             }
             _ => Err(Response::err(
                 "internal",

@@ -106,6 +106,25 @@ The client service manages servers through `core/vpn-engine/src/server_admin.rs`
 - **Requests:** typed operations mapped to fixed paths.
 - **Bypass while connected:** while a tunnel is up, `worker_session::config_with_direct` routes each managed server's API `host:port` to `direct` (by IP, or by domain plus local DNS) right after the health rule.
 
+## Monitoring (v0.4.0)
+
+`internal/server/monitor.go` is the router `ConnectionTracker`. For each routed connection, packet connection or pre-matched flow, it attaches counters selected from the metadata sing-box already provides:
+- `User`, for up and down totals and a pending counter for data limits;
+- `Inbound`, the protocol used;
+- `Protocol`, the sniffed traffic type;
+- `Domain` or the FQDN destination, only when site stats are on. Domains map through a small service table or else `publicsuffix`, and are capped at 500 labels per user per day.
+
+Open connections are counted by wrappers that embed sing's counter conns, so upstream and zero-copy interfaces are kept, and they decrement once on `Close`/`CloseFlow`.
+
+Periodic work in `service.go`:
+- **Every second:** a sampler turns totals into per-user rates and a 120-sample server series.
+- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, a WireGuard/AmneziaWG peer poll, and a disk check.
+- **Every 5 min:** a save with rotation.
+
+The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=` and `last_handshake_time_*`) supplies real client addresses and online state for WireGuard-family users, whose routed source is only a tunnel address.
+
+The dashboard (`dashboard.go` with embedded static files) serves the same API mux under `/api/` after its own session checks, and the server commands (`admin.go`) call the API over loopback. All three front ends share one implementation.
+
 ## Process notes
 
 - **Close race in the TUN adapter:** the adapter (`internal/awg/tun.go`) makes `Close` wait for writes in flight and refuses later writes. amneziawg-go closes the TUN before stopping peers, and sing-box's stack dereferences a detached dispatcher on a late write. This crashed an AmneziaWG client on Linux CI and would have crashed the server on reloads.

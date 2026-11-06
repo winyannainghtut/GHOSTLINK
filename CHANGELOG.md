@@ -4,6 +4,48 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
+### Added
+
+- **Server monitoring:**
+  - live speed per user, open connections, who is online, and the last 2 minutes of server traffic;
+  - server health: CPU, memory, disk, network, uptime;
+  - traffic types (Web, QUIC/video, DNS, calls, BitTorrent, SSH, remote desktop, other) and protocols used, per user and in total;
+  - usage history: hourly for 7 days and daily for 90;
+  - the addresses users connected from: Shadowsocks/VLESS sources, and WireGuard/AmneziaWG endpoints from the engine.
+- **Top services per user**, opt-in and off by default:
+  - totals per service (YouTube, Netflix, TikTok…) or site;
+  - kept 30 days, never page addresses or times;
+  - turning it off deletes them.
+- **Automatic rotation of recorded traffic:**
+  - age-based retention (configurable);
+  - a hard size limit for the history file (default 20 MB; oldest detail goes first);
+  - a low-disk guard that pauses detailed recording below 500 MB or 5 % free.
+- **Manage on the server:** `sudo ghostlink-server users | user | key | keys | kit | rules | usage | stats | clients | top | settings | set | site-stats | dashboard`.
+  - These go through the server's own API on loopback.
+  - Users can be named.
+  - `key add` prints a QR code in the terminal, and `top` shows live speeds.
+- **Web dashboard** on its own port, never 443:
+  - **Private by default:** loopback only, reached through an SSH tunnel.
+  - **Opt-in public mode:** HTTPS on that port.
+  - **Sign-in:** a login link with the token after `#`, then an HttpOnly SameSite=Strict session, a CSRF header, a Host check against DNS rebinding, and throttling.
+  - **Pages:** overview, users, keys with QR codes, statistics, rules and settings.
+- **QR codes** for every key, as SVG for the app and dashboard or text for terminals. WireGuard/AmneziaWG keys offer both `.conf` (WireGuard/AmneziaWG apps) and `vpn://` (AmneziaVPN).
+- **Connection kit:** one self-contained HTML page per user with all of their keys, QR codes and per-app instructions (Outline, WireGuard, AmneziaWG/AmneziaVPN, v2rayNG/Hiddify/Streisand/Shadowrocket, Ghostlink).
+- **Ghostlink app:**
+  - a live panel on each server page;
+  - live speed and online state per user;
+  - a statistics dialog per user and for the whole server;
+  - QR codes and **Save connection kit** (saved to your Downloads folder, never overwriting);
+  - monitoring settings.
+- **CLI:** `ghostlink server live | stats | clients`, `server keys qr | kit`, and `server set --site-stats on|off --history-days --site-days --history-max-mb`.
+
+### Changed
+
+- User names on a server are now unique (ignoring case), so they can address users.
+- The service reuses one pinned connection per managed server, so live updates don't repeat the TLS handshake.
+
 ## [0.3.1] - 2026-11-06
 
 ### Fixed
@@ -125,7 +167,8 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.0...v0.2.1
