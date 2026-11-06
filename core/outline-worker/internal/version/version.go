@@ -6,7 +6,7 @@
 package version
 
 const (
-	Ghostlink = "0.3.0"
+	Ghostlink = "0.3.1"
 	// Engines names the unmodified upstream implementations linked into both programs.
 	Engines = "sing-box 1.14.4; amneziawg-go 3.1.20260828"
 	// Worker is the exact line `ghostlink-tunnel version` prints; the Rust service requires it.

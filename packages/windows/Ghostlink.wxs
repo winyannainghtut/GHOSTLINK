@@ -15,7 +15,7 @@
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="Ghostlink">
         <Component Id="Desktop" Guid="*" Win64="yes">
-          <File Id="DesktopExe" Source="$(var.Stage)\ghostlink-desktop.exe" KeyPath="yes"><Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Ghostlink" WorkingDirectory="INSTALLFOLDER" Advertise="yes" /></File>
+          <File Id="DesktopExe" Source="$(var.Stage)\ghostlink-desktop.exe" KeyPath="yes"><Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Ghostlink" Description="Ghostlink VPN" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="Ghostlink.ico" /><Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="Ghostlink" Description="Ghostlink VPN" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="Ghostlink.ico" /></File>
         </Component>
         <Component Id="Cli" Guid="*" Win64="yes">
           <File Id="CliExe" Source="$(var.Stage)\ghostlink.exe" KeyPath="yes" />
@@ -34,12 +34,14 @@
         <Directory Id="LicensesFolder" Name="licenses" />
       </Directory></Directory>
       <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
     </Directory>
     <Feature Id="MainFeature" Title="Ghostlink" Level="1">
       <ComponentRef Id="Desktop" /><ComponentRef Id="Cli" /><ComponentRef Id="Mcp" /><ComponentRef Id="Daemon" /><ComponentRef Id="TunnelWorker" /><ComponentRef Id="InstallationMetadata" />
       <ComponentGroupRef Id="LicenseFiles" />
     </Feature>
-    <Icon Id="GhostlinkIcon" SourceFile="$(var.Root)\apps\desktop\src-tauri\icons\icon.ico" />
-    <Property Id="ARPPRODUCTICON" Value="GhostlinkIcon" />
+    <!-- Advertised shortcuts show an icon only when its Id ends in .ico or .exe. -->
+    <Icon Id="Ghostlink.ico" SourceFile="$(var.Root)\apps\desktop\src-tauri\icons\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Ghostlink.ico" />
   </Product>
 </Wix>

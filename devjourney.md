@@ -8,6 +8,14 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### Later on November 6: v0.3.1 — first real Windows install
+
+The user installed the v0.3.0 MSI and found two problems:
+- **Unreachable service:** the app reported "Cannot reach the authorized local Ghostlink service". The client's identity check opened the SYSTEM service's process token, which a standard user may not do. It now checks the pipe owner. The fixed CLI was confirmed against the user's real installed service.
+- **No icon:** the Start-menu shortcut had none. It now uses an `.ico` icon ID, and a desktop shortcut was added.
+
+The user also pasted a real Outline access key into the chat. They were advised to rotate it, and the key was not used.
+
 ### Later on November 6: v0.3.0 — Ghostlink server and management from the app
 
 - **v0.2.1 released as a draft:** client `.deb`/`.rpm` with a real systemd install test in CI, and the worker SIGPIPE fix.

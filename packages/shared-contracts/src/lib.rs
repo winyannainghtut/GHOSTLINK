@@ -449,6 +449,14 @@ pub async fn connect(endpoint: &str) -> anyhow::Result<Stream> {
     }
 }
 
+/// Refuses a pipe that another, unprivileged account could have created (pipe squatting).
+///
+/// The pipe's owner identifies who created it, and any client may read it. A service running
+/// as SYSTEM creates objects owned by BUILTIN\Administrators (its default owner) or SYSTEM.
+/// A development service owns its pipe as the user who runs it. A process can only make
+/// itself the owner of an object if that SID is its own user or an enabled owner group, so an
+/// ordinary process cannot fake SYSTEM or Administrators ownership. Opening the server
+/// process's token instead would fail for standard users when the service runs as SYSTEM.
 #[cfg(windows)]
 fn verify_pipe_server(
     pipe: &tokio::net::windows::named_pipe::NamedPipeClient,
@@ -456,55 +464,52 @@ fn verify_pipe_server(
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::{
         Foundation::*,
-        Security::*,
-        System::{Pipes::GetNamedPipeServerProcessId, Threading::*},
+        Security::{Authorization::*, *},
+        System::Threading::*,
     };
-    unsafe fn sid(token: HANDLE) -> anyhow::Result<Vec<u8>> {
-        let mut size = 0;
-        unsafe {
-            GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
-        }
-        let mut data = vec![0u8; size as usize];
-        anyhow::ensure!(
-            unsafe {
-                GetTokenInformation(token, TokenUser, data.as_mut_ptr().cast(), size, &mut size)
-            } != 0,
-            "Cannot inspect pipe server identity"
-        );
-        Ok(data)
-    }
     unsafe {
-        let mut pid = 0;
-        anyhow::ensure!(
-            GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) != 0,
-            "Cannot identify pipe server"
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let status = GetSecurityInfo(
+            pipe.as_raw_handle() as HANDLE,
+            SE_KERNEL_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
         );
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        anyhow::ensure!(!process.is_null(), "Cannot inspect pipe server");
-        let mut server_token = std::ptr::null_mut();
-        let mut own_token = std::ptr::null_mut();
-        let ok = OpenProcessToken(process, TOKEN_QUERY, &mut server_token) != 0
-            && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut own_token) != 0;
-        CloseHandle(process);
+        anyhow::ensure!(
+            status == ERROR_SUCCESS && !owner.is_null(),
+            "Cannot inspect the pipe owner"
+        );
         let result = (|| {
-            anyhow::ensure!(ok, "Cannot inspect pipe server token");
-            let server = sid(server_token)?;
-            let own = sid(own_token)?;
-            let server_sid = (*(server.as_ptr().cast::<TOKEN_USER>())).User.Sid;
-            let own_sid = (*(own.as_ptr().cast::<TOKEN_USER>())).User.Sid;
+            if IsWellKnownSid(owner, WinLocalSystemSid) != 0
+                || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+            {
+                return Ok(());
+            }
+            let mut token = std::ptr::null_mut();
             anyhow::ensure!(
-                EqualSid(server_sid, own_sid) != 0
-                    || IsWellKnownSid(server_sid, WinLocalSystemSid) != 0,
-                "Pipe server must run as this user or SYSTEM"
+                OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) != 0,
+                "Cannot inspect this process"
+            );
+            let mut size = 0;
+            GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
+            let mut data = vec![0u8; size as usize];
+            let read =
+                GetTokenInformation(token, TokenUser, data.as_mut_ptr().cast(), size, &mut size);
+            CloseHandle(token);
+            anyhow::ensure!(read != 0, "Cannot inspect this process");
+            let own = (*(data.as_ptr().cast::<TOKEN_USER>())).User.Sid;
+            anyhow::ensure!(
+                EqualSid(owner, own) != 0,
+                "The pipe was not created by SYSTEM, an administrator or this user"
             );
             Ok(())
         })();
-        if !server_token.is_null() {
-            CloseHandle(server_token);
-        }
-        if !own_token.is_null() {
-            CloseHandle(own_token);
-        }
+        LocalFree(descriptor as HLOCAL);
         result
     }
 }

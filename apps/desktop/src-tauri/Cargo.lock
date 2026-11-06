@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink-contracts"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ghostlink-contracts",
  "serde_json",
