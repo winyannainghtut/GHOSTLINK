@@ -6,6 +6,8 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -106,7 +108,49 @@ func TestAdminCommands(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &users); err != nil || users[0].Enabled || users[0].DataLimitBytes != 0 {
 		t.Fatalf("json users: %v %+v", err, users)
 	}
+	// Speed limits, in bytes per second.
+	must("Updated Alice", "user", "speed", "Alice", "2MB")
+	must("2.0 MB/s", "users")
+	must("Saved", "set", "--speed-limit", "500KB/s")
+	must("Default speed limit: 500 KB/s per client", "settings")
+	must("Updated Alice", "user", "speed", "Alice", "default")
+	must("500 KB/s (default)", "users")
+	must("Updated Alice", "user", "speed", "Alice", "none")
+	must("no limit", "users")
+	refused("look like 2MB", "user", "speed", "Alice", "fast")
+	refused("up to 1.25GB", "user", "speed", "Alice", "5GB")
+	must("Added Bob", "user", "add", "Bob", "--speed", "1.5MB")
+	if out := must("[", "--json", "users"); !strings.Contains(out, `"speed_limit_bps": 1500000`) {
+		t.Fatalf("Bob's speed limit: %s", out)
+	}
+	must("Saved", "set", "--speed-limit", "none")
+	must("Default speed limit: none", "settings")
 	refused("no user called", "user", "remove", "Mallory")
 	must("Removed Alice", "user", "remove", "Alice")
+	must("Removed Bob", "user", "remove", "Bob")
 	must("No users yet", "users")
+
+	// Outline's files, imported from a directory (which is left as it was).
+	dir := t.TempDir()
+	refused("cannot read Outline's shadowbox_config.json", "import-outline", "--dir", dir)
+	port := freeSharedPort(t)
+	serverJSON, keysJSON := outlineFiles("127.0.0.1", port, nil,
+		map[string]any{"name": "Phone", "password": "cGhvbmUtcGFzc3dvcmQ", "port": port},
+		map[string]any{"name": "Old", "password": "b2xkLXBhc3N3b3Jk", "port": 80})
+	for name, data := range map[string][]byte{outlineServerFile: serverJSON, outlineKeysFile: keysJSON} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := must("Check only", "import-outline", "--dir", dir, "--check")
+	if !strings.Contains(check, "2 clients") || !strings.Contains(check, "Old: it uses port 80") {
+		t.Fatalf("import-outline --check:\n%s", check)
+	}
+	must("No users yet", "users")
+	must("Imported from Outline", "import-outline", "--dir", dir)
+	must("Phone", "users")
+	if _, err := os.Stat(filepath.Join(dir, outlineKeysFile)); err != nil {
+		t.Fatalf("import-outline touched its input: %v", err)
+	}
+	refused("already has clients", "import-outline", "--dir", dir)
 }

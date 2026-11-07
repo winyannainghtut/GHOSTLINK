@@ -201,6 +201,55 @@ jobs:
           sudo apt-get purge -y ghostlink-server
           if docker ps -a --format '{{.Names}}' | grep -qx ghostlink-server; then echo "container left after purge" >&2; exit 1; fi
           test ! -e /var/lib/ghostlink-server && ! id ghostlink-server 2>/dev/null
+      - name: Smoke-test the migration from Outline (installer --migrate-outline, rollback)
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -eu
+          deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
+          # A fake Outline: shadowbox's files, and containers named like Outline's that hold its port.
+          sudo mkdir -p /opt/outline/persisted-state
+          jq -n '{hostname: "127.0.0.1", portForNewAccessKeys: 45678, name: "CI Outline", accessKeyDataLimit: {bytes: 50000000000}}' |
+            sudo tee /opt/outline/persisted-state/shadowbox_server_config.json >/dev/null
+          jq -n '{nextId: 3, accessKeys: [
+              {id: "0", name: "Phone", password: "cGhvbmUtcGFzc3dvcmQ", port: 45678, encryptionMethod: "chacha20-ietf-poly1305"},
+              {id: "1", name: "", password: "a2V5LW9uZS1wYXNz", port: 45678},
+              {id: "2", name: "Router", password: "cm91dGVyLXBhc3M", port: 45679, encryptionMethod: "aes-256-gcm"},
+              {id: "3", name: "Old", password: "b2xkLXBhc3M", port: 443}]}' |
+            sudo tee /opt/outline/persisted-state/shadowbox_config.json >/dev/null
+          sudo sha256sum /opt/outline/persisted-state/*.json > outline.sha256
+          docker run -d --name shadowbox --restart always --network host busybox:1.36 httpd -f -p 45678
+          docker run -d --name watchtower --restart always busybox:1.36 sleep infinity
+          # --check installs Ghostlink next to Outline and only reports.
+          cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline --check | tee check.txt
+          grep -q 'Check only' check.txt && grep -q '4 clients' check.txt && grep -q 'Old: it uses port 443' check.txt
+          test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
+          sudo ghostlink-server users | grep -q 'No users yet'
+          # The migration: Outline stops for good, Ghostlink serves its ports and keys.
+          cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline | tee migrate.txt
+          grep -q 'Imported from Outline' migrate.txt && grep -q 'To go back to Outline' migrate.txt
+          grep -q '45679/udp  Shadowsocks (keys from Outline)' migrate.txt
+          for name in shadowbox watchtower; do
+            test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' "$name")" = "false no"
+          done
+          ss -ltn | grep -q ':45678 ' && ss -ltn | grep -q ':45679 ' && ss -lun | grep -q ':45678 '
+          sudo ghostlink-server --json users | jq -e '[.[].name] == ["Phone", "Key 1", "Router", "Old"] and .[0].data_limit_bytes == 50000000000'
+          credential() { printf '%s' "$1" | base64 -w0 | tr '+/' '-_' | tr -d '='; }
+          sudo ghostlink-server keys Phone --show | grep -qF "ss://$(credential chacha20-ietf-poly1305:cGhvbmUtcGFzc3dvcmQ)@127.0.0.1:45678/"
+          sudo ghostlink-server keys Router --show | grep -qF "ss://$(credential aes-256-gcm:cm91dGVyLXBhc3M)@127.0.0.1:45679/"
+          sudo ghostlink-server settings | grep -q '45679 for keys from Outline'
+          # The private copies are gone; Outline's own files are as they were.
+          sudo test ! -e /var/lib/ghostlink-server/outline-import
+          sudo sha256sum /opt/outline/persisted-state/*.json | diff - outline.sha256
+          # A second run is refused before Outline is touched.
+          if sudo ghostlink-server migrate-outline 2> again.txt; then echo "a second migration went through" >&2; exit 1; fi
+          grep -q 'already has clients' again.txt
+          # The rollback the migration printed brings Outline back.
+          sudo ghostlink-server stop && sudo docker update --restart=always shadowbox watchtower && sudo docker start shadowbox watchtower
+          test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
+          docker rm -f shadowbox watchtower
+          sudo rm -rf /opt/outline
+          sudo apt-get purge -y ghostlink-server
       - name: Inspect the server .rpm
         env:
           ARCH: ${{ inputs.arch }}

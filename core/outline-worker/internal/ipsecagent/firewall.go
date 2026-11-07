@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"ghostlink.local/outline-worker/internal/hostfw"
@@ -21,6 +22,8 @@ const (
 	chainDNAT    = "GHOSTLINK-IPSEC-PRE"
 	chainNAT     = "GHOSTLINK-IPSEC-POST"
 	chainMSS     = "GHOSTLINK-IPSEC-MSS"
+	// chainLimit drops what capped clients send or receive above their speed limit.
+	chainLimit = "GHOSTLINK-IPSEC-LIM"
 )
 
 // jumps are the rules placed first in built-in chains: table, chain, target.
@@ -55,14 +58,46 @@ func ipv4Ranges(cidrs []string) []string {
 	return out
 }
 
+// limitRules polices the speed of capped clients: for each connected session, traffic to and
+// from its virtual IP above the client's rate is dropped. A client's sessions share one
+// hashlimit bucket per direction (rules with the same name share it), so the cap holds for the
+// client as a whole. hashlimit counts bytes with a "b/s" rate.
+func limitRules(d ipsecproto.Desired, sas []ipsecproto.SA) []string {
+	byIdentity := map[string]ipsecproto.SpeedLimit{}
+	for _, l := range d.SpeedLimits {
+		for _, id := range l.Identities {
+			byIdentity[strings.ToLower(id)] = l
+		}
+	}
+	var rules []string
+	seen := map[netip.Addr]bool{}
+	for _, sa := range sas {
+		limit, capped := byIdentity[strings.ToLower(sa.Identity)]
+		addr, err := netip.ParseAddr(sa.VirtualIP)
+		if !capped || err != nil || !addr.Is4() || seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		for _, direction := range []struct{ match, suffix string }{{"-d", "d"}, {"-s", "u"}} {
+			rules = append(rules, fmt.Sprintf("-A %s %s %s/32 -m hashlimit --hashlimit-above %db/s --hashlimit-name gl%s%s -j DROP",
+				chainLimit, direction.match, addr, limit.BytesPerSecond, limit.Name, direction.suffix))
+		}
+	}
+	slices.Sort(rules)
+	return rules
+}
+
 // Rules renders iptables-restore input for each table. Restoring with --noflush replaces only
-// the chains declared here, atomically per table.
+// the chains declared here, atomically per table. sas are the connected sessions, for the
+// speed limits.
 //
 // VPN clients may reach the internet, minus the server's always-blocked internal ranges and the
 // administrator's blocked addresses and ports; DNS (any resolver) goes to the server's DNS so
 // global site blocks apply; nothing else on this host is reachable from the pools.
-func Rules(d ipsecproto.Desired) map[string]string {
-	filter := []string{"*filter", ":" + chainForward + " - [0:0]", ":" + chainOut + " - [0:0]", ":" + chainInput + " - [0:0]"}
+func Rules(d ipsecproto.Desired, sas []ipsecproto.SA) map[string]string {
+	filter := []string{"*filter", ":" + chainForward + " - [0:0]", ":" + chainOut + " - [0:0]", ":" + chainInput + " - [0:0]",
+		":" + chainLimit + " - [0:0]", "-A " + chainForward + " -j " + chainLimit}
+	filter = append(filter, limitRules(d, sas)...)
 	nat := []string{"*nat", ":" + chainDNAT + " - [0:0]", ":" + chainNAT + " - [0:0]"}
 	mangle := []string{"*mangle", ":" + chainMSS + " - [0:0]"}
 	f := d.Firewall
@@ -117,7 +152,7 @@ type Firewall struct {
 }
 
 var chains = map[string][]string{
-	"filter": {chainForward, chainOut, chainInput},
+	"filter": {chainForward, chainOut, chainInput, chainLimit},
 	"nat":    {chainDNAT, chainNAT},
 	"mangle": {chainMSS},
 }
@@ -140,8 +175,8 @@ func DetectBackend(ctx context.Context) string { return hostfw.Detect(ctx) }
 func (f *Firewall) host() *hostfw.Firewall { return &hostfw.Firewall{Backend: f.Backend} }
 
 // Apply replaces the agent's chains and makes sure each is jumped to from its built-in chain.
-func (f *Firewall) Apply(ctx context.Context, d ipsecproto.Desired) error {
-	if err := f.host().Restore(ctx, Rules(d)); err != nil {
+func (f *Firewall) Apply(ctx context.Context, d ipsecproto.Desired, sas []ipsecproto.SA) error {
+	if err := f.host().Restore(ctx, Rules(d, sas)); err != nil {
 		return err
 	}
 	return f.EnsureJumps(ctx)

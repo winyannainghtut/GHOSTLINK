@@ -71,6 +71,7 @@ func NewAPI(service *Service, version string) *API {
 		"GET /mesh/rules":                      a.getMeshRules,
 		"PUT /mesh/rules":                      a.putMeshRules,
 		"GET /mesh/topology":                   a.meshTopology,
+		"POST /import/outline":                 a.importOutline,
 	}
 	for pattern, handler := range routes {
 		a.mux.HandleFunc(pattern, a.wrap(handler))
@@ -184,14 +185,18 @@ type serverInfo struct {
 	Protocols         map[string]protocolInfo `json:"protocols"`
 	VLESSHandshake    string                  `json:"vless_handshake"`
 	ShadowsocksMethod string                  `json:"shadowsocks_method"`
-	Users             int                     `json:"users"`
-	SiteStats         bool                    `json:"site_stats"`
-	HistoryDays       int                     `json:"history_days"`
-	SiteDays          int                     `json:"site_days"`
-	HistoryMaxMB      int                     `json:"history_max_mb"`
-	DashboardPort     uint16                  `json:"dashboard_port"`
-	DashboardPublic   bool                    `json:"dashboard_public"`
-	IPsecComponent    ipsecComponent          `json:"ipsec_component"`
+	// ShadowsocksExtraPorts are the ports of keys imported from Outline that kept their own port.
+	ShadowsocksExtraPorts []uint16 `json:"shadowsocks_extra_ports,omitempty"`
+	Users                 int      `json:"users"`
+	SiteStats             bool     `json:"site_stats"`
+	HistoryDays           int      `json:"history_days"`
+	SiteDays              int      `json:"site_days"`
+	HistoryMaxMB          int      `json:"history_max_mb"`
+	// DefaultSpeedLimitBps caps every client without a limit of its own, bytes/s (0: none).
+	DefaultSpeedLimitBps uint64         `json:"default_speed_limit_bps"`
+	DashboardPort        uint16         `json:"dashboard_port"`
+	DashboardPublic      bool           `json:"dashboard_public"`
+	IPsecComponent       ipsecComponent `json:"ipsec_component"`
 	// AddressPools are the WireGuard and AmneziaWG tunnel subnets: how full each is and the
 	// address the next key gets.
 	AddressPools []addressPool `json:"address_pools"`
@@ -221,7 +226,8 @@ func (a *API) serverInfo(s *State) serverInfo {
 		},
 		IPsecComponent: a.service.ipsecComponent(time.Now()), AddressPools: s.addressPools(),
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
-		SiteStats: s.Monitor.SiteStats, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
+		ShadowsocksExtraPorts: s.shadowsocksPorts()[1:],
+		SiteStats:             s.Monitor.SiteStats, DefaultSpeedLimitBps: s.DefaultSpeedLimitBps, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
 		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
 	}
 }
@@ -253,6 +259,8 @@ type serverPatch struct {
 	ResetDashboardToken bool    `json:"reset_dashboard_token"`
 	// RotateIPsecPSK replaces the IPsec group key; every IPsec PSK profile must be reinstalled.
 	RotateIPsecPSK bool `json:"rotate_ipsec_psk"`
+	// DefaultSpeedLimitBps caps every client without a limit of its own, bytes/s (0: none).
+	DefaultSpeedLimitBps *uint64 `json:"default_speed_limit_bps"`
 }
 
 func (s *State) protocolSettings(protocol string) (*bool, *uint16) {
@@ -317,6 +325,12 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 		}
 		if s.Monitor.siteDays() > s.Monitor.historyDays() {
 			return InputError{errors.New("site_days cannot be longer than history_days")}
+		}
+		if patch.DefaultSpeedLimitBps != nil {
+			if *patch.DefaultSpeedLimitBps > maxSpeedLimitBps {
+				return InputError{errors.New("default_speed_limit_bps must be 0 (none) or 1-1250000000 bytes per second")}
+			}
+			s.DefaultSpeedLimitBps = *patch.DefaultSpeedLimitBps
 		}
 		if patch.HistoryMaxMB != nil {
 			if *patch.HistoryMaxMB < 1 || *patch.HistoryMaxMB > 1024 {
@@ -408,22 +422,26 @@ type userView struct {
 	ExemptFromGlobalRules bool         `json:"exempt_from_global_rules"`
 	Rules                 Rules        `json:"rules"`
 	Keys                  []keySummary `json:"keys"`
+	// SpeedLimitBps is the client's own setting in bytes per second (0 server default, -1 none);
+	// EffectiveSpeedLimitBps is the cap that applies (0 none).
+	SpeedLimitBps          int64 `json:"speed_limit_bps"`
+	EffectiveSpeedLimitBps int64 `json:"effective_speed_limit_bps"`
 }
 
-func viewUser(u *User) userView {
+func viewUser(s *State, u *User) userView {
 	keys := []keySummary{}
 	for _, k := range u.Keys {
 		keys = append(keys, keySummary{k.ID, k.Protocol, k.CreatedUnix, k.Auth, k.Address})
 	}
 	return userView{u.ID, u.Name, u.CreatedUnix, u.Enabled, u.DataLimitBytes, u.UsageBytes, u.OverLimit,
-		u.ExemptFromGlobalRules, u.Rules, keys}
+		u.ExemptFromGlobalRules, u.Rules, keys, u.SpeedLimitBps, s.SpeedLimitBps(u)}
 }
 
 func (a *API) listUsers(*http.Request) (int, any, error) {
 	users := []userView{}
 	a.service.Read(func(s *State) {
 		for _, u := range s.Users {
-			users = append(users, viewUser(u))
+			users = append(users, viewUser(s, u))
 		}
 	})
 	return http.StatusOK, users, nil
@@ -433,7 +451,7 @@ func (a *API) getUser(r *http.Request) (int, any, error) {
 	var view *userView
 	a.service.Read(func(s *State) {
 		if u := s.User(r.PathValue("id")); u != nil {
-			v := viewUser(u)
+			v := viewUser(s, u)
 			view = &v
 		}
 	})
@@ -450,6 +468,8 @@ type userChange struct {
 	ExemptFromGlobalRules *bool   `json:"exempt_from_global_rules"`
 	Rules                 *Rules  `json:"rules"`
 	ResetUsage            bool    `json:"reset_usage"`
+	// SpeedLimitBps in bytes per second: 0 follows the server default, -1 means no limit.
+	SpeedLimitBps *int64 `json:"speed_limit_bps"`
 }
 
 // UserByName finds a user by name, ignoring case.
@@ -491,6 +511,12 @@ func (c userChange) apply(s *State, u *User) error {
 	if c.ResetUsage {
 		u.UsageBytes = 0
 	}
+	if c.SpeedLimitBps != nil {
+		if v := *c.SpeedLimitBps; v < noSpeedLimit || v > maxSpeedLimitBps {
+			return InputError{errors.New("speed_limit_bps must be -1 (no limit), 0 (server default) or 1-1250000000 bytes per second")}
+		}
+		u.SpeedLimitBps = *c.SpeedLimitBps
+	}
 	u.refreshLimit()
 	return nil
 }
@@ -514,7 +540,7 @@ func (a *API) createUser(r *http.Request) (int, any, error) {
 			return err
 		}
 		s.Users = append(s.Users, u)
-		view = viewUser(u)
+		view = viewUser(s, u)
 		return nil
 	})
 	if err != nil {
@@ -537,7 +563,7 @@ func (a *API) patchUser(r *http.Request) (int, any, error) {
 		if err := change.apply(s, u); err != nil {
 			return err
 		}
-		view = viewUser(u)
+		view = viewUser(s, u)
 		return nil
 	})
 	if err != nil {

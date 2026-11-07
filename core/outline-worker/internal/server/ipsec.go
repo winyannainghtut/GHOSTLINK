@@ -70,6 +70,22 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 			}
 		}
 	}
+	// Speed limits of active clients that have IKEv2/IPsec keys (the agent caps their sessions).
+	for _, u := range s.activeUsers() {
+		bps := s.SpeedLimitBps(u)
+		if bps <= 0 {
+			continue
+		}
+		limit := ipsecproto.SpeedLimit{Name: u.Tag(), BytesPerSecond: bps}
+		for _, k := range u.Keys {
+			if (k.Protocol == IKEv2 && desired.IKEv2 != nil) || (k.Protocol == IPsec && desired.IKEv1 != nil) {
+				limit.Identities = append(limit.Identities, k.localIdentity(u))
+			}
+		}
+		if len(limit.Identities) > 0 {
+			desired.SpeedLimits = append(desired.SpeedLimits, limit)
+		}
+	}
 	firewall := ipsecproto.Firewall{
 		Internal: internalRanges, Blocked: s.Rules.BlockedIPs, Ports: append([]string{}, s.Rules.BlockedPorts...),
 		BlockSMTP: s.Rules.BlockSMTP, DNSPort: s.IPsec.DNSPort,

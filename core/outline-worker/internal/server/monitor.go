@@ -46,6 +46,9 @@ type Monitor struct {
 	flushedUp   map[string]int64
 	flushedDn   map[string]int64
 	flushedDet  map[detailKey]int64
+	// speedLimits are the clients' caps in bytes per second (absent: none), applied to their
+	// pacers, also for clients whose counters are created later.
+	speedLimits map[string]int64
 }
 
 type userCounters struct {
@@ -53,6 +56,8 @@ type userCounters struct {
 	pending    atomic.Int64 // both directions since the last Drain
 	active     atomic.Int64
 	lastActive atomic.Int64 // unix seconds
+	// upPace and downPace hold the client to its speed limit, across all its connections.
+	upPace, downPace pacer
 }
 
 type detailKey struct{ user, kind, label string }
@@ -100,9 +105,34 @@ func (m *Monitor) user(tag string) *userCounters {
 	u, ok := m.users[tag]
 	if !ok {
 		u = &userCounters{}
+		if limit := m.speedLimits[tag]; limit > 0 {
+			u.upPace.SetRate(limit)
+			u.downPace.SetRate(limit)
+		}
 		m.users[tag] = u
 	}
 	return u
+}
+
+// SetSpeedLimits sets each client's cap in bytes per second, in both directions (clients not in
+// limits are unlimited). It applies at once, also to open connections; nothing reloads.
+func (m *Monitor) SetSpeedLimits(limits map[string]int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.speedLimits = limits
+	for tag, u := range m.users {
+		u.upPace.SetRate(limits[tag])
+		u.downPace.SetRate(limits[tag])
+	}
+}
+
+// inboundProtocol folds the extra Shadowsocks inbounds of imported Outline keys
+// (shadowsocks-<port>) into shadowsocks.
+func inboundProtocol(tag string) string {
+	if strings.HasPrefix(tag, Shadowsocks+"-") {
+		return Shadowsocks
+	}
+	return tag
 }
 
 func (m *Monitor) detailCounter(key detailKey) *atomic.Int64 {
@@ -164,7 +194,7 @@ func (m *Monitor) counters(metadata adapter.InboundContext) (*userCounters, []*a
 	if !m.detailPaused.Load() {
 		shared := []*atomic.Int64{
 			m.detailCounter(detailKey{metadata.User, "type", trafficType(metadata)}),
-			m.detailCounter(detailKey{metadata.User, "protocol", metadata.Inbound}),
+			m.detailCounter(detailKey{metadata.User, "protocol", inboundProtocol(metadata.Inbound)}),
 		}
 		if m.siteStats.Load() {
 			if label := siteLabel(metadata); label != "" {
@@ -173,8 +203,8 @@ func (m *Monitor) counters(metadata adapter.InboundContext) (*userCounters, []*a
 		}
 		up = append(up, shared...)
 		down = append(down, shared...)
-		if metadata.Inbound == Shadowsocks || metadata.Inbound == VLESS {
-			m.sawClient(metadata.User, metadata.Source.Addr, metadata.Inbound, time.Now())
+		if protocol := inboundProtocol(metadata.Inbound); protocol == Shadowsocks || protocol == VLESS {
+			m.sawClient(metadata.User, metadata.Source.Addr, protocol, time.Now())
 		}
 	}
 	return u, up, down
@@ -206,7 +236,10 @@ func (m *Monitor) RoutedConnection(_ context.Context, conn net.Conn, metadata ad
 	}
 	u, up, down := m.counters(metadata)
 	u.active.Add(1)
-	return &trackedConn{CounterConn: bufio.NewInt64CounterConn(conn, up, down), user: u}
+	// Reading from the client is upload, writing to it download. The pacers are count functions,
+	// so they also run when the copy loop unwraps the connection (see pacer).
+	paced := bufio.NewCounterConn(conn, []N.CountFunc{u.upPace.Wait}, []N.CountFunc{u.downPace.Wait})
+	return &trackedConn{CounterConn: bufio.NewInt64CounterConn(paced, up, down), user: u}
 }
 
 func (m *Monitor) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
@@ -215,7 +248,8 @@ func (m *Monitor) RoutedPacketConnection(_ context.Context, conn N.PacketConn, m
 	}
 	u, up, down := m.counters(metadata)
 	u.active.Add(1)
-	return &trackedPacketConn{CounterPacketConn: bufio.NewInt64CounterPacketConn(conn, up, nil, down, nil), user: u}
+	paced := bufio.NewCounterPacketConn(conn, []N.CountFunc{u.upPace.Wait}, []N.CountFunc{u.downPace.Wait})
+	return &trackedPacketConn{CounterPacketConn: bufio.NewInt64CounterPacketConn(paced, up, nil, down, nil), user: u}
 }
 
 func (m *Monitor) RoutedFlow(_ context.Context, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) tun.FlowTracker {

@@ -26,13 +26,20 @@ usage: sudo ghostlink-server <command>
   stop                     stop the server (it stays stopped until setup or restart)
   remove                   remove the container and image (keeps users and keys)
   version                  print the bundled server version
+  migrate-outline [--check] [--outline-dir /opt/outline]
+                           take over the Outline server on this machine: its access keys
+                           become clients whose ss:// keys keep working, then Outline is
+                           stopped (its files stay as a backup). --check only shows what
+                           would happen
 
 Users, keys, rules and monitoring (also available in the Ghostlink app and the dashboard):
 
   users                                list users, usage and status
-  user add NAME [--limit 50GB] [--exempt]
+  user add NAME [--limit 50GB] [--speed 2MB] [--exempt]
   user enable|disable|remove|reset NAME
   user rename NAME NEW-NAME | user limit NAME 50GB|none | user exempt NAME on|off
+  user speed NAME 2MB|none|default     speed limit in bytes per second (2MB = 2 MB/s),
+                                       download and upload alike, for all of NAME's keys
   key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks; prints a QR code
   key add NAME ikev2|ipsec [--auth eap|certificate|psk] [--address H] [--remote-id ID] [--local-id ID]
                                        built-in VPN of iPhone, iPad and Mac (see ipsec below)
@@ -47,6 +54,7 @@ Users, keys, rules and monitoring (also available in the Ghostlink app and the d
   usage | stats [NAME] [--range 7d] | clients [NAME]
   top [--once]                         live speed per user (Ctrl+C to quit)
   settings | set [--hostname H] [--enable P] [--disable P] [--port P=N] [--history-days N] ...
+  set --speed-limit 2MB|none           default speed limit for clients without their own
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
                                        web dashboard: prints the SSH tunnel command and login link
@@ -378,6 +386,94 @@ profile() {
     echo "iPhone, iPad or Mac installs the VPN (Settings > General > VPN & Device Management)."
 }
 
+# --- migration from Outline ---
+
+# outline_restore puts Outline's containers back as they were (their restart policies are in
+# $outline_policies as NAME=POLICY) and starts them.
+outline_restore() {
+    for entry in $outline_policies; do
+        docker update --restart="${entry#*=}" "${entry%%=*}" >/dev/null 2>&1 || true
+        docker start "${entry%%=*}" >/dev/null 2>&1 || true
+    done
+}
+
+# migrate_outline takes over the Outline server (Jigsaw's shadowbox) on this machine.
+migrate_outline() {
+    check=""
+    outline_dir=/opt/outline
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --check) check=--check; shift ;;
+            --outline-dir) [ $# -ge 2 ] || die "--outline-dir needs a directory"; outline_dir=$2; shift 2 ;;
+            --outline-dir=*) outline_dir=${1#--outline-dir=}; shift ;;
+            *) die "usage: sudo ghostlink-server migrate-outline [--check] [--outline-dir /opt/outline]" ;;
+        esac
+    done
+    need_root migrate-outline
+    need_docker
+    persisted=$outline_dir/persisted-state
+    [ -f "$persisted/shadowbox_config.json" ] ||
+        die "no Outline server here: $persisted/shadowbox_config.json does not exist (if Outline is installed elsewhere, use --outline-dir)"
+    running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+    [ "$running" = "true" ] || die "the Ghostlink server is not running (set it up first: sudo ghostlink-server setup)"
+
+    # Private copies inside the state, which the server reads; Outline's files stay as they are.
+    uid=$(id -u "$ACCOUNT")
+    gid=$(id -g "$ACCOUNT")
+    work=$STATE/outline-import
+    rm -rf "$work"
+    install -d -m 0700 -o "$uid" -g "$gid" "$work"
+    trap 'rm -rf "$work"' EXIT
+    for file in shadowbox_config.json shadowbox_server_config.json; do
+        if [ -f "$persisted/$file" ]; then
+            install -m 0600 -o "$uid" -g "$gid" "$persisted/$file" "$work/$file"
+        fi
+    done
+
+    if [ -n "$check" ]; then
+        admin import-outline --dir "$work" --check
+        echo
+        echo "Outline keeps running. To take it over: sudo ghostlink-server migrate-outline"
+        return 0
+    fi
+    # Check first: a refusal (for example, Ghostlink already has clients) leaves Outline alone.
+    admin import-outline --dir "$work" --check >/dev/null
+
+    # Stop Outline so its ports are free, and keep it from starting again on boot.
+    outline_policies=""
+    for name in shadowbox watchtower; do
+        policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null) || continue
+        outline_policies="$outline_policies $name=${policy:-no}"
+    done
+    if [ -n "$outline_policies" ]; then
+        echo "Stopping Outline (its files in $outline_dir are kept)"
+        for entry in $outline_policies; do
+            docker update --restart=no "${entry%%=*}" >/dev/null
+            docker stop "${entry%%=*}" >/dev/null
+        done
+    fi
+    if ! admin import-outline --dir "$work"; then
+        if [ -n "$outline_policies" ]; then
+            echo "The import did not go through; Outline is starting again." >&2
+            outline_restore
+        fi
+        exit 1
+    fi
+    rm -rf "$work"
+    names=""
+    for entry in $outline_policies; do names="$names ${entry%%=*}"; done
+    cat <<EOF
+
+Outline's access keys now connect to Ghostlink. Outline is stopped and stays off after a
+reboot; its files in $outline_dir are untouched.
+
+To go back to Outline:
+  sudo ghostlink-server stop && sudo docker update --restart=always${names:- shadowbox watchtower} && sudo docker start${names:- shadowbox watchtower}
+When everything works, remove Outline for good:
+  sudo docker rm -f${names:- shadowbox watchtower} && sudo rm -rf $outline_dir
+EOF
+}
+
 command=${1:-}
 [ $# -gt 0 ] && shift
 case "$command" in
@@ -393,6 +489,7 @@ case "$command" in
     mesh) mesh_command "$@" ;;
     ipsec) ipsec_command "$@" ;;
     setup) setup "$@" ;;
+    migrate-outline) migrate_outline "$@" ;;
     show-key) need_root show-key; show_key ;;
     status)
         need_root status

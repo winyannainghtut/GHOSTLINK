@@ -217,6 +217,10 @@ enum ServerCommand {
         /// Replace the IPsec group key (every IPsec PSK profile must be installed again).
         #[arg(long)]
         rotate_ipsec_psk: bool,
+        /// Speed limit for users without their own, in megabytes per second (10^6 bytes per
+        /// second, download and upload alike), or none.
+        #[arg(long, value_name = "MB/s|none")]
+        default_speed_limit: Option<String>,
     },
     /// Live speed per user, online users and server health.
     Live {
@@ -276,6 +280,10 @@ enum ServerUsersCommand {
         /// Data limit in gigabytes (10^9 bytes); the user is cut off when it is reached.
         #[arg(long)]
         data_limit_gb: Option<f64>,
+        /// Speed limit in megabytes per second (10^6 bytes per second, download and upload
+        /// alike, for all the user's keys), none, or default (the server's).
+        #[arg(long, value_name = "MB/s|none|default")]
+        speed_limit: Option<String>,
         /// Do not apply the server-wide rules to this user.
         #[arg(long)]
         exempt_from_global_rules: bool,
@@ -295,6 +303,9 @@ enum ServerUsersCommand {
         /// Data limit in gigabytes; 0 removes the limit.
         #[arg(long)]
         data_limit_gb: Option<f64>,
+        /// Speed limit in megabytes per second, none, or default (the server's).
+        #[arg(long, value_name = "MB/s|none|default")]
+        speed_limit: Option<String>,
         #[arg(long, value_parser = clap::value_parser!(bool))]
         exempt_from_global_rules: Option<bool>,
         /// Start counting this user's data from zero again.
@@ -923,6 +934,11 @@ fn install_help() -> String {
   4. Allow the server's ports in its firewall / cloud security group
      (sudo ghostlink-server status lists them).
 
+Or in one command, which also installs Docker and verifies the package:
+       curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
+Already running Outline there? Add -s -- --migrate-outline (try --migrate-outline --check
+first): every Outline access key becomes a client, and its ss:// key keeps working.
+
 The management key gives full control of the server. Keep it private."
     )
 }
@@ -935,6 +951,42 @@ fn gigabytes(value: f64) -> Result<u64, Response> {
         ));
     }
     Ok((value * 1.0e9).round() as u64)
+}
+
+/// Megabytes per second (10^6 bytes) as bytes per second, from 0.001 to 1250 MB/s.
+fn megabytes_per_second(value: &str) -> Result<i64, Response> {
+    let text = value.trim();
+    let number = text
+        .strip_suffix("MB/s")
+        .or_else(|| text.strip_suffix("mb/s"))
+        .unwrap_or(text)
+        .trim();
+    match number.parse::<f64>() {
+        Ok(mb) if mb.is_finite() && (0.001..=1250.0).contains(&mb) => {
+            Ok((mb * 1.0e6).round() as i64)
+        }
+        _ => Err(Response::err(
+            "invalid_request",
+            "Speed limits are 0.001 to 1250 MB/s (megabytes per second), none or default",
+        )),
+    }
+}
+
+/// A user's speed limit: MB/s, none (-1: no limit whatever the default) or default (0).
+fn user_speed_limit(value: &str) -> Result<i64, Response> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" | "unlimited" => Ok(-1),
+        "default" => Ok(0),
+        _ => megabytes_per_second(value),
+    }
+}
+
+/// The server's default speed limit: MB/s or none (0).
+fn default_speed_limit(value: &str) -> Result<u64, Response> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" | "0" => Ok(0),
+        _ => megabytes_per_second(value).map(|bps| bps as u64),
+    }
 }
 
 fn call(server: &str, op: ServerOp) -> Action {
@@ -979,6 +1031,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             site_days,
             history_max_mb,
             rotate_ipsec_psk,
+            default_speed_limit: speed_default,
         } => {
             let mut protocols = std::collections::BTreeMap::<String, ProtocolPatch>::new();
             for protocol in enable {
@@ -1012,6 +1065,10 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         site_days: *site_days,
                         history_max_mb: *history_max_mb,
                         rotate_ipsec_psk: rotate_ipsec_psk.then_some(true),
+                        default_speed_limit_bps: speed_default
+                            .as_deref()
+                            .map(default_speed_limit)
+                            .transpose()?,
                     },
                 },
             )
@@ -1022,6 +1079,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                 server,
                 name,
                 data_limit_gb,
+                speed_limit,
                 exempt_from_global_rules,
             } => call(
                 server,
@@ -1029,6 +1087,10 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                     change: UserChange {
                         name: Some(name.clone()),
                         data_limit_bytes: data_limit_gb.map(gigabytes).transpose()?,
+                        speed_limit_bps: speed_limit
+                            .as_deref()
+                            .map(user_speed_limit)
+                            .transpose()?,
                         exempt_from_global_rules: Some(*exempt_from_global_rules),
                         ..Default::default()
                     },
@@ -1041,6 +1103,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                 enable,
                 disable,
                 data_limit_gb,
+                speed_limit,
                 exempt_from_global_rules,
                 reset_usage,
             } => call(
@@ -1060,6 +1123,10 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         exempt_from_global_rules: *exempt_from_global_rules,
                         rules: None,
                         reset_usage: *reset_usage,
+                        speed_limit_bps: speed_limit
+                            .as_deref()
+                            .map(user_speed_limit)
+                            .transpose()?,
                     },
                 },
             ),
@@ -1512,4 +1579,27 @@ fn finish_server_response(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_limits_are_megabytes_per_second() {
+        assert_eq!(megabytes_per_second("2").ok(), Some(2_000_000));
+        assert_eq!(megabytes_per_second("1.5 MB/s").ok(), Some(1_500_000));
+        assert_eq!(megabytes_per_second("0.001").ok(), Some(1_000));
+        assert_eq!(megabytes_per_second("1250").ok(), Some(1_250_000_000));
+        for bad in ["0", "-1", "1251", "fast", "NaN", "inf", ""] {
+            assert!(megabytes_per_second(bad).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(user_speed_limit("none").ok(), Some(-1));
+        assert_eq!(user_speed_limit("Default").ok(), Some(0));
+        assert_eq!(user_speed_limit("10").ok(), Some(10_000_000));
+        assert_eq!(default_speed_limit("none").ok(), Some(0));
+        assert_eq!(default_speed_limit("0").ok(), Some(0));
+        assert_eq!(default_speed_limit("2.5").ok(), Some(2_500_000));
+        assert!(default_speed_limit("default").is_err());
+    }
 }

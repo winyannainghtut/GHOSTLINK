@@ -273,7 +273,7 @@ function SetupHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
             {command}
           </button>
           <span className="mt-1.5 block text-[12.5px] text-fg-3">
-            Add <span className="mono">-s -- --hostname YOUR_PUBLIC_IP</span>, <span className="mono">--ipsec</span> for iPhone/iPad/Mac, or <span className="mono">--mesh</span> for a mesh of your Linux servers.
+            Add <span className="mono">-s -- --hostname YOUR_PUBLIC_IP</span>, <span className="mono">--ipsec</span> for iPhone/iPad/Mac, or <span className="mono">--mesh</span> for a mesh of your Linux servers. Already running Outline there? Add <span className="mono">--migrate-outline</span> (try <span className="mono">--migrate-outline --check</span> first): every Outline key becomes a client and keeps working.
           </span>
         </li>
         <li>

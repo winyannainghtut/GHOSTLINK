@@ -7,7 +7,7 @@ import { WaveBackground } from '@shared/WaveBackground';
 import { FinishPicker, Mark, MotionButton, useAppearance } from '@shared/appearance';
 import { Button, IconButton, Segmented, StatusDot, UIProvider, cx } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
-import { megabits } from '@shared/format';
+import { megabytes } from '@shared/format';
 import { useFullscreen } from './fullscreen';
 import { KINDS, isActive, stateLabel, type Profile } from './ipc';
 import { ServiceProvider, useService } from './service';
@@ -132,7 +132,7 @@ function ConnectionIsland() {
             <span className="max-w-[140px] truncate text-white/70">{current?.display_name || current?.name}</span>
             <span className="mono text-white/80">{clock(c.connected_duration_seconds)}</span>
             <span className="num hidden text-white/55 sm:inline">
-              ↓ {megabits(c.receive_bytes_per_second)} ↑ {megabits(c.send_bytes_per_second)} Mbit/s
+              ↓ {megabytes(c.receive_bytes_per_second)} ↑ {megabytes(c.send_bytes_per_second)} MB/s
             </span>
           </>
         )}

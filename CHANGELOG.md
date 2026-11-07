@@ -4,6 +4,34 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-08
+
+### Added
+
+- **Speed limits per client.** One cap per client in bytes per second (for example 2 MB/s), for download and upload alike, shared by all of the client's keys and devices.
+  - **Default for everyone:** an optional server default applies to every client without a limit of its own. A client can also have **no limit**, whatever the default.
+  - **Live:** a change applies within a second to open connections, with no engine restart and nobody disconnected.
+  - **Every protocol:** Shadowsocks, VLESS, WireGuard and AmneziaWG are paced in the server's relay loop, a token bucket per client and direction. IKEv2/IPsec sessions are policed by the IPsec component's firewall (`hashlimit` rules on each session's address, shared by a client's sessions).
+  - **Everywhere you manage the server:**
+    - the client's Settings, New client and Server settings in the app and the dashboard, plus a chip on client cards and a column in the list;
+    - `sudo ghostlink-server user speed NAME 2MB|none|default`, `user add --speed`, `set --speed-limit` and a SPEED column in `users`;
+    - `ghostlink server users add|update --speed-limit MB/s|none|default` and `ghostlink server set --default-speed-limit MB/s|none`;
+    - the API: `speed_limit_bps` and `effective_speed_limit_bps` on users, `default_speed_limit_bps` on the server.
+- **Move from Outline.** `install-server.sh --migrate-outline` (or `sudo ghostlink-server migrate-outline`) takes over an Outline server on the same machine. Guide: [docs/deployment/migrate-from-outline.md](docs/deployment/migrate-from-outline.md).
+  - **Clients:** every access key becomes a client with the same password, port and cipher, so the `ss://` keys people already use keep working. Names, data limits (per key or Outline's default), paused keys, the server's name and its address come along.
+  - **Ports:** keys on other ports than the main one keep theirs, each extra port with its own Shadowsocks listener. Ghostlink's VLESS, WireGuard and AmneziaWG ports move out of the way if they clash. Keys that cannot be kept (ports below 1024, a port the management API uses, a cipher mix on one port) get a new key, and the report lists them.
+  - **Check first:** `--check` shows what would happen, without a password, while Outline keeps running.
+  - **Atomic, with a way back:** the import is one change. If it fails, Outline is started again. When it works, Outline is stopped and kept from restarting, its files stay as a backup, and the rollback command is printed.
+  - **API:** `POST /import/outline` with Outline's two files and `dry_run`; `GET /server` reports `shadowsocks_extra_ports`.
+  - **On the server:** `sudo ghostlink-server import-outline --dir DIR [--check]`.
+
+### Changed
+
+- **Speeds are in bytes per second everywhere** (B/s, KB/s, MB/s, GB/s, decimal like data sizes), including live monitoring in the app, the dashboard, the Island and `top`. They were shown in bits per second before. The API's `*_bps` fields were already bytes per second.
+- The users table of `sudo ghostlink-server users` has a SPEED column, and `settings` shows the default speed limit and any extra Shadowsocks ports.
+- The installer lists the extra Shadowsocks ports of keys imported from Outline among the ports to allow.
+- `--add-swap` is listed in the server guide's installer options.
+
 ## [0.7.0] - 2026-11-07
 
 ### Added

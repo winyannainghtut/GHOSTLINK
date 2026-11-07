@@ -106,7 +106,7 @@ func TestRenderSwanctl(t *testing.T) {
 }
 
 func TestFirewallRules(t *testing.T) {
-	rules := Rules(fixture(t))
+	rules := Rules(fixture(t), nil)
 	filter, nat, mangle := rules["filter"], rules["nat"], rules["mangle"]
 	for _, want := range []string{
 		"-A GHOSTLINK-IPSEC-FWD -s 10.79.0.0/20 -j GHOSTLINK-IPSEC-OUT",
@@ -142,6 +142,44 @@ func TestFirewallRules(t *testing.T) {
 	}
 }
 
+// Capped clients' sessions get hashlimit rules on their virtual IPs, before anything is
+// accepted; a client's sessions share one bucket per direction.
+func TestSpeedLimitRules(t *testing.T) {
+	d := fixture(t)
+	d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u2", Identities: []string{"alice-2@ghostlink"}, BytesPerSecond: 500_000}}
+	if err := d.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	sas := []ipsecproto.SA{
+		{Identity: "Alice-2@ghostlink", VirtualIP: "10.79.0.2"},
+		{Identity: "alice-2@ghostlink", VirtualIP: "10.80.0.3"},
+		{Identity: "alice-2@ghostlink"}, // still connecting: no address yet
+		{Identity: "bob-3@ghostlink", VirtualIP: "10.80.0.2"},
+	}
+	filter := Rules(d, sas)["filter"]
+	for _, want := range []string{
+		"-A GHOSTLINK-IPSEC-LIM -d 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2d -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -s 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2u -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -d 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2d -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -s 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2u -j DROP",
+	} {
+		if !strings.Contains(filter, want+"\n") {
+			t.Errorf("filter lacks %q", want)
+		}
+	}
+	if strings.Count(filter, "-m hashlimit") != 4 || strings.Contains(filter, "10.80.0.2/32") {
+		t.Errorf("only Alice's sessions are capped:\n%s", filter)
+	}
+	jump := strings.Index(filter, "-A GHOSTLINK-IPSEC-FWD -j GHOSTLINK-IPSEC-LIM")
+	if accept := strings.Index(filter, "-A GHOSTLINK-IPSEC-FWD -d"); jump < 0 || jump > accept {
+		t.Error("the speed limits must come before established traffic is accepted")
+	}
+	// Without sessions or limits the chain is empty, but still declared and jumped to.
+	if empty := Rules(d, nil)["filter"]; strings.Contains(empty, "hashlimit") || !strings.Contains(empty, ":GHOSTLINK-IPSEC-LIM - [0:0]") {
+		t.Errorf("no sessions: %s", empty)
+	}
+}
+
 func TestPoolRange(t *testing.T) {
 	for _, c := range [][3]string{
 		{"10.79.0.0/20", "10.79.0.1", "10.79.0.2-10.79.15.254"},
@@ -174,6 +212,25 @@ func TestValidateRefusesUnsafeSettings(t *testing.T) {
 		"ca is not a ca":        func(d *ipsecproto.Desired) { d.CA = d.Server },
 		"unknown version":       func(d *ipsecproto.Desired) { d.Version = 2 },
 		"server id with spaces": func(d *ipsecproto.Desired) { d.ServerID = "a b" },
+		"limit name injection": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u1 -j ACCEPT", Identities: []string{"a@b"}, BytesPerSecond: 1000}}
+		},
+		"limit name too long": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u12345678901234", Identities: []string{"a@b"}, BytesPerSecond: 1000}}
+		},
+		"limit of zero": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u1", Identities: []string{"a@b"}, BytesPerSecond: 0}}
+		},
+		"limit too high": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u1", Identities: []string{"a@b"}, BytesPerSecond: 2_000_000_000}}
+		},
+		"limit identity": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u1", Identities: []string{"a\nb"}, BytesPerSecond: 1000}}
+		},
+		"limit name twice": func(d *ipsecproto.Desired) {
+			l := ipsecproto.SpeedLimit{Name: "u1", Identities: []string{"a@b"}, BytesPerSecond: 1000}
+			d.SpeedLimits = []ipsecproto.SpeedLimit{l, l}
+		},
 	} {
 		d := fixture(t)
 		mutate(&d)
