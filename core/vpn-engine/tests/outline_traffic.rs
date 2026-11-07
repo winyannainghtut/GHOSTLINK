@@ -18,15 +18,22 @@ async fn free_port() -> u16 {
 }
 
 /// A port free on TCP and UDP alike: a Shadowsocks server binds both, and exits at startup
-/// when the UDP side is taken.
+/// when either side is taken. The UDP port comes from the system first, because Windows
+/// reserves UDP ranges that TCP's free ports often fall into.
 async fn free_shared_port() -> u16 {
-    for _ in 0..50 {
-        let port = free_port().await;
-        if std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok() {
-            return port;
+    let mut last_error = None;
+    for _ in 0..200 {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(_) => return port,
+            Err(error) => last_error = Some(error),
         }
     }
-    panic!("no port is free on both TCP and UDP");
+    panic!("no port is free on both TCP and UDP (last: {last_error:?})");
 }
 
 #[tokio::test]
