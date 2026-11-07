@@ -12,7 +12,7 @@ The user is moving to a new chat. This section is the current state; the numbere
 - **Other releases:**
   - v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are still unpublished drafts. Leave them to the user.
-- **`main` after 0.8.0:** fixes from a review of 0.8.0, listed under `[Unreleased]` in the CHANGELOG and in the verification ledger's top section. They came on branch `fix/review-0.8` (pull request to `main`), and are **not in the 0.8.0 packages**.
+- **`main` after 0.8.0:** fixes from a review of 0.8.0, listed under `[Unreleased]` in the CHANGELOG and in the verification ledger's top section. They came through pull request #2 (`fix/review-0.8`, squash-merged on 2026-11-08 after every CI check and a release dry run passed), and are **not in the 0.8.0 packages**.
   - The worst one: a capped client's Shadowsocks UDP could hold up other clients' UDP.
   - Releasing them as **0.8.1** is the user's call. Ask before tagging.
 - **Version history in one line each:**
@@ -38,10 +38,10 @@ The user is moving to a new chat. This section is the current state; the numbere
 
 ### Next steps, in order
 
-1. **Merge `fix/review-0.8`** once CI is green, if that is not done yet:
-   - run `gh pr checks`;
-   - run a release dry run with `gh workflow run release.yml --ref fix/review-0.8`, which runs the Outline smoke test and the IPsec interop.
-   Then ask the user whether to release **0.8.1**.
+1. **0.8.1:** ask the user whether to release the post-review fixes as 0.8.1. If yes:
+   - bump the version (see *Version bump*);
+   - turn the CHANGELOG `[Unreleased]` section into `[0.8.1]` with the date and a compare link;
+   - follow the usual flow (branch, CI, dry run, merge, tag `v0.8.1`), leaving the draft for the user to publish.
 2. **v1.0.0, the "first launch":**
    - **Code and docs:**
      - in `release.yml`, pass `--prerelease` only below 1.0 or for `-rc` tags;
