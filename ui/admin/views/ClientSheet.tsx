@@ -326,8 +326,11 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
       toast(bps.message, 'bad');
       return;
     }
+    const body: Record<string, unknown> = { name: name.trim(), data_limit_bytes: Math.round(Number(limit || 0) * 1e9), exempt_from_global_rules: exempt, ...extra };
+    // Sent only when changed: servers before 0.8.0 refuse fields they don't know.
+    if (bps !== (user.speed_limit_bps ?? 0)) body.speed_limit_bps = bps;
     try {
-      await api('PATCH', `/users/${user.id}`, { name: name.trim(), data_limit_bytes: Math.round(Number(limit || 0) * 1e9), speed_limit_bps: bps, exempt_from_global_rules: exempt, ...extra });
+      await api('PATCH', `/users/${user.id}`, body);
       toast(extra.reset_usage ? 'Usage reset to zero.' : 'Client saved.');
       await reloadUsers();
     } catch (error) {

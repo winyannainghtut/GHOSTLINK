@@ -86,7 +86,7 @@ main() {
     [ "$(id -u)" = 0 ] || die "run as root, for example: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh | sudo bash"
     [ "$(uname -s)" = Linux ] || die "the Ghostlink server runs on Linux only"
     if [ -n "$version" ] && ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-        die "--version must look like 0.7.0"
+        die "--version must look like 0.8.0"
     fi
     if [ -n "$hostname" ] && ! [[ "$hostname" =~ ^[A-Za-z0-9.:-]{1,253}$ ]]; then
         die "--hostname must be an IP address or a DNS name"
@@ -101,6 +101,12 @@ main() {
     fi
     if [ "$migrate_check" = 1 ] && [ "$migrate" = 0 ]; then
         die "--check goes with --migrate-outline"
+    fi
+    if [ "$outline_dir" != /opt/outline ] && [ "$migrate" = 0 ]; then
+        die "--outline-dir goes with --migrate-outline"
+    fi
+    if [ "$migrate_check" = 1 ] && { [ "$ipsec" = 1 ] || [ "$mesh" = 1 ] || [ "$open_firewall" = 1 ]; }; then
+        warn "--migrate-outline --check only installs Ghostlink and reports; --ipsec, --mesh and --open-firewall apply when you run it without --check"
     fi
     if [ "$migrate" = 1 ] && [ ! -f "$outline_dir/persisted-state/shadowbox_config.json" ]; then
         die "no Outline server found: $outline_dir/persisted-state/shadowbox_config.json does not exist (use --outline-dir if it is elsewhere)"
@@ -230,10 +236,11 @@ main() {
             return 0
         fi
         say "Taking over the Outline server"
-        ghostlink-server migrate-outline --outline-dir "$outline_dir" || die "the migration did not go through (see above); Outline is running as before"
+        ghostlink-server migrate-outline --outline-dir "$outline_dir" || die "the migration did not go through; what happened to Outline is shown above"
         if [ -n "$hostname" ]; then
             # The import adopts Outline's address; the one asked for here wins.
             ghostlink-server set --hostname "$hostname" >/dev/null
+            say "The address in keys is $hostname (from --hostname), not Outline's"
         fi
     fi
 

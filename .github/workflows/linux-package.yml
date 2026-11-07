@@ -205,7 +205,7 @@ jobs:
         env:
           ARCH: ${{ inputs.arch }}
         run: |
-          set -eu
+          set -euo pipefail
           deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
           # A fake Outline: shadowbox's files, and containers named like Outline's that hold its port.
           sudo mkdir -p /opt/outline/persisted-state
@@ -225,6 +225,16 @@ jobs:
           grep -q 'Check only' check.txt && grep -q '4 clients' check.txt && grep -q 'Old: it uses port 443' check.txt
           test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
           sudo ghostlink-server users | grep -q 'No users yet'
+          # A failed import (another program holds Router's port) puts Outline back as it was.
+          docker run -d --name blocker --network host busybox:1.36 httpd -f -p 45679
+          if sudo ghostlink-server migrate-outline 2> failed.txt; then echo "the import should have failed" >&2; exit 1; fi
+          cat failed.txt
+          grep -q 'Outline is back as it was' failed.txt
+          test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
+          test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' watchtower)" = "true always"
+          sudo ghostlink-server users | grep -q 'No users yet'
+          sudo test ! -e /var/lib/ghostlink-server/outline-import
+          docker rm -f blocker
           # The migration: Outline stops for good, Ghostlink serves its ports and keys.
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline | tee migrate.txt
           grep -q 'Imported from Outline' migrate.txt && grep -q 'To go back to Outline' migrate.txt

@@ -197,7 +197,11 @@ func parseSpeed(text string) (int64, string, error) {
 	case "DEFAULT":
 		return 0, "default", nil
 	}
-	t = strings.TrimSuffix(strings.TrimSuffix(t, "/S"), "PS")
+	if strings.HasSuffix(t, "PS") || strings.Contains(t, "BIT") {
+		// "10Mbps" means bits; reading it as 10 MB/s would allow eight times as much.
+		return 0, "", fmt.Errorf("speed limits are in bytes per second, like 2MB or 500KB (got %q)", text)
+	}
+	t = strings.TrimSuffix(t, "/S")
 	units := []struct {
 		suffix string
 		scale  float64

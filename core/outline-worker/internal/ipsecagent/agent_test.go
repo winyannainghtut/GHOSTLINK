@@ -157,11 +157,19 @@ func TestSpeedLimitRules(t *testing.T) {
 		{Identity: "bob-3@ghostlink", VirtualIP: "10.80.0.2"},
 	}
 	filter := Rules(d, sas)["filter"]
+	name := hashlimitName(d.SpeedLimits[0])
+	if len(name)+1 > 15 || !strings.HasPrefix(name, "gl") || name != hashlimitName(d.SpeedLimits[0]) {
+		t.Fatalf("hashlimit name %q", name)
+	}
+	// A new rate is a new table: the kernel keeps a table's first rate while it is in use.
+	if faster := (ipsecproto.SpeedLimit{Name: "u2", BytesPerSecond: 1_000_000}); hashlimitName(faster) == name {
+		t.Fatal("a changed rate kept the hashlimit table name")
+	}
 	for _, want := range []string{
-		"-A GHOSTLINK-IPSEC-LIM -d 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2d -j DROP",
-		"-A GHOSTLINK-IPSEC-LIM -s 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2u -j DROP",
-		"-A GHOSTLINK-IPSEC-LIM -d 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2d -j DROP",
-		"-A GHOSTLINK-IPSEC-LIM -s 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name glu2u -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -d 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name " + name + "d -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -s 10.79.0.2/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name " + name + "u -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -d 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name " + name + "d -j DROP",
+		"-A GHOSTLINK-IPSEC-LIM -s 10.80.0.3/32 -m hashlimit --hashlimit-above 500000b/s --hashlimit-name " + name + "u -j DROP",
 	} {
 		if !strings.Contains(filter, want+"\n") {
 			t.Errorf("filter lacks %q", want)

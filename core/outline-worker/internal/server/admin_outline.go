@@ -82,7 +82,11 @@ func writeOutlineReport(out io.Writer, r outlineReport) {
 	fmt.Fprintf(out, "  Shadowsocks: port %s (cipher %s).\n", ports, r.Method)
 	fmt.Fprintf(out, "  Server: %s, address in keys %s.\n", r.Name, r.Hostname)
 	for _, m := range r.Moved {
-		fmt.Fprintf(out, "  %s moves from port %d to %d to make way for Outline's.\n", m.Service, m.From, m.To)
+		if r.DryRun {
+			fmt.Fprintf(out, "  %s moves off port %d to make way for Outline's (to a free port picked during the import).\n", m.Service, m.From)
+		} else {
+			fmt.Fprintf(out, "  %s moves from port %d to %d to make way for Outline's.\n", m.Service, m.From, m.To)
+		}
 	}
 	if len(r.Disabled) > 0 {
 		fmt.Fprintf(out, "  Turned off, as in Outline (a data limit of 0): %s.\n", strings.Join(r.Disabled, ", "))

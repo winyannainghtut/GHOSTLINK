@@ -169,7 +169,8 @@ func (a *API) importOutline(r *http.Request) (int, any, error) {
 		err = a.service.store.WriteManagementKey()
 		a.service.store.Unlock()
 		if err != nil {
-			return 0, nil, err
+			// The import is saved: failing now would tell the host script it did not happen.
+			report.Notes = append(report.Notes, fmt.Sprintf("the management key file could not be rewritten for the new address (%v); write it again with: sudo ghostlink-server setup", err))
 		}
 	}
 	return http.StatusOK, report, nil
@@ -225,8 +226,12 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 	if s.meshEnabled() {
 		fixed[s.Mesh.Port] = "the mesh"
 	}
-	if s.appleEnabled() && s.IPsec.DNSPort != 0 {
+	if s.IPsec.DNSPort != 0 {
+		// Kept for IKEv2/IPsec even while it is off, so turning it on later still works.
 		fixed[s.IPsec.DNSPort] = "the IKEv2/IPsec DNS listener"
+	}
+	if s.appleEnabled() {
+		fixed[4500] = "IKEv2/IPsec (UDP 4500)"
 	}
 	for i, c := range candidates {
 		if c.port != 0 {
@@ -358,7 +363,7 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 			report.Kept++
 			endpoint := strconv.Itoa(int(c.port)) + "/" + k.Password
 			if first, shared := passwords[endpoint]; shared {
-				report.Notes = append(report.Notes, fmt.Sprintf("%s has the same key as %s: the server cannot tell them apart, so their traffic counts as %s's", u.Name, first, first))
+				report.Notes = append(report.Notes, fmt.Sprintf("%s has the same key as %s: the server cannot tell them apart, so each connection counts for either of them, and turning one of them off does not stop the key", u.Name, first))
 			} else {
 				passwords[endpoint] = u.Name
 			}

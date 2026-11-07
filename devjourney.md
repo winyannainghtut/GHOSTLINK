@@ -1,12 +1,26 @@
 # Ghostlink development journey and resume handoff
 
-Last updated: **2026-11-06, Asia/Singapore**.
+Last updated: **2026-11-08, Asia/Singapore**.
 
 The user resumed work with **“continue”** and selected **“Continue with local test servers for now”**. Keep using local isolated test peers; no real Outline key is required at this stage. This current handoff supersedes the archived October snapshot below. Do not restart the project or replace the real service with a mockup.
 
 The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-06. It consolidates the current architecture, source map, exact workflows, verified results, artifacts, security/licensing boundaries and continuation plan; this file retains the chronological history.
 
 ## Current handoff — November 6
+
+### November 8 (later): review of 0.8.0 and handover
+
+The user published 0.8.0 as a pre-release and asked to "double check the code base and docs", update everything properly, and update `agent.md` for a new chat. Two independent reviews were checked against the source and fixed on `fix/review-0.8` (CHANGELOG `[Unreleased]`, ledger top section):
+- **Speed limits:**
+  - a capped client's Shadowsocks UDP could hold up other clients' UDP (it is now dropped above the rate);
+  - many connections could exceed a cap because waits were cut at 5 s;
+  - IKEv2/IPsec rate changes were ignored for connected sessions (kernel `hashlimit` tables keep their first rate).
+- **`migrate-outline`:** it could leave Outline stopped after a failure or interruption.
+- **App and dashboard:** they sent `speed_limit_bps` to servers that refuse it.
+- **Server commands:** `10Mbps` was read as 10 MB/s.
+- **Docs:** smaller corrections.
+
+`agent.md` now opens with a "Start here" section, with the current state, the user's decisions, the next steps (0.8.1 if wanted, then v1.0.0) and the standing rules. Its stale facts (old path, CI never observed, pre-0.7 UI files) are corrected.
 
 ### November 8: v0.8.0 — speed limits and the move from Outline
 

@@ -42,7 +42,7 @@ If Ghostlink is already installed, the same is done by `sudo ghostlink-server mi
 
 1. Ghostlink reads Outline's `persisted-state/shadowbox_config.json` (access keys) and `shadowbox_server_config.json` (name, address, default data limit). It makes private copies in its own state directory (mode 0600, owned by the server account) and checks them first. If the check fails (for example, the Ghostlink server already has clients), Outline is not touched.
 2. Outline's containers (`shadowbox` and `watchtower`) get the restart policy `no` and are stopped, so their ports are free and they do not come back after a reboot.
-3. The import runs as **one change**. If the engine cannot start with Outline's ports, nothing changes and Outline is started again with its old restart policies.
+3. The import runs as **one change**. If it fails (for example, another program holds one of Outline's ports) or is interrupted (Ctrl+C, a lost SSH session), nothing changes in Ghostlink and Outline is put back as it was: each container gets its old restart policy, and those that were running start again.
 4. The copies are deleted. The installer then prints the management key and the ports to allow.
 
 Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Ghostlink's management API, VLESS, WireGuard and AmneziaWG ports are new: allow the ones the installer lists.
@@ -55,14 +55,14 @@ Outline's Shadowsocks ports are already open in your firewall and cloud security
 | The port most keys use | The server's Shadowsocks port. Keys on other ports keep theirs: each extra port gets its own Shadowsocks listener |
 | Ciphers `chacha20-ietf-poly1305`, `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | Kept. On one port, the cipher most keys use is kept; a key with another cipher on that port gets a new key |
 | A key's data limit, or the server's default data limit | The client's data limit. Outline's limit of 0 bytes (a paused key) becomes a client that is turned off |
-| Server name and address (`hostname`) | The server's name and the address in keys, so new keys look like the old ones. The management key changes with the address |
+| Server name and address (`hostname`) | The server's name and the address in keys, so new keys look like the old ones. The management key changes with the address. With the installer's `--hostname`, that address wins |
 | Usage | Starts at 0. Outline counts the last 30 days, which Ghostlink cannot rebuild |
 | Metrics settings, the Outline Manager connection | Not used. Outline Manager no longer reaches this server |
 
 A client gets a **new** Shadowsocks key, listed in the report, when its Outline key:
 
 - uses a port below 1024 (for example 443). The Ghostlink container runs without capabilities, so it cannot listen there;
-- uses a port Ghostlink's management API, dashboard or mesh already uses;
+- uses a port Ghostlink's management API, dashboard, mesh or IKEv2/IPsec DNS listener already uses;
 - shares a port with keys that use another cipher, or uses a cipher Outline does not offer;
 - has an empty or unusual password (more than 256 characters, or not plain text).
 
@@ -74,7 +74,7 @@ The import only runs on a Ghostlink server **with no clients yet**, and takes at
 
 ## Go back to Outline
 
-The move prints this rollback; it works as long as Outline's files are there:
+The move prints the rollback, with each container's old restart policy (Outline's default is `always`). It works as long as Outline's containers (`shadowbox`, `watchtower`) and its files are still there:
 
 ```sh
 sudo ghostlink-server stop && sudo docker update --restart=always shadowbox watchtower && sudo docker start shadowbox watchtower
@@ -94,4 +94,4 @@ You can also remove Outline's images (`sudo docker image ls` shows them).
 
 ## Over the API
 
-`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to), `disabled` and `notes`. It contains no passwords. On the server, `sudo ghostlink-server import-outline --dir DIR [--check]` posts the two files from a directory the container can read; `migrate-outline` does that for you.
+`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `dry_run`, `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to), `disabled` and `notes`. It contains no passwords. Inside the container, `ghostlink-server admin import-outline --dir DIR [--check]` posts the two files from a directory the server can read (under its state directory); `sudo ghostlink-server migrate-outline` does that for you.
