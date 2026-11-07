@@ -7,7 +7,7 @@ Run development builds in a user-owned directory. `scripts/cargo.ps1` discovers 
 Start the daemon in one terminal:
 
 ```powershell
-./target/debug/ghostlinkd.exe --data-dir 'D:\custom vpn\.state-dev' --outline-engine 'D:\custom vpn\target\debug\ghostlink-tunnel.exe' --openvpn 'D:\custom vpn\.tools\openvpn-bin\openvpn.exe'
+./target/debug/ghostlinkd.exe --data-dir 'D:\ghostlink\.state-dev' --outline-engine 'D:\ghostlink\target\debug\ghostlink-tunnel.exe' --openvpn 'D:\ghostlink\.tools\openvpn-bin\openvpn.exe'
 ```
 
 In another terminal run `./target/debug/ghostlink.exe status --json` and `./apps/desktop/src-tauri/target/debug/ghostlink-desktop.exe`. Use the actual checkout path on another machine. An unelevated daemon supports key/profile/agent management, but cannot create a privileged TUN adapter. There is no automatic UAC bypass.

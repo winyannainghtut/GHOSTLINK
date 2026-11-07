@@ -5,7 +5,7 @@ React, TypeScript, Tailwind CSS and Lucide icons, built with Vite.
 | Folder | What |
 |---|---|
 | `shared/` | The glass component library: surfaces, pill controls, the switch, sheets, popovers, toasts, charts, the glass-wave background, the mesh map and the appearance controls |
-| `admin/` | The server-administration views (overview, clients, network, mesh, settings, new client). They are used by both apps through a transport (`admin/api.ts`) |
+| `admin/` | The server-administration views (overview, clients, network, mesh, settings, new client) and their parts, such as the speed limit control (`admin/SpeedLimit.tsx`). They are used by both apps through a transport (`admin/api.ts`) |
 | `dashboard/` | The server dashboard shell. Its transport is this server's `/api` |
 | `desktop/` | The desktop app: My servers, Servers I run (the admin views over the local service) and Settings. `desktop/src/routes.ts` maps the admin views' requests onto the service's `server_call` operations |
 | `tests/` | `npm test`: the desktop mapping against the Rust `ServerOp` contract |

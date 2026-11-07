@@ -1,6 +1,6 @@
 # Ghostlink development journey and resume handoff
 
-Last updated: **2026-11-08, Asia/Singapore**.
+Last updated: **2026-11-08, Asia/Singapore**. The checkout moved from `D:\custom vpn` to `D:\ghostlink` on 2026-11-07; paths in the older entries below are historical. For the current state, start with [agent.md](agent.md) (its *Start here* section).
 
 The user resumed work with **“continue”** and selected **“Continue with local test servers for now”**. Keep using local isolated test peers; no real Outline key is required at this stage. This current handoff supersedes the archived October snapshot below. Do not restart the project or replace the real service with a mockup.
 

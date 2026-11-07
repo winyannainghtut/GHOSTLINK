@@ -25,7 +25,7 @@ Check only: nothing has changed yet. The import would do this:
   12 clients, one per Outline access key; 11 keep their Outline key as it is.
   Shadowsocks: port 41234 (cipher chacha20-ietf-poly1305), plus 9000 for keys on other ports.
   Server: My Outline, address in keys 203.0.113.7.
-  VLESS moves from port 9000 to 23817 to make way for Outline's.
+  VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import).
   These clients get a new key, which you need to send them:
     Office: it uses port 443; Ghostlink cannot serve ports below 1024
 ```

@@ -13,11 +13,13 @@ Two independent reviews (Go server code; scripts, CI and docs) were checked agai
 | IKEv2/IPsec rules (Go) | The `hashlimit` table name is derived from the client and its rate (9 characters plus the direction); a changed rate gives a new name |
 | Server commands (Go) | `user speed Alice 10Mbps` and `set --speed-limit 8mbit` are refused |
 | Go, UI | The full Go suite passes on Windows; the UI typecheck, `npm test` and both builds pass |
-| Host script | `sh -n` and `bash -n` pass; shellcheck runs in CI only |
+| Host script | `sh -n` and `bash -n` pass locally; shellcheck passes in CI |
+| IKEv2/IPsec rate change (CI interop, real strongSwan client) | 1.5 MB took 0.008 s without a cap and 4.37 s at 300 KB/s; with the cap raised to 600 KB/s **on the same connected session**, 1.67 s. Before the fix the kernel kept the first rate |
+| Failed Outline import (release CI dry run, x64 and arm64) | With another program holding one of Outline's ports, `migrate-outline` failed after stopping Outline and printed "the import did not go through; Outline is back as it was"; both containers were running again with restart `always`, Ghostlink had no clients and the private copies were gone. The successful migration, the refused second run and the rollback passed after it |
+| CI on `fix/review-0.8` | Desktop and local engine verification (Windows and Linux), Web UI, IPsec interop, Mesh end-to-end and the release dry run all pass |
 
-### Not verified yet
+### Not verified
 
-- In CI, still to run on this branch: the new failed-import step of the Outline smoke test, and the interop step that raises a connected session's cap from 300 to 600 KB/s.
 - A real Shadowsocks UDP flood by a capped client next to another client's UDP (the fix is checked by reading the library and by a unit test).
 
 ## v0.8.0 Speed limits and the move from Outline (2026-11-08)
