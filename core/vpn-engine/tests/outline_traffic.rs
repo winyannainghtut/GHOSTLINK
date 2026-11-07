@@ -17,6 +17,18 @@ async fn free_port() -> u16 {
         .port()
 }
 
+/// A port free on TCP and UDP alike: a Shadowsocks server binds both, and exits at startup
+/// when the UDP side is taken.
+async fn free_shared_port() -> u16 {
+    for _ in 0..50 {
+        let port = free_port().await;
+        if std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no port is free on both TCP and UDP");
+}
+
 #[tokio::test]
 #[ignore = "requires GHOSTLINK_TEST_OUTLINE_WORKER: built managed worker"]
 async fn managed_worker_gracefully_closes_on_stop_and_parent_eof() {
@@ -146,7 +158,7 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
     );
     let dir = tempfile::tempdir().unwrap();
     storage::private_dir(dir.path()).unwrap();
-    let ss_port = free_port().await;
+    let ss_port = free_shared_port().await;
     let server_config = json!({"log":{"disabled":true},"inbounds":[{"type":"shadowsocks","listen":"127.0.0.1","listen_port":ss_port,"method":"aes-256-gcm","password":"test-only-randomish-access-credential"}],"outbounds":[{"type":"direct"}]});
     let server_path = dir.path().join("server.json");
     storage::atomic_write(&server_path, &serde_json::to_vec(&server_config).unwrap()).unwrap();
