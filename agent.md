@@ -123,7 +123,7 @@ The user is moving to a new chat. This section is the current state; the numbere
   - `bump.py` bumps the version.
 - **Flaky CI to know about:**
   - Mesh end-to-end, "open mesh: relay reaches natb:8080", passed on re-run (2026-11-07).
-  - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It was fixed on 2026-11-07 by picking a port free on both TCP and UDP.
+  - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It is fixed by picking a port free on both TCP and UDP, with the UDP port taken from the system first: on the Windows runners, ports free on TCP are often in reserved UDP ranges (a TCP-first helper failed there on 2026-11-08).
 - **Where the speed-limit and Outline code lives:** see §13, *Speed limits and the move from Outline (v0.8.0)*.
 
 ### History notes
