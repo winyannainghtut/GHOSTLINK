@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AreaChart, type RatePoint } from '@shared/AreaChart';
 import { fillBuckets } from '@shared/BarChart';
 import { Bars } from '@shared/Bars';
-import { bitRate, bytes, duration, plural, speed } from '@shared/format';
+import { byteRate, bytes, duration, plural, speed } from '@shared/format';
 import { Button, Card, CardTitle, Facts, Meter, Note, Segmented, cx } from '@shared/glass';
 import { api, protocolName, type Stats } from '../api';
 import { useStore } from '../store';
@@ -48,7 +48,7 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
     };
   }, []);
 
-  const total = bitRate((live?.down_bps ?? 0) + (live?.up_bps ?? 0));
+  const total = byteRate((live?.down_bps ?? 0) + (live?.up_bps ?? 0));
   const health = live?.health;
   const pools = server.address_pools ?? [];
   const used = pools.reduce((n, p) => n + p.used, 0), capacity = pools.reduce((n, p) => n + p.capacity, 0);

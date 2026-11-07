@@ -8,6 +8,36 @@ The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-
 
 ## Current handoff — November 6
 
+### November 8: v0.8.0 — speed limits and the move from Outline
+
+The user asked for "a new feature that can limit the bandwidth of each user" and "the feature that can migrate from outline server", both in 0.8.0. They chose:
+- **one cap per client** (download and upload alike, plus an optional server default);
+- the **same machine** (an in-place takeover of Outline);
+- **keep the keys working** (existing `ss://` keys stay valid).
+
+Midway they asked: "instead of bit, i want bytes. for monitoring too. change everything about bit to bytes". Limits and every speed shown are now in bytes per second (B/s, KB/s, MB/s, GB/s, decimal).
+
+Delivered:
+- **Speed limits:**
+  - a pacer in the server's relay loop for Shadowsocks, VLESS, WireGuard and AmneziaWG, live and without engine reloads;
+  - `hashlimit` policing for IKEv2/IPsec in the agent;
+  - available in the API, server commands, the CLI and both UIs.
+- **Outline import:**
+  - per-key port and cipher overrides and extra Shadowsocks inbounds;
+  - `POST /import/outline` with a dry run and a report without secrets;
+  - `import-outline`, the host's `migrate-outline` (stop Outline, import, restore on failure, print the rollback) and `install-server.sh --migrate-outline [--check]`.
+- **Tests:**
+  - Go unit and end-to-end tests: real clients at the cap, and Outline's original keys after the import;
+  - an IPsec interop step that measures a capped download;
+  - a release-CI step with a fake Outline on the host;
+  - the CLI parser;
+  - a GUI check of both apps.
+- **Docs:** a new [migration guide](docs/deployment/migrate-from-outline.md); the server guide, README, changelog, CLI contract, security model and ledger updated.
+
+Found and fixed during the work:
+- a migration test picked ports free on TCP only, and failed when the full suite held the UDP side;
+- the CI steps' own assertions (a name, an always-true fallback) were corrected before pushing.
+
 ### November 7: v0.7.0 — frosted-glass UI for the app and the dashboard
 
 The user asked for an iOS/visionOS-style frosted-glass redesign in React (Vite), TypeScript, Tailwind and Lucide, with the full spec in the request:

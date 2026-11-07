@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "ghostlink-contracts",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink-contracts"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlink-mcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "ghostlinkd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",

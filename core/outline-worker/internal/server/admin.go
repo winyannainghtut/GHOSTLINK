@@ -137,16 +137,16 @@ func dataSize(n uint64) string {
 }
 
 func rate(bytesPerSecond int64) string {
-	bits := float64(bytesPerSecond) * 8
+	b := float64(bytesPerSecond)
 	switch {
-	case bits >= 1e9:
-		return fmt.Sprintf("%.2f Gbit/s", bits/1e9)
-	case bits >= 1e6:
-		return fmt.Sprintf("%.1f Mbit/s", bits/1e6)
-	case bits >= 1e3:
-		return fmt.Sprintf("%.0f kbit/s", bits/1e3)
+	case b >= 1e9:
+		return fmt.Sprintf("%.2f GB/s", b/1e9)
+	case b >= 1e6:
+		return fmt.Sprintf("%.1f MB/s", b/1e6)
+	case b >= 1e3:
+		return fmt.Sprintf("%.0f KB/s", b/1e3)
 	}
-	return fmt.Sprintf("%.0f bit/s", bits)
+	return fmt.Sprintf("%.0f B/s", b)
 }
 
 func since(unix int64) string {
@@ -187,6 +187,50 @@ func parseLimit(text string) (uint64, error) {
 	return 0, fmt.Errorf("data limits look like 50GB, 500MB, 1TB or none (got %q)", text)
 }
 
+// parseSpeed reads a speed such as "2MB", "500KB/s" or "1.5MB" as bytes per second (decimal
+// units, like data). "none" and "default" are returned as keywords for the caller to map.
+func parseSpeed(text string) (int64, string, error) {
+	t := strings.ToUpper(strings.TrimSpace(text))
+	switch t {
+	case "NONE", "OFF", "UNLIMITED":
+		return 0, "none", nil
+	case "DEFAULT":
+		return 0, "default", nil
+	}
+	t = strings.TrimSuffix(strings.TrimSuffix(t, "/S"), "PS")
+	units := []struct {
+		suffix string
+		scale  float64
+	}{{"GB", 1e9}, {"MB", 1e6}, {"KB", 1e3}, {"G", 1e9}, {"M", 1e6}, {"K", 1e3}}
+	for _, unit := range units {
+		if strings.HasSuffix(t, unit.suffix) {
+			n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(t, unit.suffix)), 64)
+			if err != nil || n <= 0 {
+				break
+			}
+			bps := int64(n * unit.scale)
+			if bps < 1 || bps > maxSpeedLimitBps {
+				return 0, "", fmt.Errorf("speed limits go up to 1.25GB (per second), got %q", text)
+			}
+			return bps, "", nil
+		}
+	}
+	return 0, "", fmt.Errorf("speed limits look like 2MB, 500KB or 1.5MB (bytes per second), or none (got %q)", text)
+}
+
+// speedText describes a client's speed limit for the users table.
+func speedText(own, effective int64) string {
+	switch {
+	case own == noSpeedLimit:
+		return "no limit"
+	case effective == 0:
+		return "-"
+	case own == 0:
+		return rate(effective) + " (default)"
+	}
+	return rate(effective)
+}
+
 type stringList []string
 
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
@@ -203,6 +247,9 @@ type adminUser struct {
 	ExemptFromGlobalRules bool         `json:"exempt_from_global_rules"`
 	Rules                 Rules        `json:"rules"`
 	Keys                  []keySummary `json:"keys"`
+	// Speed limits in bytes per second (see userView).
+	SpeedLimitBps          int64 `json:"speed_limit_bps"`
+	EffectiveSpeedLimitBps int64 `json:"effective_speed_limit_bps"`
 }
 
 func (c *AdminClient) users() ([]adminUser, error) {
@@ -227,10 +274,12 @@ func (c *AdminClient) findUser(ref string) (adminUser, error) {
 const adminUsage = `Manage this Ghostlink server (run with sudo):
 
   users                                list users, usage and status
-  user add NAME [--limit 50GB] [--exempt]
+  user add NAME [--limit 50GB] [--speed 2MB] [--exempt]
   user enable|disable|remove|reset NAME
   user rename NAME NEW-NAME
   user limit NAME 50GB|none
+  user speed NAME 2MB|none|default     speed limit in bytes per second, download and
+                                       upload alike, shared by all of NAME's keys
   user exempt NAME on|off              skip the rules for everyone
   key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks
   key add NAME ikev2|ipsec [--auth eap|certificate|psk] [--address HOST]
@@ -253,9 +302,13 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
   settings
   set [--name N] [--hostname H] [--reality-site S] [--enable P] [--disable P] [--port P=N]
       [--history-days N] [--site-days N] [--history-max-mb N] [--rotate-ipsec-psk]
+      [--speed-limit 2MB|none]         default speed limit for clients without their own
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
   mesh ...                             private network between your servers (mesh help)
+  import-outline --dir DIR [--check]   take over the access keys of an Outline server from
+                                       copies of its two files in DIR (a new server only;
+                                       sudo ghostlink-server migrate-outline does it all)
 
 Add --json before the command for machine-readable output.`
 
@@ -314,9 +367,10 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				if u.DataLimitBytes > 0 {
 					limit = dataSize(u.DataLimitBytes)
 				}
-				rows = append(rows, []string{u.ID, u.Name, status, dataSize(u.UsageBytes), limit, strconv.Itoa(len(u.Keys))})
+				rows = append(rows, []string{u.ID, u.Name, status, dataSize(u.UsageBytes), limit,
+					speedText(u.SpeedLimitBps, u.EffectiveSpeedLimitBps), strconv.Itoa(len(u.Keys))})
 			}
-			table("ID\tNAME\tSTATUS\tUSED\tLIMIT\tKEYS", rows)
+			table("ID\tNAME\tSTATUS\tUSED\tLIMIT\tSPEED\tKEYS", rows)
 		})
 	case "user":
 		return c.userCommand(rest, out, print)
@@ -481,7 +535,15 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				if !v.Enabled {
 					state = "off"
 				}
-				rows = append(rows, []string{protocolTitles[p], state, strconv.Itoa(int(v.Port))})
+				port := strconv.Itoa(int(v.Port))
+				if p == Shadowsocks && len(info.ShadowsocksExtraPorts) > 0 {
+					extra := []string{}
+					for _, n := range info.ShadowsocksExtraPorts {
+						extra = append(extra, strconv.Itoa(int(n)))
+					}
+					port += " (and " + strings.Join(extra, ", ") + " for keys from Outline)"
+				}
+				rows = append(rows, []string{protocolTitles[p], state, port})
 			}
 			for _, p := range AppleProtocols {
 				state := "off"
@@ -511,6 +573,11 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				sites = "on"
 			}
 			fmt.Fprintf(out, "\nTop sites per user: %s. History kept %d days (sites %d days), at most %d MB.\n", sites, info.HistoryDays, info.SiteDays, info.HistoryMaxMB)
+			if info.DefaultSpeedLimitBps > 0 {
+				fmt.Fprintf(out, "Default speed limit: %s per client (download and upload alike).\n", rate(int64(info.DefaultSpeedLimitBps)))
+			} else {
+				fmt.Fprintln(out, "Default speed limit: none.")
+			}
 		})
 	case "set":
 		return c.setCommand(rest, out)
@@ -532,18 +599,21 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		return c.dashboardCommand(rest, out)
 	case "mesh":
 		return c.meshCommand(rest, out, asJSON)
+	case "import-outline":
+		return c.importOutlineCommand(rest, out, print)
 	}
 	return fmt.Errorf("unknown command %q\n\n%s", command, adminUsage)
 }
 
 func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, func()) error) error {
 	if len(args) < 2 {
-		return errors.New("usage: user add|enable|disable|remove|reset|rename|limit|exempt NAME ...")
+		return errors.New("usage: user add|enable|disable|remove|reset|rename|limit|speed|exempt NAME ...")
 	}
 	action, ref, rest := args[0], args[1], args[2:]
 	if action == "add" {
 		flags := flag.NewFlagSet("user add", flag.ContinueOnError)
 		limit := flags.String("limit", "", "")
+		speed := flags.String("speed", "", "")
 		exempt := flags.Bool("exempt", false, "")
 		if err := flags.Parse(rest); err != nil {
 			return err
@@ -555,6 +625,13 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 				return err
 			}
 			change["data_limit_bytes"] = bytes
+		}
+		if *speed != "" {
+			bps, err := userSpeed(*speed)
+			if err != nil {
+				return err
+			}
+			change["speed_limit_bps"] = bps
 		}
 		var created adminUser
 		if err := c.Do(http.MethodPost, "/users", change, &created); err != nil {
@@ -588,6 +665,15 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 			return err
 		}
 		change["data_limit_bytes"] = bytes
+	case "speed":
+		if len(rest) != 1 {
+			return errors.New("usage: user speed NAME 2MB|none|default")
+		}
+		bps, err := userSpeed(rest[0])
+		if err != nil {
+			return err
+		}
+		change["speed_limit_bps"] = bps
 	case "exempt":
 		if len(rest) != 1 || (rest[0] != "on" && rest[0] != "off") {
 			return errors.New("usage: user exempt NAME on|off")
@@ -607,6 +693,19 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 		return err
 	}
 	return print(updated, func() { fmt.Fprintf(out, "Updated %s.\n", updated.Name) })
+}
+
+// userSpeed maps a client's speed limit: a speed, "none" (-1, whatever the default) or
+// "default" (0).
+func userSpeed(text string) (int64, error) {
+	bps, keyword, err := parseSpeed(text)
+	switch keyword {
+	case "none":
+		return noSpeedLimit, nil
+	case "default":
+		return 0, nil
+	}
+	return bps, err
 }
 
 func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) error {
@@ -910,10 +1009,21 @@ func (c *AdminClient) setCommand(args []string, out io.Writer) error {
 	siteDays := flags.Int("site-days", 0, "")
 	historyMB := flags.Int("history-max-mb", 0, "")
 	rotatePSK := flags.Bool("rotate-ipsec-psk", false, "")
+	speedLimit := flags.String("speed-limit", "", "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	patch := map[string]any{}
+	if *speedLimit != "" {
+		bps, keyword, err := parseSpeed(*speedLimit)
+		if err != nil {
+			return err
+		}
+		if keyword == "default" {
+			return errors.New("the default speed limit is a speed (2MB) or none")
+		}
+		patch["default_speed_limit_bps"] = bps
+	}
 	if *rotatePSK {
 		patch["rotate_ipsec_psk"] = true
 	}

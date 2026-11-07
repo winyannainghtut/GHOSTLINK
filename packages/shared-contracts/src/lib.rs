@@ -301,6 +301,10 @@ pub struct ServerPatch {
     /// Replace the IPsec group key; every IPsec PSK profile must be installed again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotate_ipsec_psk: Option<bool>,
+    /// Speed limit for every user without one of their own, in bytes per second (download and
+    /// upload alike); 0 means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_speed_limit_bps: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -328,6 +332,10 @@ pub struct UserChange {
     pub rules: Option<TrafficRules>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reset_usage: bool,
+    /// Speed limit in bytes per second, download and upload alike, shared by all of the user's
+    /// keys: 0 follows the server's default, -1 means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_limit_bps: Option<i64>,
 }
 
 /// Traffic a server blocks, for everyone or for one user.

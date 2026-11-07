@@ -11,6 +11,8 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
+- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by all of the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
+- **Moving from Outline:** take over an Outline server on the same machine, and its `ss://` keys keep working. See [Move from Outline](migrate-from-outline.md).
 - **Monitoring:**
   - live speed per user, open connections and who is online;
   - traffic types (web, QUIC video, calls, BitTorrent and so on) and the protocols used;
@@ -54,6 +56,8 @@ Run it again to upgrade; users, keys and rules are kept.
 | `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
 | `--no-docker` | Never install Docker |
 | `--reinstall` | Install even if this version is already installed |
+| `--add-swap` | On a server with under 1 GB of memory and swap, add a 1 GB swap file so the installation is not killed |
+| `--migrate-outline [--check]` | Take over the Outline server on this machine ([Move from Outline](migrate-from-outline.md)); with `--check`, only report what would happen. `--outline-dir DIR` if Outline is not in `/opt/outline` |
 
 The installer refuses Docker from the Snap store, which cannot mount `/var/lib/ghostlink-server`. To read the script before running it, download it first: `curl -fsSLO …/install-server.sh && less install-server.sh && sudo bash install-server.sh`.
 
@@ -100,7 +104,7 @@ Ghostlink checks that the server answers with the pinned certificate, then seals
 Then add users and keys:
 
 ```sh
-ghostlink server users add --server home --name Alice --data-limit-gb 50
+ghostlink server users add --server home --name Alice --data-limit-gb 50 --speed-limit 2   # 2 MB/s
 ghostlink server keys create --server home --user 1 --protocol amneziawg --output alice-awg.txt
 ghostlink server keys create --server home --user 1 --protocol vless --import alice-here   # also use it on this device
 ghostlink server rules set --server home --block-site ads.example --block-bittorrent --block-smtp
@@ -116,6 +120,8 @@ Everything the app can do also works over SSH on the server. Users can be named 
 ```sh
 sudo ghostlink-server users                          # users, usage and status
 sudo ghostlink-server user add Alice --limit 50GB    # also: user enable|disable|remove|reset|rename|limit|exempt
+sudo ghostlink-server user speed Alice 2MB           # speed limit, 2 MB/s; none or default
+sudo ghostlink-server set --speed-limit 5MB          # default for users without their own; none
 sudo ghostlink-server key add Alice amneziawg        # prints the key, the .conf and a QR code to scan
 sudo ghostlink-server keys Alice [--show]            # key text only with --show; key qr|remove NAME ID
 sudo ghostlink-server kit Alice --output alice.html  # one private page with all of Alice's keys, QR codes and app help
@@ -126,6 +132,7 @@ sudo ghostlink-server top                            # live speed per user; Ctrl
 sudo ghostlink-server settings | set --hostname H --enable P --disable P --port vless=8443 ...
 sudo ghostlink-server site-stats on|off              # top services per user (off deletes them)
 sudo ghostlink-server dashboard                      # web dashboard: tunnel command and login link
+sudo ghostlink-server migrate-outline [--check]      # take over the Outline server on this machine
 ```
 
 These run inside the container (`docker exec`) and call the server's own management API on loopback with the same certificate pin as the app. Only root on the host can use them. Add `--json` after `ghostlink-server` for machine-readable output.
@@ -150,8 +157,8 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
 - **The page** (since 0.7.0 the same frosted-glass views as the app's **Servers I run**):
   - **Navigation bar:** Overview, Clients and Network. A live capsule shows whether the server is live, who is online and the current speed. Opening it gives a switch for each protocol; pausing one disconnects its users until it is back on. Server settings sit on the right.
   - **Overview:** active tunnels, live throughput, server uptime and the address pool, then throughput for the last 60 seconds, hour or 24 hours. Below that: server health, today by client, traffic types, protocols and top services.
-  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, last handshake, live speed and data used. Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
-  - **New client:** a name, a protocol and an optional data limit; the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
+  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, last handshake, live speed, data used and the speed limit in force. Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
+  - **New client:** a name, a protocol, an optional data limit and a speed limit (the server's default, none, or MB/s); the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
   - **Network:** protocols (on/off and ports), the address pools, the rules for everyone and the [mesh](mesh.md) map.
   - **Appearance:** Obsidian, Titanium or Daylight; background waves Subtle, Calm or Still. These are kept in the browser.
 
@@ -199,6 +206,7 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 | Feature | IKEv2/IPsec |
 |---|---|
 | Data limits, usage, live speed, online state, "connected from" | Yes: the component reports each session's bytes every 5 s |
+| Speed limits | Yes, by the firewall: each session's virtual IP gets `hashlimit` rules, shared by all of the user's sessions. This is policing: packets above the rate are dropped (TCP slows down to fit) rather than queued, so speeds are less even than with the other protocols |
 | Disable/remove/over the limit | Their sessions end within seconds. Passwords are withdrawn, and certificates are put on hold or revoked in the CRL |
 | Blocked IPs, blocked ports, SMTP block, always-blocked internal ranges and the server itself | Yes (firewall rules) |
 | Blocked sites | Yes, through DNS: every DNS query (any resolver, port 53) goes to the server's DNS with the rules for everyone |
@@ -215,7 +223,7 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 - **What the agent does:**
   - re-validates every field: identities, ranges, ports, hashes, PEM;
   - uses only algorithms fixed in its own code;
-  - writes strongSwan's configuration and its own iptables chains (`GHOSTLINK-IPSEC-*`), with one jump from each built-in chain;
+  - writes strongSwan's configuration and its own iptables chains (`GHOSTLINK-IPSEC-*`), with one jump from each built-in chain; speed limits are rules in `GHOSTLINK-IPSEC-LIM`, rendered again whenever a capped user's session starts or ends;
   - creates a dummy interface `glipsec0` for the pool gateways;
   - reports sessions in `status.json`.
 - **Stopping and pools:** stopping it (`ipsec disable`, an upgrade or removal) removes its chains and interface. Address pools are `10.79.0.0/20` (IKEv2) and `10.80.0.0/20` (IPsec).
@@ -234,6 +242,16 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
   Use certificates if you need IPsec. `set --rotate-ipsec-psk` replaces the group key, after which every IPsec PSK profile must be reinstalled.
 - The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes. Client certificates last 5 years; removing the key revokes them.
 - Apple behaviour (installing profiles, connecting) is verified by hand, not by CI. CI runs a real strongSwan client with each profile's exact parameters against the component; see the [verification ledger](../development/verification.md).
+
+## Speed limits
+
+A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by all of the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s.
+
+- **Per user:** a speed (`user speed Alice 2MB`, the client's Settings in the app or dashboard, `--speed-limit 2` in the CLI); **none**, meaning no limit even when there is a default; or **default**, which follows the server's default (the setting for new users).
+- **Default for everyone:** `set --speed-limit 5MB` (Server settings in the app or dashboard), or none.
+- **Live:** a change applies within a second to every open connection, without restarting the engine or disconnecting anyone.
+- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KB). For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
+- **Range:** 1 byte to 1.25 GB per second (10 Gbit/s). The tools take 0.001 to 1250 MB/s.
 
 ## Monitoring and privacy
 
@@ -268,6 +286,7 @@ What it can't see: VPN traffic is encrypted, so the server never sees page conte
 | `sudo ghostlink-server remove` | Remove the containers and images; keep users and keys |
 | `sudo ghostlink-server ipsec enable\|disable\|status\|logs` | The optional IPsec component for iPhone, iPad and Mac |
 | `sudo ghostlink-server mesh …` | The [mesh](mesh.md): `enable`, `invite`, `nodes`, `approve`, `node`, `remove`, `rules`, `map`, and `join-here` (this host as a node and relay) |
+| `sudo ghostlink-server migrate-outline [--check] [--outline-dir DIR]` | Take over the Outline server on this machine ([Move from Outline](migrate-from-outline.md)) |
 
 ## Ports
 
@@ -277,7 +296,7 @@ Every port is random on first install (10000–32000, all different) and shown b
 |---|---|
 | Management API | TCP |
 | Web dashboard | TCP (127.0.0.1 only unless public) |
-| Shadowsocks | TCP and UDP |
+| Shadowsocks | TCP and UDP; keys imported from Outline on other ports add one listener per port |
 | VLESS-REALITY | TCP |
 | WireGuard | UDP |
 | AmneziaWG | UDP |
@@ -324,12 +343,12 @@ Disabled users and users over their limit are removed from the engine entirely, 
 
 ### Management API
 
-All paths are under the secret prefix from the management key, over TLS 1.3. Request bodies are JSON (at most 64 KiB, unknown fields refused). Wrong paths get `404`, and an address that makes 20 wrong guesses in a minute gets `429` for the rest of that minute.
+All paths are under the secret prefix from the management key, over TLS 1.3. Request bodies are JSON (at most 64 KiB, 4 MiB for an Outline import; unknown fields refused). Wrong paths get `404`, and an address that makes 20 wrong guesses in a minute gets `429` for the rest of that minute.
 
 | Method and path | Purpose |
 |---|---|
 | `GET` / `PATCH /server` | Name, hostname used in keys, VLESS-REALITY site, each protocol's `enabled` and `port` |
-| `GET` / `POST /users`, `GET` / `PATCH` / `DELETE /users/{id}` | Users: `name`, `enabled`, `data_limit_bytes`, `exempt_from_global_rules`, `rules`, `reset_usage` |
+| `GET` / `POST /users`, `GET` / `PATCH` / `DELETE /users/{id}` | Users: `name`, `enabled`, `data_limit_bytes`, `speed_limit_bps`, `exempt_from_global_rules`, `rules`, `reset_usage` |
 | `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}`, or `{"protocol":"ikev2"\|"ipsec","auth":…}` with optional `server_address`, `remote_identifier`, `local_identifier` |
 | `GET` / `PUT /rules` | Rules for everyone: `blocked_domains`, `blocked_ips`, `blocked_ports`, `block_bittorrent`, `block_smtp` |
 | `GET /metrics` | Per-user and total bytes |
@@ -345,10 +364,13 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `PATCH` / `DELETE /mesh/nodes/{id}` | A node: `name`, `tags`, `status` (`active`/`disabled`), `relay`, `approved_routes`, `masquerade`; or remove it |
 | `GET` / `PUT /mesh/rules` | Access rules: `{"rules":[{"from":"tag:web","to":"tag:db","protocol":"tcp","ports":["5432"]}]}` |
 | `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
+| `POST /import/outline` | Take over an Outline server's access keys on a server with no users: `{"access_keys": …, "server": …, "dry_run": true}` with Outline's two files; answers with a report and no passwords ([details](migrate-from-outline.md#over-the-api)) |
 
 `GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour.
 
-`PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token` and `rotate_ipsec_psk`. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
+`PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
+
+`speed_limit_bps` on a user is in bytes per second: `0` follows the server's default, `-1` means no limit, and 1 to 1,250,000,000 is the user's cap. Users also report `effective_speed_limit_bps`, the cap in force (0 for none). The speeds in `GET /live` (`up_bps`, `down_bps`, `series`, `minutes`) are bytes per second too; `GET /stats` buckets are bytes per hour or day. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
 
 The Ghostlink service is the only intended client. It pins the certificate during the TLS handshake, so the secret path is never sent to a server that cannot prove it holds the certificate's key.
 
@@ -358,6 +380,6 @@ The Ghostlink service is the only intended client. It pins the certificate durin
 - **REALITY site:** VLESS-REALITY borrows the TLS 1.3 handshake of a public site, `www.googletagmanager.com` by default. Choose a site that is reachable from the server and not blocked where your users are.
 - **Amnezia apps:** the `vpn://` keys follow Amnezia's export format for AmneziaWG and WireGuard, with no SSH credentials. Importing them into Amnezia's own apps has not been verified yet.
 - **IKEv2/IPsec:** see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users). Apple-device behaviour is checked by hand.
-- **Not in this version:** IPv6 inside the tunnels, automatic updates, per-user speed and device limits, monthly limit resets, subscription links, and alerts.
+- **Not in this version:** IPv6 inside the tunnels, automatic updates, device limits, separate download and upload speed limits, monthly limit resets, subscription links, and alerts.
 
 Security details: [security model](../security/model.md). What has been tested: [verification ledger](../development/verification.md).

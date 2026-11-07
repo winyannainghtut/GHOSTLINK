@@ -25,6 +25,12 @@ These mechanisms reduce specific failures; they do not certify the platform defi
 - **Management API:** TLS 1.3 only, with a self-signed P-256 certificate. All paths sit under a random 128-bit secret prefix compared in constant time. An address is refused after 20 wrong guesses in a minute, and request bodies are strictly validated.
 - **What the server stores:** the server keeps every user's key material in its state, so keys can be shown again. Protect the host and its backups accordingly.
 - **Logs and first install:** logs contain warnings and errors only, not traffic. On first install the server may contact `api.ipify.org` and `ipv4.icanhazip.com` to learn its public IP; set the hostname yourself to avoid that.
+- **Speed limits (v0.8.0):** limits are not part of the engine configuration, so changing one never restarts the engine. They pace traffic; they do not authenticate anything, and a client cannot raise its own.
+- **Moving from Outline (v0.8.0):**
+  - Outline's access keys are secrets. `migrate-outline` copies Outline's two files into a private directory in the state (mode 0700/0600, owned by the server account), reads them only through the management API on loopback, and deletes the copies afterwards, also on failure. `import-outline` itself only reads.
+  - The import report never contains a password; it names clients and reasons.
+  - Imported passwords are kept as they are (Outline's key strength), and are validated as printable text of at most 256 characters before they reach the engine; ciphers are limited to Outline's four AEAD ciphers.
+  - The import runs only on a server with no clients, as one change that the engine must accept, and Outline's own files are never modified.
 
 **Server administration and the dashboard.**
 - **Server commands:** `sudo ghostlink-server` admin commands run inside the container and use the management API on loopback, with the management key's pin. Only root on the host can run them.
@@ -61,7 +67,8 @@ These mechanisms reduce specific failures; they do not certify the platform defi
   - Profiles are unsigned: there is no Apple Developer certificate yet, so iOS shows "Unverified".
   - The profile installs the server's CA so the device can check the server certificate. iOS does not trust a profile-installed root for websites unless someone turns that on in Settings → General → About → Certificate Trust Settings, which nobody should do for this CA. Keep its key safe, because anyone holding it could issue VPN server certificates these devices accept.
 - **Weak option:** IPsec with a shared group key uses IKEv1 Aggressive Mode. Every holder of the group key can impersonate the server to other PSK users, and a passive observer can attempt offline guessing of the group key. It is off unless a PSK key exists, and the API returns a warning with every such key.
-- **Not inspected:** IKEv2/IPsec traffic is forwarded by the kernel. Only the rules for everyone (addresses, ports, SMTP, DNS-based site blocks), the always-blocked ranges and data limits apply. Per-user rules, BitTorrent blocking and traffic classification do not. IPv6 is not tunnelled.
+- **Not inspected:** IKEv2/IPsec traffic is forwarded by the kernel. Only the rules for everyone (addresses, ports, SMTP, DNS-based site blocks), the always-blocked ranges, data limits and speed limits apply. Per-user rules, BitTorrent blocking and traffic classification do not. IPv6 is not tunnelled.
+- **Speed limits:** the server sends the agent each capped client's identities and rate. The agent validates them (identities as before, a label of lower-case letters and digits, a rate of 1 byte to 1.25 GB per second) and renders `hashlimit` DROP rules on the sessions' virtual IPs in its own chain. This is policing: excess packets are dropped, not queued.
 
 **Mesh of Linux servers (v0.6.0).**
 - **Who controls what:** the Ghostlink server coordinates the mesh. It decides each node's address, peers, paths and firewall rules, so whoever holds its management key controls the mesh. It does this from its unprivileged container: it never touches a node's network itself.

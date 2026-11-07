@@ -45,6 +45,10 @@ export type User = {
   exempt_from_global_rules: boolean;
   rules: Rules;
   keys: KeySummary[];
+  // Bytes per second, download and upload alike: 0 follows the server's default, -1 is no limit.
+  speed_limit_bps: number;
+  // The cap in force (the client's own or the server's default), 0 for none.
+  effective_speed_limit_bps: number;
 };
 export type Key = {
   id: string;
@@ -69,6 +73,10 @@ export type Server = {
   protocols: Record<ProtocolId, { enabled: boolean; port: number }>;
   vless_handshake: string;
   shadowsocks_method: string;
+  // Ports of keys imported from Outline that kept their own port.
+  shadowsocks_extra_ports?: number[];
+  // Speed limit for clients without one of their own, bytes per second (0: none).
+  default_speed_limit_bps: number;
   users: number;
   site_stats: boolean;
   history_days: number;

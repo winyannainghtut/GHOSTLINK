@@ -58,6 +58,11 @@ type Agent struct {
 	gateways   []string
 	onLoopback bool
 	lastJumps  time.Time
+	// desired is the configuration last applied; limits are the speed limit rules in force,
+	// rendered again whenever the connected sessions change.
+	desired ipsecproto.Desired
+	sas     []ipsecproto.SA
+	limits  string
 }
 
 func (a *Agent) swanctlDir() string { return filepath.Join(a.Run, "swanctl") }
@@ -262,9 +267,10 @@ func (a *Agent) apply(ctx context.Context, d ipsecproto.Desired) error {
 	if err := a.setGateways(gateways); err != nil {
 		return err
 	}
-	if err := a.FW.Apply(ctx, d); err != nil {
+	if err := a.FW.Apply(ctx, d, a.sas); err != nil {
 		return err
 	}
+	a.desired, a.limits = d, strings.Join(limitRules(d, a.sas), "\n")
 	// End sessions that lost access before new credentials load, so none slips through.
 	allowed, conns := map[string]bool{}, map[string]bool{}
 	for _, id := range d.Allowed {
@@ -378,6 +384,17 @@ func (a *Agent) cycle(ctx context.Context, full bool) {
 	}
 	a.listing = ""
 	sas := a.enforce(ctx)
+	if a.applied != 0 && a.listing == "" {
+		// New or ended sessions of capped clients: the speed limit rules follow them.
+		a.sas = sas
+		if limits := strings.Join(limitRules(a.desired, sas), "\n"); limits != a.limits {
+			if err := a.FW.Apply(ctx, a.desired, sas); err != nil {
+				a.Log.Printf("could not apply speed limits: %v", err)
+			} else {
+				a.limits = limits
+			}
+		}
+	}
 	problems := []string{}
 	for _, p := range []string{a.problem, a.listing} {
 		if p != "" {

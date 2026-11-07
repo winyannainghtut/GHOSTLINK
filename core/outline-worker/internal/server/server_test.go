@@ -251,6 +251,7 @@ type testServer struct {
 	store   *Store
 	api     *httptest.Server
 	base    string
+	last    string // the body of the last answer
 }
 
 func newTestServer(t *testing.T, mutate func(*State)) *testServer {
@@ -278,7 +279,7 @@ func newTestServer(t *testing.T, mutate func(*State)) *testServer {
 	t.Cleanup(func() { service.Close() })
 	api := httptest.NewServer(NewAPI(service, "test"))
 	t.Cleanup(api.Close)
-	return &testServer{service, store, api, api.URL + "/" + state.API.Secret}
+	return &testServer{service: service, store: store, api: api, base: api.URL + "/" + state.API.Secret}
 }
 
 func (s *testServer) call(t *testing.T, method, path string, body, out any) int {
@@ -295,6 +296,7 @@ func (s *testServer) call(t *testing.T, method, path string, body, out any) int 
 	}
 	defer response.Body.Close()
 	data, _ := io.ReadAll(response.Body)
+	s.last = string(data)
 	if out != nil && response.StatusCode < 300 {
 		if err := json.Unmarshal(data, out); err != nil {
 			t.Fatalf("%s %s: %v: %s", method, path, err, data)
@@ -306,7 +308,7 @@ func (s *testServer) call(t *testing.T, method, path string, body, out any) int 
 func (s *testServer) must(t *testing.T, status int, method, path string, body, out any) {
 	t.Helper()
 	if got := s.call(t, method, path, body, out); got != status {
-		t.Fatalf("%s %s: status %d, want %d", method, path, got, status)
+		t.Fatalf("%s %s: status %d, want %d: %s", method, path, got, status, strings.TrimSpace(s.last))
 	}
 }
 

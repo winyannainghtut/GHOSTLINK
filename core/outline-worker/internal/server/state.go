@@ -133,8 +133,11 @@ type Key struct {
 	ID          string `json:"id"`
 	Protocol    string `json:"protocol"`
 	CreatedUnix int64  `json:"created_unix"`
-	// Shadowsocks
+	// Shadowsocks. Port and Method are set only for keys imported from Outline that used a
+	// port or cipher other than the server's (0 and "" mean the server's).
 	Password string `json:"password,omitempty"`
+	Port     uint16 `json:"port,omitempty"`
+	Method   string `json:"method,omitempty"`
 	// VLESS
 	UUID string `json:"uuid,omitempty"`
 	// WireGuard / AmneziaWG
@@ -167,6 +170,38 @@ type User struct {
 	ExemptFromGlobalRules bool   `json:"exempt_from_global_rules"`
 	Rules                 Rules  `json:"rules"`
 	Keys                  []*Key `json:"keys"`
+	// SpeedLimitBps caps the client's speed, download and upload alike, across all its keys, in
+	// bytes per second (like the live rates): 0 follows the server's default, -1 means no limit.
+	SpeedLimitBps int64 `json:"speed_limit_bps,omitempty"`
+}
+
+// Speed limits are in bytes per second, at most 1.25 GB/s (10 Gbit/s); -1 on a client means
+// "no limit, whatever the default".
+const (
+	maxSpeedLimitBps = 1_250_000_000
+	noSpeedLimit     = -1
+)
+
+// SpeedLimitBps is the cap that applies to u in bytes per second, or 0 for none.
+func (s *State) SpeedLimitBps(u *User) int64 {
+	switch {
+	case u.SpeedLimitBps == noSpeedLimit:
+		return 0
+	case u.SpeedLimitBps > 0:
+		return u.SpeedLimitBps
+	}
+	return int64(s.DefaultSpeedLimitBps)
+}
+
+// speedLimits maps each capped client's tag to its cap in bytes per second.
+func (s *State) speedLimits() map[string]int64 {
+	limits := map[string]int64{}
+	for _, u := range s.Users {
+		if bps := s.SpeedLimitBps(u); bps > 0 {
+			limits[u.Tag()] = bps
+		}
+	}
+	return limits
 }
 
 // Tag is the sing-box user name; stable and free of user-controlled text.
@@ -191,8 +226,11 @@ type State struct {
 	Rules     Rules           `json:"rules"`
 	Monitor   MonitorSettings `json:"monitor"`
 	Dashboard DashboardConfig `json:"dashboard"`
-	Users     []*User         `json:"users"`
-	NextID    int             `json:"next_id"`
+	// DefaultSpeedLimitBps caps every client that has no limit of its own, in bytes per second
+	// (0: none).
+	DefaultSpeedLimitBps uint64  `json:"default_speed_limit_bps,omitempty"`
+	Users                []*User `json:"users"`
+	NextID               int     `json:"next_id"`
 }
 
 // IPsecServer is the optional IKEv2/IPsec service for Apple's built-in VPN. The server holds
