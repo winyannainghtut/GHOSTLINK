@@ -140,7 +140,9 @@ func (s *Service) Change(fn func(*State) error) error {
 		s.monitor.SetSiteStats(next.Monitor.SiteStats)
 	}
 	// Speed limits are not part of the engine configuration: they change live, with no reload.
-	s.monitor.SetSpeedLimits(next.speedLimits())
+	// They are read from the current state under its lock, so two changes at once cannot leave
+	// the older one in force.
+	s.Read(func(current *State) { s.monitor.SetSpeedLimits(current.speedLimits()) })
 	for _, u := range previous.Users {
 		if next.User(u.ID) == nil {
 			s.monitor.Forget(u.Tag())

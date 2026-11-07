@@ -1,8 +1,132 @@
 # Ghostlink — AI agent project handover
 
-Updated: **2026-11-08, Asia/Singapore**. Current release: **v0.8.0** (per-client speed limits in bytes per second on every protocol, and an in-place move from an Outline server that keeps its `ss://` keys working; all speeds are shown in bytes per second; v0.7.0 added the frosted-glass React UI for the desktop app and the server dashboard, one shared `ui/` package; v0.6.0 added the Ghostlink mesh: a private WireGuard network between Linux servers coordinated by the Ghostlink server, with a live map in the app and dashboard; v0.5.0 added IKEv2/IPsec for iPhone, iPad and Mac via configuration profiles and an optional strongSwan component; v0.4.0 added server monitoring, server-side admin commands, web dashboard, QR codes and connection kits; v0.3.x added the Ghostlink server and its management; v0.2.1 Linux client packages); the original implementation baseline was `7c875ad`. See [CHANGELOG.md](CHANGELOG.md) for what each version changed. Use `git log -1` and the current files to identify later changes.
+Updated: **2026-11-08, Asia/Singapore**. Checkout **`D:\ghostlink`** (Windows; moved from `D:\custom vpn` on 2026-11-07, so older paths in history are stale). Remote `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this note.
 
-**Next planned (user, 2026-11-07):** migration from an Outline server that is already running into Ghostlink: users and access keys, ideally so existing `ss://` keys keep working. Settle the design with the user first: keep or reissue keys, same or new host, limits and usage, cut-over. Outline's management key has the same shape as Ghostlink's (`apiUrl` + `certSha256`); see `docs/deployment/outline-server.md`.
+## Start here (handover of 2026-11-08)
+
+The user is moving to a new chat. This section is the current state; the numbered sections below are the detailed reference (some of their tables are older, and say so).
+
+### Where things stand
+
+- **Latest release: v0.8.0**, published by the user as a **pre-release** on 2026-11-07. It brings per-client speed limits in bytes per second, the in-place move from an Outline server that keeps its `ss://` keys working, and speeds shown in bytes per second everywhere.
+- **Other releases:**
+  - v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.1.0–v0.4.0 and v0.6.0 are still unpublished drafts. Leave them to the user.
+- **`main` after 0.8.0:** fixes from a review of 0.8.0, listed under `[Unreleased]` in the CHANGELOG and in the verification ledger's top section. They came through pull request #2 (`fix/review-0.8`, squash-merged on 2026-11-08 after every CI check and a release dry run passed), and are **not in the 0.8.0 packages**.
+  - The worst one: a capped client's Shadowsocks UDP could hold up other clients' UDP.
+  - Releasing them as **0.8.1** is the user's call. Ask before tagging.
+- **Version history in one line each:**
+  - 0.1: Windows client;
+  - 0.2: four protocols and split tunneling, then Linux client packages;
+  - 0.3: the Ghostlink server, managed from the app;
+  - 0.4: monitoring, server commands, dashboard, QR codes and kits;
+  - 0.5: IKEv2/IPsec for Apple devices;
+  - 0.6: the mesh of Linux servers;
+  - 0.7: the frosted-glass React UI;
+  - 0.8: speed limits and the Outline move.
+
+### What the user asked for recently, and what they decided
+
+- **2026-11-08, "help me double check the code base and docs… update the agent.md":** this review and handover. The user said they will publish 0.8.0 as a pre-release first, which they have done.
+- **"how to make the first launch?":** explained; the user chose to do it later as **v1.0.0** (see Next steps).
+- **v0.8.0:**
+  - "limit the bandwidth of each user": they chose **one cap per client** (download and upload alike) plus an optional server default;
+  - "migrate from outline server": they chose the **same machine** and **keep the keys working**;
+  - then: "instead of bit, i want bytes. for monitoring too. change everything about bit to bytes".
+- **v0.7.0:** the frosted-glass redesign of both apps, README screenshots, full window and F11 full screen.
+- **The user's own server:** AWS Lightsail with 412 MB of memory and no swap. The installer needs `--add-swap`. Whether it runs Outline today is unknown; suggest `--migrate-outline --check` first.
+
+### Next steps, in order
+
+1. **0.8.1:** ask the user whether to release the post-review fixes as 0.8.1. If yes:
+   - bump the version (see *Version bump*);
+   - turn the CHANGELOG `[Unreleased]` section into `[0.8.1]` with the date and a compare link;
+   - follow the usual flow (branch, CI, dry run, merge, tag `v0.8.1`), leaving the draft for the user to publish.
+2. **v1.0.0, the "first launch":**
+   - **Code and docs:**
+     - in `release.yml`, pass `--prerelease` only below 1.0 or for `-rc` tags;
+     - change the first line of `.github/release-notes.md` ("Unsigned pre-release…");
+     - change the CHANGELOG preamble ("pre-1.0 releases are unsigned pre-releases");
+     - update the README *Status and roadmap*;
+     - bump the version to 1.0.0 and follow the usual flow.
+   - **Checks only the user can do** (real devices):
+     - the MSI on their PC with a real connection;
+     - the server on their VPS with a phone (Outline or WireGuard app);
+     - `--migrate-outline` on a real Outline;
+     - an iPhone or Mac IKEv2 profile.
+   - **Code signing is the user's decision:** the Windows builds are unsigned, so SmartScreen says "Unknown publisher". Azure Trusted Signing costs about $10 a month. Launching unsigned is acceptable.
+3. **Follow-ups worth offering:**
+   - Outline keys on ports below 1024, often 443, could be kept if the server container got `NET_BIND_SERVICE`. Today they get new keys.
+   - Separate download and upload caps.
+   - Windows mesh nodes.
+   - The Linux desktop app, blocked by the GTK `glib` advisory.
+
+### Standing rules from the user (keep following them)
+
+- **Docs:** update all docs and the README properly before pushing.
+- **Release flow** (authorized):
+  1. Work on a feature branch and push it.
+  2. Wait for CI, and run a release dry run with `gh workflow run release.yml --ref <branch>`.
+  3. Squash-merge the pull request into `main`.
+  4. Push an annotated tag `vX.Y.Z`. The release workflow then creates a **draft** pre-release.
+  5. **The user publishes it.** Never publish a release, and never edit published release notes, without being asked.
+- **Secrets:**
+  - never paste access keys or management keys into chat, and never use keys the user pastes;
+  - scan staged files for secrets before committing.
+- **Test environment:**
+  - local test servers only; create no cloud resources;
+  - don't touch the user's installed Ghostlink app or service;
+  - don't start Docker Desktop;
+  - don't bypass UAC.
+- **GUI checks:**
+  - only through WebView2 DevTools, with an isolated `WEBVIEW2_USER_DATA_FOLDER` and `--remote-debugging-port`;
+  - never real mouse clicks;
+  - never headless Edge with a fresh profile (it signed in to the user's Microsoft account once).
+- **AI agents and MCP:** they get no import, policy or server-admin powers.
+- **Clean-up:** delete only your own test artifacts, by exact path, and restore any setting you change.
+- **Units:** speeds in bytes per second everywhere (B/s, KB/s, MB/s, GB/s, decimal), never bits.
+- **Tools:** don't use the zread MCP tools.
+
+### Working notes for this machine
+
+- **`gh`:** it is `"/c/Program Files/GitHub CLI/gh.exe"`, not on the Git Bash PATH.
+- **Edits:** make multi-line edits with the Write/Edit tools, or with Python scripts written by the Write tool (kept in `%TEMP%\gl-gui`). Inline heredocs with escapes have broken edits before.
+- **Go:**
+  ```
+  cd core/outline-worker && go test -tags with_gvisor,with_utls,with_wireguard ./...
+  ```
+  The server package takes about a minute. Debug server build:
+  ```
+  go build -tags with_gvisor,with_utls,with_wireguard -o ../../target/debug/ghostlink-server.exe ./cmd/ghostlink-server
+  ```
+  Worker build: the same with `-o ../../target/debug/ghostlink-tunnel.exe .`.
+- **Rust:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cargo.ps1 <fmt|clippy|test|build> …`. The desktop app is a separate workspace: `--manifest-path apps/desktop/src-tauri/Cargo.toml`.
+- **UI:** run `cd ui && npm run build && npm test`, and commit the build output in `core/outline-worker/internal/server/dashboard` and `apps/desktop/ui`. The Web UI workflow checks that the committed output matches the build. Rebuild the Go server after a UI build; the dashboard is embedded.
+- **Process tests:** root `npm test`, 19 tests. They need fresh debug binaries, including the worker.
+- **Real-engine tests:** set
+  - `GHOSTLINK_TEST_SING_BOX=.tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe`
+  - `GHOSTLINK_TEST_OUTLINE_WORKER=target/debug/ghostlink-tunnel.exe`
+
+  then run `cargo test -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --test-threads=1`.
+- **Version bump:** change every declaration together:
+  - `Cargo.toml` and `Cargo.lock`;
+  - `apps/desktop/src-tauri/Cargo.toml`, its `Cargo.lock` and `tauri.conf.json`;
+  - `core/outline-worker/internal/version/version.go`;
+  - `core/vpn-engine/src/worker_session.rs`;
+  - `ui/desktop/src/version.ts`;
+  - `tests/integration/control-plane.test.mjs`.
+
+  Then run `node scripts/release-version.mjs`, add the CHANGELOG section, and rebuild the UI.
+- **Scratch scripts:** these live in `%TEMP%\gl-gui` and are not in the repository; they may be gone.
+  - `gui080.mjs` checks speed limits in the desktop app and the dashboard;
+  - `glcheck.mjs` holds the helpers: the pinned API, a Shadowsocks client fetching Cloudflare's speed endpoint, and fake mesh agents;
+  - `bump.py` bumps the version.
+- **Flaky CI to know about:**
+  - Mesh end-to-end, "open mesh: relay reaches natb:8080", passed on re-run (2026-11-07).
+  - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It is fixed by picking a port free on both TCP and UDP, with the UDP port taken from the system first: on the Windows runners, ports free on TCP are often in reserved UDP ranges (a TCP-first helper failed there on 2026-11-08).
+- **Where the speed-limit and Outline code lives:** see §13, *Speed limits and the move from Outline (v0.8.0)*.
+
+### History notes
 
 > **Renamed MyVPN → Ghostlink (2026-11-06).** Every binary, crate, service, pipe, path, environment variable and UI string now uses Ghostlink: `ghostlink`, `ghostlinkd`, `ghostlink-mcp`, `ghostlink-tunnel`, `ghostlink-desktop`; service `Ghostlink`; pipe `\\.\pipe\ghostlink`; `%ProgramData%\Ghostlink`, `/var/lib/ghostlink`; `GHOSTLINK_*` variables; TUN interface `Ghostlink`; worker identity `Ghostlink tunnel worker 0.1.0; sing-box 1.14.4`. The MSI has a new `UpgradeCode`, so it does not upgrade an old MyVPN install. Local state and artifacts created under the old names (for example `.state-dev`, `artifacts/windows-x64/MyVPN*`) are not migrated; reimport keys and rebuild. The same change fixed the review findings listed in §12 and added the release workflow in §14.
 
@@ -10,6 +134,7 @@ This is a detailed, portable handover for an incoming AI coding agent. Read it b
 
 ## Contents
 
+0. [Start here](#start-here-handover-of-2026-11-08)
 1. [User intent and working rules](#1-user-intent-and-working-rules)
 2. [Current completion report](#2-current-completion-report)
 3. [Repository map and source of truth](#3-repository-map-and-source-of-truth)
@@ -48,9 +173,9 @@ Therefore:
 - Keep GUI, CLI and MCP on the same privileged local service and real state model.
 - The original cross-platform/server/mobile ambitions remain future scope; the clarification did not make those platforms complete.
 
-### Most recent user constraint
+### Most recent user constraints
 
-After resuming from an offline pause, the user selected **“Continue with local test servers for now.”** Use isolated local peers and disposable test identities. A production access key, VPS or cloud credentials are not needed for the current development stage. Do not ask the user to paste an access key into chat.
+The current rules, decisions and next steps are in [Start here](#start-here-handover-of-2026-11-08) at the top. The oldest standing one: the user selected **“Continue with local test servers for now.”** Use isolated local peers and disposable test identities. A production access key, VPS or cloud credentials are not needed. Do not ask the user to paste an access key into chat.
 
 ### Execution expectations
 
@@ -67,7 +192,7 @@ This handover is named `agent.md` as requested. It is an explicit handover file;
 
 ## 2. Current completion report
 
-**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification.
+**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.0, see [Start here](#start-here-handover-of-2026-11-08) and the README's *Status and roadmap*). Rows that changed are marked.
 
 | Area | Implemented / produced | Evidence and remaining gate |
 |---|---|---|
@@ -76,18 +201,18 @@ This handover is named `agent.md` as requested. It is an explicit handover file;
 | Windows packaging | Optimized executables, MSI and portable ZIP | WiX compiled/linked/validated; installation, elevated service lifecycle and uninstall have not been run |
 | Client protocols (v0.2.0) | Shadowsocks (Outline), VLESS-REALITY, WireGuard and AmneziaWG in the managed worker; `ss://`/`ssconf://`/`vless://`/`vpn://`/`.conf` import; split tunneling | Real encrypted traffic for every protocol through the worker; AmneziaWG interop against upstream amneziawg-go; REALITY against sing-box; split routing in the real engine. Full-TUN sessions still need an administrator |
 | OpenVPN transport | External Community engine adapter, strict inline profile validation | Real executable unavailable-server test and management parsing pass; no successful routed OpenVPN server session verified |
-| Linux | Unix IPC/policy code, systemd units, deployment sources, worker binary | Go worker cross-compiled to linux/amd64; Rust/GUI/Linux runtime, resolver behavior and native packaging unverified |
-| Self-hosted server | Outline offline identity/config generator, separate OpenVPN PKI, Ansible/systemd, Terraform draft | Two local Python tests pass; Terraform init/validate pass; no Linux VPS deployment or cloud changes |
+| Linux (updated) | Headless client `.deb`/`.rpm`/archives (x64, arm64) since v0.2.1 | Release CI installs the `.deb` as a systemd service; a routed VPN session on a real host and the Linux GUI are unverified |
+| Self-hosted server (updated) | The **Ghostlink server** (§13): Docker image inside `.deb`/`.rpm`, four protocols, users, keys, rules, data and speed limits, monitoring, dashboard, IKEv2/IPsec component, mesh, Outline import; plus the older offline Outline generator, OpenVPN PKI, Ansible and a Terraform draft | Go end-to-end tests with real clients; release CI installs and exercises the packages on Docker runners. No internet-facing VPS deployment has been verified |
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness | Notices, dependency inventory and worker corresponding-source bundle | Unsigned development artifacts; licensing review, installed networking, update/rollback and target-specific checks remain |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.0 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
 ## 3. Repository map and source of truth
 
-Current checkout: **`D:\custom vpn`**, Windows PowerShell. Git branch at handover: `main`. The original workspace started empty. Build tools, upstream reference checkouts, private state and artifacts are ignored local directories.
+Current checkout: **`D:\ghostlink`** (moved from `D:\custom vpn` on 2026-11-07), Windows; the shells used are PowerShell and Git Bash. Remote `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. The original workspace started empty. Build tools, upstream reference checkouts, private state and artifacts are ignored local directories.
 
 | Path | Responsibility / where to start |
 |---|---|
@@ -130,10 +255,15 @@ Current checkout: **`D:\custom vpn`**, Windows PowerShell. Git branch at handove
 | `scripts/package-worker-source.ps1` | Vendored worker corresponding-source archive and build instructions |
 | `scripts/collect-licenses.py` | Actual locked Rust / used Go dependency notice inventory |
 | `scripts/audit-lockfiles.py` | OSV scan of both Rust lockfiles, including other targets |
-| `tests/integration/control-plane.test.mjs` | 16 actual daemon/CLI/MCP process tests |
+| `tests/integration/control-plane.test.mjs` | 19 actual daemon/CLI/MCP process tests (`npm test` at the root) |
 | `tests/integration/test_provision.py` | 2 offline Outline/OpenVPN provisioning tests |
-| `.github/workflows/desktop.yml` | Windows/Linux build and local verification workflow; hosted runs not yet observed |
-| `.github/workflows/release.yml`, `.github/release-notes.md` | Windows x64 / Linux x64 / Linux arm64 packages and a draft pre-release on `v*` tags (§14); hosted runs not yet observed |
+| `.github/workflows/desktop.yml` | Windows/Linux build and local verification, on every push and pull request |
+| `.github/workflows/ui.yml`, `ipsec.yml`, `mesh.yml` | The UI build must match the committed output; IKEv2/IPsec interop with strongSwan; the mesh end to end in network namespaces |
+| `.github/workflows/release.yml`, `linux-package.yml`, `.github/release-notes.md` | Windows x64 / Linux x64 / Linux arm64 packages, the server, IPsec and mesh package smoke tests (including the Outline migration), and a draft pre-release on `v*` tags (§14) |
+| `core/outline-worker/cmd/ghostlink-server`, `internal/server` | The Ghostlink server: engine, management API, monitoring, dashboard, IPsec and mesh coordination, Outline import (§13) |
+| `core/outline-worker/internal/{ipsecproto,ipsecagent,mesh,meshproto,meshagent,hostfw}` | The IKEv2/IPsec agent and the mesh coordinator and agent |
+| `packages/linux/server/`, `packages/linux/mesh/` | Server image, host command `ghostlink-server`, IPsec image, mesh agent package |
+| `scripts/install-server.sh`, `scripts/install-mesh.sh` | One-command installers (`--ipsec`, `--mesh`, `--migrate-outline`, `--add-swap`, …) |
 | `scripts/release-version.mjs` | Authoritative version plus consistency and tag check used by all builds |
 | `scripts/build-linux.sh` | Headless Linux release archive for the host architecture |
 | `docs/development/releases.md` | Maintainer release procedure |
@@ -265,7 +395,7 @@ Actual route/DNS/IPv6/egress behavior, shutdown recovery and collisions must sti
 | Default IPC | `\\.\pipe\ghostlink` | `/run/ghostlink/control.sock` |
 | Default private state | `%ProgramData%\Ghostlink` | `/var/lib/ghostlink` |
 | Default managed worker | `C:\Program Files\Ghostlink\engine\ghostlink-tunnel.exe` | `/usr/local/lib/ghostlink/ghostlink-tunnel` |
-| Development state in this checkout | `D:\custom vpn\.state-dev` | Use a suitable private local directory |
+| Development state in this checkout | `D:\ghostlink\.state-dev` | Use a suitable private local directory |
 
 Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engine`, `--owner-sid`, `--owner-uid`, `--windows-driver`, `--allow-full-tunnel`, `--connection-timeout-seconds`, `--service`. Read `ghostlinkd --help` before using new combinations. Engine startup timeout defaults to 60 seconds, accepted range 1–600. `--windows-driver` pertains to the optional OpenVPN adapter path; the Outline worker embeds its pinned Wintun integration.
 
@@ -458,7 +588,7 @@ Pop-Location
 Start daemon in one terminal:
 
 ```powershell
-./target/debug/ghostlinkd.exe --data-dir 'D:\custom vpn\.state-dev' --outline-engine 'D:\custom vpn\target\debug\ghostlink-tunnel.exe' --openvpn 'D:\custom vpn\.tools\openvpn-bin\openvpn.exe'
+./target/debug/ghostlinkd.exe --data-dir 'D:\ghostlink\.state-dev' --outline-engine 'D:\ghostlink\target\debug\ghostlink-tunnel.exe' --openvpn 'D:\ghostlink\.tools\openvpn-bin\openvpn.exe'
 ```
 
 In a second terminal:
@@ -528,7 +658,7 @@ See [the verification ledger](docs/development/verification.md). The table below
 ./scripts/cargo.ps1 fmt --all --check
 ./scripts/cargo.ps1 fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
 npm test
-node --check apps/desktop/ui/app.js
+(cd ui && npm ci --ignore-scripts && npm run build && npm test)
 python -m unittest discover -s tests/integration -p 'test_*.py' -v
 ```
 
@@ -537,12 +667,12 @@ If `python` resolves to a Windows Store alias, invoke the known working runtime 
 ### Explicit real-engine tests
 
 ```powershell
-$env:GHOSTLINK_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
-$env:GHOSTLINK_TEST_OUTLINE_WORKER = 'D:\custom vpn\target\debug\ghostlink-tunnel.exe'
-./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
+$env:GHOSTLINK_TEST_SING_BOX = 'D:\ghostlink\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
+$env:GHOSTLINK_TEST_OUTLINE_WORKER = 'D:\ghostlink\target\debug\ghostlink-tunnel.exe'
+./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols '--' --ignored --nocapture --test-threads=1
 ```
 
-Keep `'--'` quoted through the PowerShell wrapper. Those three tests are ignored in an ordinary `cargo test` run and must be enabled explicitly. They verify:
+Keep `'--'` quoted through the PowerShell wrapper. `worker_protocols` adds three more (every protocol's generated config validates in the worker, split-tunnel routing, real WireGuard/AmneziaWG traffic). Those tests are ignored in an ordinary `cargo test` run and must be enabled explicitly. They verify:
 
 1. Real HTTP traverses an encrypted independent local Shadowsocks server/client. Wrong password does not reach a live destination. Controller rejects missing authorization.
 2. Managed worker graceful stop and parent-stdin EOF both remove an actual listening socket and exit successfully; a proxy-only fixture does not claim a tunnel IP.
@@ -552,7 +682,7 @@ The independent standalone peer and the managed worker have distinct roles. Thes
 
 ### Process suite coverage and switches
 
-The 16 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove with overwrite protection and a salted fingerprint; failed startup autoconnect keeps the service reachable; crash leftovers are removed at startup; dynamic SSRF/obsolete cipher/plugin rejection.
+The 19 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove with overwrite protection and a salted fingerprint; failed startup autoconnect keeps the service reachable; crash leftovers are removed at startup; dynamic SSRF/obsolete cipher/plugin rejection.
 
 | Variable | Use |
 |---|---|
@@ -609,10 +739,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
   - `internal/meshagent` and `cmd/ghostlink-mesh`. It sets up kernel WireGuard `glmesh0` over netlink plus wgctrl, routes with protocol 77, and `GHOSTLINK-MESH-IN/FWD/OUT/POST/MSS` chains through the shared `internal/hostfw` (also used by the IPsec agent).
   - It writes a marked `/etc/hosts` block and ICMP pings, and changes peers in place (`PeerChanges`) so sessions survive. Forwarding needs local consent (`--relay`, `--advertise-routes`, `allow-forwarding`).
   - Package: `packages/linux/mesh/` (hardened unit, maintainer scripts), `scripts/build-linux-mesh.sh`; installer `scripts/install-mesh.sh`. `install-server.sh --mesh` runs `join-here`.
-- **UI:**
-  - `apps/desktop/ui/mesh-map.js` is a dependency-free SVG map: ring layout, relayed links bent through the relay, drag with positions saved per mesh. `apps/desktop/ui/mesh.js` has the dialogs.
-  - The dashboard has an identical `mesh-map.js` copy (`TestMeshMapMatchesTheDesktopCopy`) and its own `dashboard/mesh.js`.
-  - Rust: `server_mesh_*` ops in contracts, engine and CLI.
+- **UI:** since v0.7.0 one React map, `ui/shared/MeshMap.tsx` (SVG, ring layout, relayed links bent through the relay, drag with positions saved per mesh), used by `ui/admin/views/Mesh.tsx` and the Network view in both apps. Rust: `server_mesh_*` ops in contracts, engine and CLI.
 - **Tests:**
   - `tests/mesh/e2e.sh` (CI `mesh.yml`): namespaces, NAT, relay, rules, subnets, cleanup.
   - `linux-package.yml`: package smoke test against the installed server.
@@ -621,7 +748,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
 Client side:
 - **Daemon:** `ManagedServerAdd/List/Remove` and typed `ServerCall` live in `services/vpn-daemon/src/remote.rs`, and run **without the daemon lock** during network calls.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
-- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run** (`apps/desktop/ui/manage.js`).
+- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`.
 - **Access:** everything is owner-only and never exposed over MCP.
 
 Pitfalls found here:
@@ -640,11 +767,11 @@ Pitfalls found here:
 `server/outline/provision.py` generates a **standard Shadowsocks AEAD server configuration** and unique access keys offline. It is not a complete clone of Outline Manager, its management API or a dynamic-key hosting service.
 
 ```powershell
-python server/outline/provision.py --directory 'D:\custom vpn\.state-outline-server' init --listen 127.0.0.1
-python server/outline/provision.py --directory 'D:\custom vpn\.state-outline-server' add --name laptop --endpoint 127.0.0.1 --port 15001 --display-name Local-Laptop
-python server/outline/provision.py --directory 'D:\custom vpn\.state-outline-server' list
-python server/outline/provision.py --directory 'D:\custom vpn\.state-outline-server' render
-python server/outline/provision.py --directory 'D:\custom vpn\.state-outline-server' remove --name laptop
+python server/outline/provision.py --directory 'D:\ghostlink\.state-outline-server' init --listen 127.0.0.1
+python server/outline/provision.py --directory 'D:\ghostlink\.state-outline-server' add --name laptop --endpoint 127.0.0.1 --port 15001 --display-name Local-Laptop
+python server/outline/provision.py --directory 'D:\ghostlink\.state-outline-server' list
+python server/outline/provision.py --directory 'D:\ghostlink\.state-outline-server' render
+python server/outline/provision.py --directory 'D:\ghostlink\.state-outline-server' remove --name laptop
 ```
 
 These are disposable local provisioning examples, not an instruction to start/change the current machine's VPN. Use unique unused ports and inspect private state after a partial failure.
@@ -715,7 +842,7 @@ Administrator installation is a human step on an authorized test machine. No UAC
 
 Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
-Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md`. A maintainer must review and publish the draft. A manual `workflow_dispatch` run only produces workflow artifacts. Neither the workflow nor any agent has pushed a tag or created a release yet.
+Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. The user reviews and publishes the draft; agents never publish. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`) only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.0` exist; v0.5.0, v0.7.0 and v0.8.0 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
 
 Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
 
@@ -787,7 +914,7 @@ Keep plaintext runtime configs in service-private storage for the shortest requi
 
 `.github/workflows/desktop.yml` defines Windows 2022 / Ubuntu 24.04 jobs using Rust 1.92, Node 22 and Go 1.26.10. It builds/tests/vets/scans the worker; builds/tests/lints root Rust; runs Node/Python tests; downloads checksummed independent local peers; runs explicit real-engine tests; builds desktop and checks formatting.
 
-The workflow has not been observed on hosted runners. It does not certify privileged TUN routing or produce a verified mobile app. Inspect OS-specific skips and peer/tool availability when the first CI run occurs. There is no implemented Android/iOS pipeline pretending to validate absent applications, and no production CD.
+It runs on every push and pull request (hosted runs observed since v0.2.0). It does not certify privileged TUN routing or produce a verified mobile app. Inspect OS-specific skips and peer/tool availability when the first CI run occurs. There is no implemented Android/iOS pipeline pretending to validate absent applications, and no production CD.
 
 ### Linux continuation
 
@@ -811,7 +938,7 @@ No application implementation exists yet. The original requirements are:
 
 ## 17. Known limits and continuation plan
 
-### Approved plan in progress
+### The first approved plan (historical)
 
 The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in `devjourney.md`). Phases 1–2 shipped as **v0.2.0**, Linux client packages as **v0.2.1**, and phases 3–4 as **v0.3.0**, as described in §13. What follows is the original plan text, kept for reference. Remaining server work: an authorized VPS deployment test, Amnezia-app import of our `vpn://` keys, RPM/Fedora install, IPv6 in tunnels, ports below 1024, and routed verification of the management bypass while connected.
 

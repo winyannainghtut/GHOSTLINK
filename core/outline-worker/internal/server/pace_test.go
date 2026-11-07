@@ -10,7 +10,7 @@ import (
 )
 
 // The bucket starts full, refills at the rate up to the burst, and lets a chunk overdraw it,
-// to be paid back by waiting.
+// to be paid back by waiting, all of it: a cut-off would let many connections exceed the cap.
 func TestPacerArithmetic(t *testing.T) {
 	var p pacer
 	p.SetRate(1_000_000) // 1 MB/s: burst 250 KB
@@ -25,8 +25,17 @@ func TestPacerArithmetic(t *testing.T) {
 	if pause := p.take(250_000, start.Add(2*time.Second)); pause != 0 {
 		t.Fatalf("a refilled bucket should not wait, got %v", pause)
 	}
-	if pause := p.take(10_000_000, start.Add(2*time.Second)); pause != maxPause {
-		t.Fatalf("one wait is bounded by maxPause, got %v", pause)
+	if pause := p.take(10_000_000, start.Add(2*time.Second)); pause != 10*time.Second {
+		t.Fatalf("10 MB over an empty bucket should wait 10 s, got %v", pause)
+	}
+	// Debt adds up across chunks (other connections): the next one waits for all of it.
+	if pause := p.take(1_000_000, start.Add(2*time.Second)); pause != 11*time.Second {
+		t.Fatalf("the next chunk should wait for the whole debt, got %v", pause)
+	}
+	// A new rate forgives the debt and starts with a full bucket.
+	p.SetRate(2_000_000)
+	if pause := p.take(500_000, start.Add(3*time.Second)); pause != 0 {
+		t.Fatalf("a new rate should start with a full bucket, got %v", pause)
 	}
 	p.SetRate(0)
 	if pause := p.take(10_000_000, start.Add(3*time.Second)); pause != 0 {
@@ -35,6 +44,23 @@ func TestPacerArithmetic(t *testing.T) {
 	// Small caps still get a 64 KB burst.
 	if got := burstFor(10_000); got != 64<<10 {
 		t.Fatalf("burst for 10 KB/s: %v", got)
+	}
+}
+
+// UDP is policed: a packet passes if the bucket holds it, and is dropped otherwise, at once.
+func TestPacerAllow(t *testing.T) {
+	var p pacer
+	p.SetRate(1_000_000)
+	start := time.Unix(1_800_000_000, 0)
+	if !p.allow(200_000, start) || p.allow(100_000, start) {
+		t.Fatal("of a 250 KB bucket, 200 KB should pass and then 100 KB should not")
+	}
+	if !p.allow(100_000, start.Add(100*time.Millisecond)) {
+		t.Fatal("0.1 s at 1 MB/s refills 100 KB")
+	}
+	p.SetRate(0)
+	if !p.Allow(10_000_000) {
+		t.Fatal("unlimited allows everything")
 	}
 }
 
@@ -69,5 +95,27 @@ func TestPacerHoldsTheRateAcrossConnections(t *testing.T) {
 	}
 	if time.Since(quick) > 50*time.Millisecond {
 		t.Fatal("an unlimited pacer should not slow anything down")
+	}
+}
+
+// A connection paying off a long wait goes on as soon as its limit changes.
+func TestPacerWaitEndsWhenTheLimitChanges(t *testing.T) {
+	var p pacer
+	p.SetRate(100_000)
+	done := make(chan time.Duration)
+	go func() {
+		start := time.Now()
+		p.Wait(1_000_000) // about 9.4 s at 100 KB/s
+		done <- time.Since(start)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	p.SetRate(0)
+	select {
+	case took := <-done:
+		if took > 2*time.Second {
+			t.Fatalf("the wait went on for %v after the limit was removed", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait did not end when the limit was removed")
 	}
 }

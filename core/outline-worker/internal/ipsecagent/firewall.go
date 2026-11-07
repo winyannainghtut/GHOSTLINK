@@ -6,8 +6,10 @@ package ipsecagent
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	"ghostlink.local/outline-worker/internal/hostfw"
@@ -79,12 +81,22 @@ func limitRules(d ipsecproto.Desired, sas []ipsecproto.SA) []string {
 		}
 		seen[addr] = true
 		for _, direction := range []struct{ match, suffix string }{{"-d", "d"}, {"-s", "u"}} {
-			rules = append(rules, fmt.Sprintf("-A %s %s %s/32 -m hashlimit --hashlimit-above %db/s --hashlimit-name gl%s%s -j DROP",
-				chainLimit, direction.match, addr, limit.BytesPerSecond, limit.Name, direction.suffix))
+			rules = append(rules, fmt.Sprintf("-A %s %s %s/32 -m hashlimit --hashlimit-above %db/s --hashlimit-name %s%s -j DROP",
+				chainLimit, direction.match, addr, limit.BytesPerSecond, hashlimitName(limit), direction.suffix))
 		}
 	}
 	slices.Sort(rules)
 	return rules
+}
+
+// hashlimitName names a client's buckets after the client and its rate. The kernel keeps a
+// named table, with the rate of the rule that created it, for as long as any rule uses that
+// name, so a new rate needs a new name to take effect for sessions already connected. At most
+// 9 characters, which leaves room for the direction (hashlimit names are up to 15).
+func hashlimitName(l ipsecproto.SpeedLimit) string {
+	h := fnv.New32a()
+	fmt.Fprintf(h, "%s/%d", l.Name, l.BytesPerSecond)
+	return "gl" + strconv.FormatUint(uint64(h.Sum32()), 36)
 }
 
 // Rules renders iptables-restore input for each table. Restoring with --noflush replaces only
