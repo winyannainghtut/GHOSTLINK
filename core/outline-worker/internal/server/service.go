@@ -92,6 +92,7 @@ func (s *Service) Start() error {
 	s.store.Lock()
 	defer s.store.Unlock()
 	s.monitor.SetSiteStats(s.store.State.Monitor.SiteStats)
+	s.monitor.SetSpeedLimits(s.store.State.speedLimits())
 	if err := s.engine.Apply(s.store.State); err != nil {
 		return err
 	}
@@ -138,6 +139,8 @@ func (s *Service) Change(fn func(*State) error) error {
 	if previous.Monitor.SiteStats != next.Monitor.SiteStats {
 		s.monitor.SetSiteStats(next.Monitor.SiteStats)
 	}
+	// Speed limits are not part of the engine configuration: they change live, with no reload.
+	s.monitor.SetSpeedLimits(next.speedLimits())
 	for _, u := range previous.Users {
 		if next.User(u.ID) == nil {
 			s.monitor.Forget(u.Tag())

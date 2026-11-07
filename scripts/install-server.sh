@@ -36,6 +36,13 @@ Options:
   --reinstall       install even if this version is already installed
   --add-swap        on a server with under 1 GB of memory and swap, add a 1 GB swap file
                     (/swapfile, kept across reboots) so installing is not killed
+  --migrate-outline take over the Outline server on this machine: its access keys become
+                    Ghostlink clients and their ss:// keys keep working; Outline is stopped
+                    (its files in /opt/outline stay as a backup)
+  --migrate-outline --check
+                    install Ghostlink next to Outline and only show what the migration
+                    would do; Outline keeps running
+  --outline-dir DIR where Outline is installed (default /opt/outline)
   -h, --help        show this help
 EOF
 }
@@ -49,7 +56,7 @@ trap cleanup EXIT
 
 main() {
     local version="" package="" hostname="" ipsec=0 open_firewall=0 docker_install=1 reinstall=0 add_swap=0
-    local mesh=0 mesh_package=""
+    local mesh=0 mesh_package="" migrate=0 migrate_check=0 outline_dir=/opt/outline
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
@@ -65,6 +72,10 @@ main() {
             --no-docker) docker_install=0; shift ;;
             --reinstall) reinstall=1; shift ;;
             --add-swap) add_swap=1; shift ;;
+            --migrate-outline) migrate=1; shift ;;
+            --check) migrate_check=1; shift ;;
+            --outline-dir) [ $# -ge 2 ] || die "--outline-dir needs a directory"; outline_dir=$2; shift 2 ;;
+            --outline-dir=*) outline_dir=${1#--outline-dir=}; shift ;;
             -h | --help) usage; exit 0 ;;
             *) die "unknown option $1 (see --help)" ;;
         esac
@@ -87,6 +98,12 @@ main() {
     if [ -n "$mesh_package" ]; then
         [ -f "$mesh_package" ] || die "$mesh_package does not exist"
         mesh_package=$(cd "$(dirname "$mesh_package")" && pwd)/$(basename "$mesh_package")
+    fi
+    if [ "$migrate_check" = 1 ] && [ "$migrate" = 0 ]; then
+        die "--check goes with --migrate-outline"
+    fi
+    if [ "$migrate" = 1 ] && [ ! -f "$outline_dir/persisted-state/shadowbox_config.json" ]; then
+        die "no Outline server found: $outline_dir/persisted-state/shadowbox_config.json does not exist (use --outline-dir if it is elsewhere)"
     fi
 
     # --- this machine ---
@@ -204,6 +221,21 @@ main() {
     fi
     [ "$(docker inspect --format '{{.State.Running}}' ghostlink-server 2>/dev/null || true)" = true ] ||
         die "the server container is not running; see: sudo ghostlink-server logs"
+
+    # --- optional: take over Outline ---
+    if [ "$migrate" = 1 ]; then
+        if [ "$migrate_check" = 1 ]; then
+            say "Checking what the migration from Outline would do (Outline keeps running)"
+            ghostlink-server migrate-outline --check --outline-dir "$outline_dir" || die "the check failed (see above); Outline is untouched"
+            return 0
+        fi
+        say "Taking over the Outline server"
+        ghostlink-server migrate-outline --outline-dir "$outline_dir" || die "the migration did not go through (see above); Outline is running as before"
+        if [ -n "$hostname" ]; then
+            # The import adopts Outline's address; the one asked for here wins.
+            ghostlink-server set --hostname "$hostname" >/dev/null
+        fi
+    fi
 
     # --- optional IKEv2/IPsec ---
     if [ "$ipsec" = 1 ]; then
@@ -354,6 +386,8 @@ server_ports() { # "PORT/PROTO  service" for everything clients connect to
     jq -r '
         ["\(.api.port)/tcp  management API (Ghostlink app)"]
         + (if .shadowsocks.enabled then ["\(.shadowsocks.port)/tcp  Shadowsocks (Outline)", "\(.shadowsocks.port)/udp  Shadowsocks (Outline)"] else [] end)
+        + (if .shadowsocks.enabled then [.users[]?.keys[]? | select(.protocol == "shadowsocks" and (.port // 0) > 0) | .port] | unique
+            | map("\(.)/tcp  Shadowsocks (keys from Outline)", "\(.)/udp  Shadowsocks (keys from Outline)") else [] end)
         + (if .vless.enabled then ["\(.vless.port)/tcp  VLESS-REALITY"] else [] end)
         + (if .wireguard.enabled then ["\(.wireguard.port)/udp  WireGuard"] else [] end)
         + (if .amneziawg.enabled then ["\(.amneziawg.port)/udp  AmneziaWG"] else [] end)

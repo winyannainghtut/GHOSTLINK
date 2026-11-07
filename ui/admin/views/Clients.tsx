@@ -6,6 +6,7 @@ import { Button, Card, Empty, IconButton, Meter, Segmented, StatusDot, Switch, c
 import { useNow, useStoredState } from '@shared/hooks';
 import { api, protocolName, type User } from '../api';
 import { DeviceIcon, hasConf, isApple, primaryKey, tunnelAddress, useKeyTools } from '../keys';
+import { speedLabel } from '../SpeedLimit';
 import { clientStatus, statusLabel, useStore } from '../store';
 import { ClientSheet } from './ClientSheet';
 
@@ -92,10 +93,10 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
         </div>
       ) : (
         <Card className="overflow-x-auto p-0 sm:p-0">
-          <table className="w-full min-w-[920px] border-collapse text-[13px]">
+          <table className="w-full min-w-[1020px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[12px] text-fg-3">
-                {['Client', 'Tunnel IP', 'Endpoint', 'Last handshake', 'Live', 'Usage', 'Access', ''].map(h => (
+                {['Client', 'Tunnel IP', 'Endpoint', 'Last handshake', 'Live', 'Usage', 'Speed limit', 'Access', ''].map(h => (
                   <th key={h} className="border-b border-line px-4 py-3 font-medium">
                     {h}
                   </th>
@@ -127,6 +128,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
                       <span className="text-down">↓ {speed(live?.down_bps ?? 0)}</span> <span className="ml-2 text-up">↑ {speed(live?.up_bps ?? 0)}</span>
                     </td>
                     <td className="num border-b border-line px-4 py-3 text-fg-2">{u.data_limit_bytes ? `${bytes(u.usage_bytes)} of ${bytes(u.data_limit_bytes)}` : bytes(u.usage_bytes)}</td>
+                    <td className="num border-b border-line px-4 py-3 text-fg-2">{speedLabel(u.effective_speed_limit_bps) || '—'}</td>
                     <td className="border-b border-line px-4 py-3">
                       <Switch checked={u.enabled} onChange={on => setEnabled(u, on)} label={`${u.name} may connect`} />
                     </td>
@@ -172,6 +174,11 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
           <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-fg-2">
             <StatusDot status={status} /> {statusLabel[status]}
             <span className="text-fg-3">· {plural(user.keys.length, 'key')}</span>
+            {user.effective_speed_limit_bps > 0 && (
+              <span className="num ml-1 rounded-full bg-glass-strong px-2 py-0.5 text-[11.5px] text-fg-2" title="Speed limit, download and upload alike">
+                {speedLabel(user.effective_speed_limit_bps)}
+              </span>
+            )}
           </div>
         </button>
         <Switch checked={user.enabled} onChange={onEnabled} label={`${user.name} may connect`} />

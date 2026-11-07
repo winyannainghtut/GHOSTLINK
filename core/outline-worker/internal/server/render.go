@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -75,14 +76,23 @@ func (s *State) activeKeys(protocol string) []struct {
 func (s *State) inbounds() []any {
 	var inbounds []any
 	if keys := s.activeKeys(Shadowsocks); s.Shadowsocks.Enabled && len(keys) > 0 {
-		users := []any{}
+		// Keys imported from Outline on other ports get one more inbound per port.
+		users := map[uint16][]any{}
+		methods := map[uint16]string{}
 		for _, entry := range keys {
-			users = append(users, object{"name": entry.user.Tag(), "password": entry.key.Password})
+			port, method := s.shadowsocksEndpoint(entry.key)
+			users[port] = append(users[port], object{"name": entry.user.Tag(), "password": entry.key.Password})
+			methods[port] = method
 		}
-		inbounds = append(inbounds, object{
-			"type": "shadowsocks", "tag": Shadowsocks, "listen": listenAddress, "listen_port": s.Shadowsocks.Port,
-			"method": s.Shadowsocks.Method, "users": users,
-		})
+		for _, port := range s.shadowsocksPorts() {
+			if len(users[port]) == 0 {
+				continue
+			}
+			inbounds = append(inbounds, object{
+				"type": "shadowsocks", "tag": shadowsocksTag(s, port), "listen": listenAddress, "listen_port": port,
+				"method": methods[port], "users": users[port],
+			})
+		}
 	}
 	if keys := s.activeKeys(VLESS); s.VLESS.Enabled && len(keys) > 0 {
 		users := []any{}
@@ -283,7 +293,9 @@ func (s *State) Listening() map[string]string {
 		ports["dashboard"] = "tcp/" + strconv.Itoa(int(s.Dashboard.Port))
 	}
 	if s.Shadowsocks.Enabled {
-		ports[Shadowsocks] = "tcp+udp/" + strconv.Itoa(int(s.Shadowsocks.Port))
+		for _, port := range s.shadowsocksPorts() {
+			ports[shadowsocksTag(s, port)] = "tcp+udp/" + strconv.Itoa(int(port))
+		}
 	}
 	if s.VLESS.Enabled {
 		ports[VLESS] = "tcp/" + strconv.Itoa(int(s.VLESS.Port))
@@ -307,6 +319,44 @@ func (s *State) Listening() map[string]string {
 	return ports
 }
 
+// shadowsocksEndpoint is the port and cipher a Shadowsocks key uses: its own (imported from
+// Outline) or the server's.
+func (s *State) shadowsocksEndpoint(k *Key) (uint16, string) {
+	port, method := s.Shadowsocks.Port, s.Shadowsocks.Method
+	if k.Port != 0 {
+		port = k.Port
+	}
+	if k.Method != "" {
+		method = k.Method
+	}
+	return port, method
+}
+
+// shadowsocksPorts lists the main Shadowsocks port, then the extra ports of imported keys.
+func (s *State) shadowsocksPorts() []uint16 {
+	ports := []uint16{s.Shadowsocks.Port}
+	seen := map[uint16]bool{s.Shadowsocks.Port: true}
+	var extra []uint16
+	for _, u := range s.Users {
+		for _, k := range u.Keys {
+			if k.Protocol == Shadowsocks && k.Port != 0 && !seen[k.Port] {
+				seen[k.Port] = true
+				extra = append(extra, k.Port)
+			}
+		}
+	}
+	slices.Sort(extra)
+	return append(ports, extra...)
+}
+
+// shadowsocksTag names a Shadowsocks inbound: the main one, or shadowsocks-<port>.
+func shadowsocksTag(s *State, port uint16) string {
+	if port == s.Shadowsocks.Port {
+		return Shadowsocks
+	}
+	return Shadowsocks + "-" + strconv.Itoa(int(port))
+}
+
 // portsConflict reports two services sharing a port on the same transport.
 func portsConflict(a, b string) bool {
 	protoA, portA, _ := strings.Cut(a, "/")
@@ -328,6 +378,18 @@ func (s *State) CheckPorts() error {
 		return fmt.Errorf("the mesh needs its own port from 1024 to 65535 (not 443)")
 	}
 	names := []string{"api", "dashboard", "mesh", Shadowsocks, VLESS, WireGuard, AmneziaWG, "ipsec-ike", "ipsec-natt", ipsecDNSTag}
+	for _, port := range s.shadowsocksPorts() {
+		if tag := shadowsocksTag(s, port); tag != Shadowsocks {
+			names = append(names, tag)
+		}
+	}
+	for _, u := range s.Users {
+		for _, k := range u.Keys {
+			if k.Protocol == Shadowsocks && k.Port != 0 && k.Port == s.Shadowsocks.Port {
+				return fmt.Errorf("Shadowsocks port %d is already used by keys imported from Outline", k.Port)
+			}
+		}
+	}
 	for i, a := range names {
 		for _, b := range names[i+1:] {
 			pa, okA := ports[a]

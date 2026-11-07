@@ -489,6 +489,29 @@ func TestAppleProfilesAndAgentState(t *testing.T) {
 	if desired.Firewall.DNSPort == 0 || len(desired.Firewall.Internal) == 0 || desired.Firewall.ServerIP != "127.0.0.1" {
 		t.Fatalf("firewall: %+v", desired.Firewall)
 	}
+	if len(desired.SpeedLimits) != 0 {
+		t.Fatalf("speed limits without any set: %+v", desired.SpeedLimits)
+	}
+
+	// A speed limit (the client's own, or the server's default) reaches the agent with every
+	// identity of the client.
+	server.must(t, http.StatusOK, "PATCH", "/users/"+user.ID, map[string]any{"speed_limit_bps": 500_000}, nil)
+	limits := server.desired(t).SpeedLimits
+	if len(limits) != 1 || limits[0].Name != "u"+user.ID || limits[0].BytesPerSecond != 500_000 || len(limits[0].Identities) != 4 ||
+		!slices.Contains(limits[0].Identities, "alice-phone@example.test") {
+		t.Fatalf("speed limits for the agent: %+v", limits)
+	}
+	server.must(t, http.StatusOK, "PATCH", "/users/"+user.ID, map[string]any{"speed_limit_bps": 0}, nil)
+	server.must(t, http.StatusOK, "PATCH", "/server", map[string]any{"default_speed_limit_bps": 2_000_000}, nil)
+	if limits := server.desired(t).SpeedLimits; len(limits) != 1 || limits[0].BytesPerSecond != 2_000_000 {
+		t.Fatalf("the server default for the agent: %+v", limits)
+	}
+	server.must(t, http.StatusOK, "PATCH", "/users/"+user.ID, map[string]any{"speed_limit_bps": -1}, nil)
+	if limits := server.desired(t).SpeedLimits; len(limits) != 0 {
+		t.Fatalf("no limit for the agent: %+v", limits)
+	}
+	server.must(t, http.StatusOK, "PATCH", "/server", map[string]any{"default_speed_limit_bps": 0}, nil)
+	server.must(t, http.StatusOK, "PATCH", "/users/"+user.ID, map[string]any{"speed_limit_bps": 0}, nil)
 
 	// Disabling the user drops every identity and holds the certificates.
 	certSerial := server.stateKey(user.ID, cert.ID).CertSerial

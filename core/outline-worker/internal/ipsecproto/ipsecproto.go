@@ -38,7 +38,22 @@ type Desired struct {
 	IKEv1    *IKEv1   `json:"ikev1,omitempty"`
 	Firewall Firewall `json:"firewall"`
 	Allowed  []string `json:"allowed"`
+	// SpeedLimits caps clients' traffic; each client's identities share one budget.
+	SpeedLimits []SpeedLimit `json:"speed_limits,omitempty"`
 }
+
+// SpeedLimit caps one client's speed, download and upload alike, in bytes per second.
+type SpeedLimit struct {
+	// Name labels the client's budget in the firewall (lower-case letters and digits).
+	Name           string   `json:"name"`
+	Identities     []string `json:"identities"`
+	BytesPerSecond int64    `json:"bytes_per_second"`
+}
+
+// MaxSpeedLimit is the highest cap, 1.25 GB/s (10 Gbit/s).
+const MaxSpeedLimit = 1_250_000_000
+
+var limitNamePattern = regexp.MustCompile(`^[a-z0-9]{1,12}$`)
 
 type IKEv2 struct {
 	Pool    string `json:"pool"`
@@ -224,6 +239,18 @@ func (d *Desired) Validate() error {
 	for _, id := range d.Allowed {
 		if !ValidIdentity(id) {
 			return errors.New("invalid allowed identity")
+		}
+	}
+	names := map[string]bool{}
+	for _, l := range d.SpeedLimits {
+		if !limitNamePattern.MatchString(l.Name) || names[l.Name] || l.BytesPerSecond < 1 || l.BytesPerSecond > MaxSpeedLimit {
+			return errors.New("invalid speed limit")
+		}
+		names[l.Name] = true
+		for _, id := range l.Identities {
+			if !ValidIdentity(id) {
+				return errors.New("invalid speed limit identity")
+			}
 		}
 	}
 	f := d.Firewall

@@ -3,11 +3,12 @@ import { Copy, FileDown, KeyRound, QrCode, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { BarChart, fillBuckets } from '@shared/BarChart';
 import { Bars } from '@shared/Bars';
-import { ago, bytes, dateTime, plural } from '@shared/format';
+import { ago, bytes, dateTime, plural, speed } from '@shared/format';
 import { Button, Check, Field, Inner, Note, Segmented, Sheet, StatusDot, useUI } from '@shared/glass';
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type Client, type Key, type ProtocolId, type Stats, type User } from '../api';
 import { hasConf, isApple, tunnelAddress, useKeyTools } from '../keys';
 import { RulesEditor } from '../RulesEditor';
+import { SpeedLimitField, speedChoice, speedValue } from '../SpeedLimit';
 import { clientStatus, statusLabel, useStore } from '../store';
 
 type Tab = 'keys' | 'usage' | 'rules' | 'settings';
@@ -313,14 +314,20 @@ function RulesTab({ user }: { user: User }) {
 }
 
 function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void }) {
-  const { reloadUsers } = useStore();
+  const { server, reloadUsers } = useStore();
   const { toast, confirm } = useUI();
   const [name, setName] = useState(user.name);
   const [limit, setLimit] = useState(user.data_limit_bytes ? String(user.data_limit_bytes / 1e9) : '');
+  const [speedLimit, setSpeedLimit] = useState(speedChoice(user.speed_limit_bps));
   const [exempt, setExempt] = useState(user.exempt_from_global_rules);
   const save = async (extra: Record<string, unknown> = {}) => {
+    const bps = speedValue(speedLimit);
+    if (bps instanceof Error) {
+      toast(bps.message, 'bad');
+      return;
+    }
     try {
-      await api('PATCH', `/users/${user.id}`, { name: name.trim(), data_limit_bytes: Math.round(Number(limit || 0) * 1e9), exempt_from_global_rules: exempt, ...extra });
+      await api('PATCH', `/users/${user.id}`, { name: name.trim(), data_limit_bytes: Math.round(Number(limit || 0) * 1e9), speed_limit_bps: bps, exempt_from_global_rules: exempt, ...extra });
       toast(extra.reset_usage ? 'Usage reset to zero.' : 'Client saved.');
       await reloadUsers();
     } catch (error) {
@@ -338,6 +345,7 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
           <input className="field num" type="number" min="0" step="any" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} />
         </Field>
       </div>
+      <SpeedLimitField value={speedLimit} onChange={setSpeedLimit} defaultBps={server.default_speed_limit_bps ?? 0} />
       <Check checked={exempt} onChange={setExempt}>
         Not affected by the rules for everyone
       </Check>
@@ -353,6 +361,10 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
         <div className="flex justify-between">
           <span className="text-fg-3">Data used</span>
           <span className="num">{bytes(user.usage_bytes)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-fg-3">Speed limit now</span>
+          <span className="num">{user.effective_speed_limit_bps > 0 ? `${speed(user.effective_speed_limit_bps)}${user.speed_limit_bps === 0 ? ' (server default)' : ''}` : 'None'}</span>
         </div>
       </Inner>
       <div className="flex flex-wrap justify-between gap-2">

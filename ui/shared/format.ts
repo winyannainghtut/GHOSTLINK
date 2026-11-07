@@ -1,21 +1,24 @@
 // Number and time formatting. Live numbers are shown with tabular figures (the `num` class), so
 // these keep a stable shape: fixed decimals per unit.
 
-export function bitRate(bytesPerSecond: number): { value: string; unit: string } {
-  const bits = Math.max(0, Number(bytesPerSecond) || 0) * 8;
-  if (bits >= 1e9) return { value: (bits / 1e9).toFixed(2), unit: 'Gbit/s' };
-  if (bits >= 1e6) return { value: (bits / 1e6).toFixed(1), unit: 'Mbit/s' };
-  if (bits >= 1e3) return { value: (bits / 1e3).toFixed(0), unit: 'kbit/s' };
-  return { value: bits.toFixed(0), unit: 'bit/s' };
+// Speeds are shown in bytes per second, with the same decimal units as data (1 MB = 10^6 bytes).
+export function byteRate(bytesPerSecond: number): { value: string; unit: string } {
+  const b = Math.max(0, Number(bytesPerSecond) || 0);
+  if (b >= 1e9) return { value: (b / 1e9).toFixed(2), unit: 'GB/s' };
+  if (b >= 1e6) return { value: (b / 1e6).toFixed(1), unit: 'MB/s' };
+  if (b >= 1e3) return { value: (b / 1e3).toFixed(0), unit: 'KB/s' };
+  return { value: b.toFixed(0), unit: 'B/s' };
 }
 
 export function speed(bytesPerSecond: number): string {
-  const { value, unit } = bitRate(bytesPerSecond);
+  const { value, unit } = byteRate(bytesPerSecond);
   return `${value} ${unit}`;
 }
 
-export function megabits(bytesPerSecond: number): string {
-  return ((Math.max(0, bytesPerSecond) * 8) / 1e6).toFixed(bytesPerSecond * 8 >= 1e8 ? 0 : bytesPerSecond * 8 >= 1e7 ? 1 : 2);
+// MB/s with two significant decimals, for compact live readouts such as the Island.
+export function megabytes(bytesPerSecond: number): string {
+  const mb = Math.max(0, Number(bytesPerSecond) || 0) / 1e6;
+  return mb.toFixed(mb >= 100 ? 0 : mb >= 10 ? 1 : 2);
 }
 
 export function bytes(n: number): string {

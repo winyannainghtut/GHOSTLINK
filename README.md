@@ -51,6 +51,8 @@
 - **One service, three front ends:** the desktop app, the `ghostlink` CLI and an optional restricted MCP bridge for AI agents all control the same local service.
 - **Your own server, Outline-style:** install one `.deb`/`.rpm` on a Linux machine with Docker (the image is inside the package), paste the management key it prints into the app, then create users and keys and set traffic rules from **Servers I run** or `ghostlink server`.
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
+- **Speed limits:** one cap per client in MB/s, download and upload alike, across all its devices, with an optional default for everyone. Changes apply live, on every protocol.
+- **Move from Outline:** one command takes over an Outline server on the same machine; every access key becomes a client and the `ss://` keys people already have keep working.
 - **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
 - **iPhone, iPad and Mac with no app:** the server can also serve Apple's built-in IKEv2 and IPsec VPN, and hands each person a configuration profile (`.mobileconfig`) that installs it in Settings. Sign-in is by password or certificate.
 - **Mesh of your Linux servers:** a private network between your servers over WireGuard: direct links with a relay for servers behind NAT, tag-based access rules, shared subnets, and a live map in the app and the dashboard. One command adds a server.
@@ -184,13 +186,20 @@ Details: [security model](docs/security/model.md) · [dependency scans](docs/sec
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
-# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --mesh (mesh of servers)  --open-firewall  --help
+# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --mesh (mesh of servers)  --open-firewall  --add-swap  --help
+```
+
+**Already running Outline?** Take it over on the same machine; its `ss://` keys keep working ([guide](docs/deployment/migrate-from-outline.md)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline --check   # see what would happen
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline
 ```
 
 The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
 
 Paste the key into **Servers I run → Add server** (or `ghostlink server add`). You can also manage everything on the server itself (`sudo ghostlink-server users`, `key add`, `top`…) or in its web dashboard (`sudo ghostlink-server dashboard`). From there:
-- **Users:** add users, with optional data limits.
+- **Users:** add users, with optional data limits and speed limits (MB/s, or a default for everyone).
 - **Keys:** issue keys per protocol. You can copy them, share a `.conf` for WireGuard/AmneziaWG apps, or use one on this device.
 - **Rules:** block sites, IPs, ports, BitTorrent or outgoing mail for everyone or for one user.
 - **Usage and monitoring:** see live speeds, who is online, data used, traffic types and, if you turn it on, each user's top services.
@@ -262,7 +271,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Protocols | Shadowsocks, VLESS-REALITY, WireGuard, AmneziaWG: encrypted traffic tested against upstream implementations. OpenVPN: optional |
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
-| Ghostlink server, management, monitoring | Server API, rules, limits, monitoring and all four protocols tested end to end with real clients; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
+| Ghostlink server, management, monitoring | Server API, rules, data and speed limits, monitoring and all four protocols tested end to end with real clients; the Outline import tested with Outline's own keys and, in release CI, with a fake Outline on the host; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
 | IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component. Installing on a real Apple device is checked by hand |
 | Mesh of Linux servers | Tested in CI with kernel WireGuard between network namespaces: direct and relayed paths through NAT, access rules, shared subnets, names, disable/remove and clean-up. Release CI installs the agent package, joins it to the installed server and removes it cleanly. Not yet run across real cloud servers. Windows nodes are planned |
 | Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
@@ -281,6 +290,7 @@ The [changelog](CHANGELOG.md) lists what each release changed.
 | Protocol design | [docs/architecture/protocols.md](docs/architecture/protocols.md) |
 | Security, dependencies, licensing | [model.md](docs/security/model.md) · [dependencies.md](docs/security/dependencies.md) · [licensing.md](docs/security/licensing.md) |
 | Ghostlink server | [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) |
+| Move from Outline | [docs/deployment/migrate-from-outline.md](docs/deployment/migrate-from-outline.md) |
 | Mesh of Linux servers | [docs/deployment/mesh.md](docs/deployment/mesh.md) |
 | Offline Outline-compatible server | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
 | Web UI (dashboard and desktop) | [ui/README.md](ui/README.md) |

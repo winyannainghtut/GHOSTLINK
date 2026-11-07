@@ -1,4 +1,4 @@
-// New client: name, protocol and an optional data limit. The server creates the client and its
+// New client: name, protocol, an optional data limit and speed limit. The server creates the client and its
 // key (WireGuard-family keys get the next free /32 and a fresh Curve25519 key pair), then the
 // sheet shows the QR code, the .conf and the share options.
 import { Check as CheckIcon, Copy, FileDown, KeyRound, MonitorDown } from 'lucide-react';
@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Button, Field, Inner, Note, Sheet, cx, useUI } from '@shared/glass';
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, canUseHere, useHere, type Key, type ProtocolId, type User } from '../api';
 import { hasConf, isApple, qrFor, saveConf, saveKit, saveProfile } from '../keys';
+import { SpeedLimitField, speedValue, type SpeedChoice } from '../SpeedLimit';
 import { useStore } from '../store';
 
 type Created = { user: User; key: Key; qr?: string };
@@ -18,6 +19,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
   const [protocol, setProtocol] = useState<ProtocolId>('amneziawg');
   const [auth, setAuth] = useState('eap');
   const [limit, setLimit] = useState('');
+  const [speedLimit, setSpeedLimit] = useState<SpeedChoice>({ mode: 'default', mb: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<Created | null>(null);
@@ -26,6 +28,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
     if (!open) return;
     setName('');
     setLimit('');
+    setSpeedLimit({ mode: 'default', mb: '' });
     setError('');
     setCreated(null);
     setProtocol(available.includes('amneziawg') ? 'amneziawg' : available[0] ?? 'amneziawg');
@@ -46,12 +49,18 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   const create = async () => {
+    const bps = speedValue(speedLimit);
+    if (bps instanceof Error) {
+      setError(bps.message);
+      return;
+    }
     setBusy(true);
     setError('');
     let user: User | null = null;
     try {
       const body: Record<string, unknown> = { name: name.trim() };
       if (limit.trim()) body.data_limit_bytes = Math.round(Number(limit) * 1e9);
+      if (bps) body.speed_limit_bps = bps;
       user = await api<User>('POST', '/users', body);
       const key = await api<Key>('POST', `/users/${user.id}/keys`, isApple(protocol) ? { protocol, auth } : { protocol });
       let qr: string | undefined;
@@ -210,6 +219,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
             )}
           </Inner>
         </div>
+        <SpeedLimitField value={speedLimit} onChange={setSpeedLimit} defaultBps={server.default_speed_limit_bps ?? 0} />
         <Note>
           {pool ? 'The next free address is assigned automatically and a new Curve25519 key pair is generated on the server.' : 'The key is generated on the server.'} You can add more keys for other protocols later.
         </Note>

@@ -281,8 +281,9 @@ func (s *State) Render(user *User, key *Key) (IssuedKey, error) {
 	result := IssuedKey{ID: key.ID, Protocol: key.Protocol}
 	switch key.Protocol {
 	case Shadowsocks:
-		credential := base64.RawURLEncoding.EncodeToString([]byte(s.Shadowsocks.Method + ":" + key.Password))
-		result.AccessKey = fmt.Sprintf("ss://%s@%s:%d/?outline=1#%s", credential, endpointHost(s.Hostname), s.Shadowsocks.Port, label)
+		port, method := s.shadowsocksEndpoint(key)
+		credential := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + key.Password))
+		result.AccessKey = fmt.Sprintf("ss://%s@%s:%d/?outline=1#%s", credential, endpointHost(s.Hostname), port, label)
 	case VLESS:
 		query := url.Values{"type": {"tcp"}, "security": {"reality"}, "sni": {s.VLESS.Handshake}, "fp": {"chrome"},
 			"pbk": {s.VLESS.PublicKey}, "sid": {s.VLESS.ShortID}, "flow": {"xtls-rprx-vision"}, "encryption": {"none"}}

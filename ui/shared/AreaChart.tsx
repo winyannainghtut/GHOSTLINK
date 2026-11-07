@@ -26,11 +26,11 @@ function monotone(points: [number, number][]): string {
 }
 
 function niceMax(value: number): number {
-  if (value <= 0) return 125_000; // 1 Mbit/s
-  const bits = value * 8 * 1.15;
-  const power = 10 ** Math.floor(Math.log10(bits));
-  const step = [1, 2, 2.5, 5, 10].find(s => s * power >= bits) ?? 10;
-  return (step * power) / 8;
+  if (value <= 0) return 100_000; // 100 KB/s
+  const target = value * 1.15;
+  const power = 10 ** Math.floor(Math.log10(target));
+  const step = [1, 2, 2.5, 5, 10].find(s => s * power >= target) ?? 10;
+  return step * power;
 }
 
 export function AreaChart({ points, height = 220, timeLabel, empty }: {
