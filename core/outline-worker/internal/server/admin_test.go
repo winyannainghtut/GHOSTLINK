@@ -118,6 +118,8 @@ func TestAdminCommands(t *testing.T) {
 	must("Updated Alice", "user", "speed", "Alice", "none")
 	must("no limit", "users")
 	refused("look like 2MB", "user", "speed", "Alice", "fast")
+	refused("bytes per second", "user", "speed", "Alice", "10Mbps")
+	refused("bytes per second", "set", "--speed-limit", "8mbit")
 	refused("up to 1.25GB", "user", "speed", "Alice", "5GB")
 	must("Added Bob", "user", "add", "Bob", "--speed", "1.5MB")
 	if out := must("[", "--json", "users"); !strings.Contains(out, `"speed_limit_bps": 1500000`) {

@@ -35,6 +35,10 @@ func (s *State) usedPorts() map[uint16]bool {
 	if s.Mesh != nil {
 		used[s.Mesh.Port] = true
 	}
+	// Also the ports of keys imported from Outline, even when nothing listens there right now.
+	for _, port := range s.shadowsocksPorts() {
+		used[port] = true
+	}
 	delete(used, 0)
 	return used
 }

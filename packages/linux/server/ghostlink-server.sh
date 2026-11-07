@@ -388,13 +388,50 @@ profile() {
 
 # --- migration from Outline ---
 
-# outline_restore puts Outline's containers back as they were (their restart policies are in
-# $outline_policies as NAME=POLICY) and starts them.
+# outline_restore puts Outline's containers back as they were before the migration: each
+# gets its old restart policy, and those that were running start again. $outline_state holds
+# NAME=POLICY=RUNNING entries. It says which container it could not bring back.
 outline_restore() {
-    for entry in $outline_policies; do
-        docker update --restart="${entry#*=}" "${entry%%=*}" >/dev/null 2>&1 || true
-        docker start "${entry%%=*}" >/dev/null 2>&1 || true
+    restored=0
+    for entry in $outline_state; do
+        name=${entry%%=*}
+        rest=${entry#*=}
+        policy=${rest%%=*}
+        if ! docker update --restart="$policy" "$name" >/dev/null 2>&1; then
+            echo "ghostlink-server: could not set $name's restart policy back to $policy: sudo docker update --restart=$policy $name" >&2
+            restored=1
+        fi
+        if [ "${rest#*=}" = true ] && ! docker start "$name" >/dev/null 2>&1; then
+            echo "ghostlink-server: could not start $name again: sudo docker start $name" >&2
+            restored=1
+        fi
     done
+    return $restored
+}
+
+# outline_imported is true when Ghostlink already has clients: the import went through even
+# if a later step failed. Called from the exit trap, so it must not exit itself.
+outline_imported() {
+    docker exec "$CONTAINER" /usr/bin/ghostlink-server admin --state "$STATE" --json users 2>/dev/null | grep -q '"id"'
+}
+
+# migrate_exit runs whenever migrate-outline ends (also on Ctrl+C or a lost SSH session): if
+# Outline was stopped but the import did not go through, Outline comes back; the private
+# copies of its files are always deleted.
+migrate_exit() {
+    status=$?
+    trap - EXIT
+    if [ "$outline_stopped" = 1 ] && [ "$import_done" = 0 ]; then
+        if outline_imported; then
+            echo "ghostlink-server: the import went through, but a later step failed; Outline stays stopped. Check: sudo ghostlink-server users" >&2
+        elif outline_restore; then
+            echo "ghostlink-server: the import did not go through; Outline is back as it was." >&2
+        else
+            echo "ghostlink-server: the import did not go through, and Outline could not be fully restored (see above)." >&2
+        fi
+    fi
+    rm -rf "$work"
+    exit "$status"
 }
 
 # migrate_outline takes over the Outline server (Jigsaw's shadowbox) on this machine.
@@ -411,9 +448,12 @@ migrate_outline() {
     done
     need_root migrate-outline
     need_docker
+    [ -f "$outline_dir/persisted-state/shadowbox_config.json" ] ||
+        die "no Outline server here: $outline_dir/persisted-state/shadowbox_config.json does not exist (if Outline is installed elsewhere, use --outline-dir)"
+    outline_dir=$(cd "$outline_dir" && pwd -P)
     persisted=$outline_dir/persisted-state
-    [ -f "$persisted/shadowbox_config.json" ] ||
-        die "no Outline server here: $persisted/shadowbox_config.json does not exist (if Outline is installed elsewhere, use --outline-dir)"
+    dir_option=""
+    [ "$outline_dir" = /opt/outline ] || dir_option=" --outline-dir '$outline_dir'"
     running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
     [ "$running" = "true" ] || die "the Ghostlink server is not running (set it up first: sudo ghostlink-server setup)"
 
@@ -421,9 +461,13 @@ migrate_outline() {
     uid=$(id -u "$ACCOUNT")
     gid=$(id -g "$ACCOUNT")
     work=$STATE/outline-import
+    outline_stopped=0
+    import_done=0
+    outline_state=""
     rm -rf "$work"
     install -d -m 0700 -o "$uid" -g "$gid" "$work"
-    trap 'rm -rf "$work"' EXIT
+    trap migrate_exit EXIT
+    trap 'exit 130' INT TERM HUP
     for file in shadowbox_config.json shadowbox_server_config.json; do
         if [ -f "$persisted/$file" ]; then
             install -m 0600 -o "$uid" -g "$gid" "$persisted/$file" "$work/$file"
@@ -433,45 +477,55 @@ migrate_outline() {
     if [ -n "$check" ]; then
         admin import-outline --dir "$work" --check
         echo
-        echo "Outline keeps running. To take it over: sudo ghostlink-server migrate-outline"
+        echo "Outline keeps running. To take it over: sudo ghostlink-server migrate-outline$dir_option"
         return 0
     fi
     # Check first: a refusal (for example, Ghostlink already has clients) leaves Outline alone.
     admin import-outline --dir "$work" --check >/dev/null
 
-    # Stop Outline so its ports are free, and keep it from starting again on boot.
-    outline_policies=""
+    # Stop Outline so its ports are free, and keep it from starting again on boot. What each
+    # container was like is kept first, so the exit trap can put it back.
     for name in shadowbox watchtower; do
-        policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null) || continue
-        outline_policies="$outline_policies $name=${policy:-no}"
+        found=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}} {{.HostConfig.RestartPolicy.MaximumRetryCount}} {{.State.Running}}' "$name" 2>/dev/null) || continue
+        set -- $found
+        policy=${1:-no}
+        [ "$policy" = on-failure ] && [ "${2:-0}" -gt 0 ] && policy="on-failure:$2"
+        outline_state="$outline_state $name=$policy=${3:-false}"
     done
-    if [ -n "$outline_policies" ]; then
+    if [ -n "$outline_state" ]; then
         echo "Stopping Outline (its files in $outline_dir are kept)"
-        for entry in $outline_policies; do
+        outline_stopped=1
+        for entry in $outline_state; do
             docker update --restart=no "${entry%%=*}" >/dev/null
             docker stop "${entry%%=*}" >/dev/null
         done
     fi
-    if ! admin import-outline --dir "$work"; then
-        if [ -n "$outline_policies" ]; then
-            echo "The import did not go through; Outline is starting again." >&2
-            outline_restore
-        fi
-        exit 1
+    admin import-outline --dir "$work"
+    import_done=1
+
+    echo
+    echo "Outline's access keys now connect to Ghostlink."
+    if [ -z "$outline_state" ]; then
+        echo "No Outline containers (shadowbox, watchtower) were found, so nothing was stopped."
+        return 0
     fi
-    rm -rf "$work"
     names=""
-    for entry in $outline_policies; do names="$names ${entry%%=*}"; done
-    cat <<EOF
-
-Outline's access keys now connect to Ghostlink. Outline is stopped and stays off after a
-reboot; its files in $outline_dir are untouched.
-
-To go back to Outline:
-  sudo ghostlink-server stop && sudo docker update --restart=always${names:- shadowbox watchtower} && sudo docker start${names:- shadowbox watchtower}
-When everything works, remove Outline for good:
-  sudo docker rm -f${names:- shadowbox watchtower} && sudo rm -rf $outline_dir
-EOF
+    echo "Outline is stopped and stays off after a reboot; its files in $outline_dir are untouched."
+    echo
+    echo "To go back to Outline:"
+    echo "  sudo ghostlink-server stop"
+    for entry in $outline_state; do
+        name=${entry%%=*}
+        rest=${entry#*=}
+        names="$names $name"
+        if [ "${rest#*=}" = true ]; then
+            echo "  sudo docker update --restart=${rest%%=*} $name && sudo docker start $name"
+        else
+            echo "  sudo docker update --restart=${rest%%=*} $name"
+        fi
+    done
+    echo "When everything works, remove Outline for good:"
+    echo "  sudo docker rm -f$names && sudo rm -rf '$outline_dir'"
 }
 
 command=${1:-}

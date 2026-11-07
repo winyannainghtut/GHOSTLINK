@@ -2,7 +2,7 @@
 
 <h1 align="center">Ghostlink</h1>
 
-<p align="center">A personal, self-hosted VPN for Windows and Linux: one app to run your own server and to connect to it.<br>Outline, WireGuard, AmneziaWG and VLESS-REALITY, with split tunneling, per-user traffic rules and a scriptable CLI.</p>
+<p align="center">A personal, self-hosted VPN for Windows and Linux: one app to run your own server and to connect to it.<br>Outline, WireGuard, AmneziaWG and VLESS-REALITY, with split tunneling, per-user traffic rules and speed limits, and a scriptable CLI.</p>
 
 <p align="center"><a href="https://github.com/winyannainghtut/GHOSTLINK/actions/workflows/desktop.yml"><img src="https://github.com/winyannainghtut/GHOSTLINK/actions/workflows/desktop.yml/badge.svg" alt="CI"></a> <a href="CHANGELOG.md">Changelog</a> · <a href="docs/development/verification.md">What is verified</a> · <a href="docs/security/model.md">Security model</a></p>
 
@@ -51,7 +51,7 @@
 - **One service, three front ends:** the desktop app, the `ghostlink` CLI and an optional restricted MCP bridge for AI agents all control the same local service.
 - **Your own server, Outline-style:** install one `.deb`/`.rpm` on a Linux machine with Docker (the image is inside the package), paste the management key it prints into the app, then create users and keys and set traffic rules from **Servers I run** or `ghostlink server`.
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
-- **Speed limits:** one cap per client in MB/s, download and upload alike, across all its devices, with an optional default for everyone. Changes apply live, on every protocol.
+- **Speed limits:** one cap per client in MB/s, download and upload alike, across all its devices, with an optional default for everyone. Changes apply live, on every protocol, without disconnecting anyone.
 - **Move from Outline:** one command takes over an Outline server on the same machine; every access key becomes a client and the `ss://` keys people already have keep working.
 - **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
 - **iPhone, iPad and Mac with no app:** the server can also serve Apple's built-in IKEv2 and IPsec VPN, and hands each person a configuration profile (`.mobileconfig`) that installs it in Settings. Sign-in is by password or certificate.
@@ -196,6 +196,8 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline
 ```
 
+Every access key becomes a client with the same password, port and cipher, plus its name and data limit. Keys on ports below 1024 (for example 443) can't be kept and get a new key, which the check lists. If anything fails, or the command is interrupted, Outline is put back as it was. On a server with under 1 GB of memory and swap, add `--add-swap`.
+
 The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
 
 Paste the key into **Servers I run → Add server** (or `ghostlink server add`). You can also manage everything on the server itself (`sudo ghostlink-server users`, `key add`, `top`…) or in its web dashboard (`sudo ghostlink-server dashboard`). From there:
@@ -272,11 +274,11 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
 | Ghostlink server, management, monitoring | Server API, rules, data and speed limits, monitoring and all four protocols tested end to end with real clients; the Outline import tested with Outline's own keys and, in release CI, with a fake Outline on the host; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
-| IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component. Installing on a real Apple device is checked by hand |
+| IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component, and measures a capped download at its speed limit. Installing on a real Apple device is checked by hand |
 | Mesh of Linux servers | Tested in CI with kernel WireGuard between network namespaces: direct and relayed paths through NAT, access rules, shared subnets, names, disable/remove and clean-up. Release CI installs the agent package, joins it to the installed server and removes it cleanly. Not yet run across real cloud servers. Windows nodes are planned |
 | Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
 
-The [changelog](CHANGELOG.md) lists what each release changed.
+**Latest release:** v0.8.0, a pre-release (2026-11-07). Fixes found since are on `main` and listed under *Unreleased* in the [changelog](CHANGELOG.md), which lists what each release changed. The first non-pre-release, v1.0.0, waits for signed builds or a decision to launch unsigned, and for real-device checks of the Windows installer, a VPS server and an Apple device.
 
 ## Documentation
 

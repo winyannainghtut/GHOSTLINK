@@ -4,6 +4,35 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+### Fixed
+
+Found by a review of 0.8.0 after its release:
+
+- **Speed limits:**
+  - **UDP:** a capped client's Shadowsocks UDP above its rate could hold up other clients' Shadowsocks UDP on the same port. That UDP is now dropped above the rate instead of delayed.
+  - **Many connections:** a client with many connections could get several times its cap, then stall. A single wait was cut off at 5 s; it now lasts as long as the cap requires.
+  - **Changes:** a new limit now takes effect at once, also for connections already waiting.
+  - **IKEv2/IPsec:** a changed limit now applies to sessions that are already connected. The kernel kept a `hashlimit` table's first rate.
+  - **Concurrent changes:** two changes at the same moment could leave the older limits in force.
+- **`migrate-outline`:**
+  - **Failure or interruption:** if a step fails or the command is interrupted (Ctrl+C, a lost SSH session), Outline is put back exactly as it was: each container's restart policy, and running only if it was running.
+  - **After the import is saved:** if a later step fails, Outline stays stopped instead of starting on Ghostlink's ports.
+  - **Printed commands:** the rollback uses the saved policies, and the clean-up command quotes an absolute path.
+  - **Check hint:** `--check` repeats `--outline-dir` in its hint.
+- **Outline import:**
+  - **Ports:** keys on the IKEv2/IPsec DNS port, or on UDP 4500 while IKEv2/IPsec is on, get a new key instead of failing the import. New ports are never picked on an imported key's port.
+  - **Management key:** a failure to rewrite it after a saved import is reported as a note rather than as a failed import.
+  - **Notes:** the note about two keys sharing a password is now accurate, and the check no longer prints a port number that the import picks anew.
+- **App and dashboard:** they can again save a client's settings on a server older than 0.8.0. `speed_limit_bps` is now sent only when it changed.
+- **Speed units:** `sudo ghostlink-server user speed NAME 10Mbps` (bits) is refused. It was read as 10 MB/s, eight times what was meant.
+- **Installer:**
+  - `--outline-dir` without `--migrate-outline` is refused.
+  - `--migrate-outline --check` says that `--ipsec`, `--mesh` and `--open-firewall` wait for the real run.
+  - `--hostname` says that it overrides Outline's address.
+- **Tests and CI:**
+  - The Outline smoke test also checks a failed import that must put Outline back, and fails on the installer's exit status.
+  - The engine's real-traffic test picks its Shadowsocks peer's port free on both TCP and UDP.
+
 ## [0.8.0] - 2026-11-08
 
 ### Added
@@ -19,11 +48,11 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
     - the API: `speed_limit_bps` and `effective_speed_limit_bps` on users, `default_speed_limit_bps` on the server.
 - **Move from Outline.** `install-server.sh --migrate-outline` (or `sudo ghostlink-server migrate-outline`) takes over an Outline server on the same machine. Guide: [docs/deployment/migrate-from-outline.md](docs/deployment/migrate-from-outline.md).
   - **Clients:** every access key becomes a client with the same password, port and cipher, so the `ss://` keys people already use keep working. Names, data limits (per key or Outline's default), paused keys, the server's name and its address come along.
-  - **Ports:** keys on other ports than the main one keep theirs, each extra port with its own Shadowsocks listener. Ghostlink's VLESS, WireGuard and AmneziaWG ports move out of the way if they clash. Keys that cannot be kept (ports below 1024, a port the management API uses, a cipher mix on one port) get a new key, and the report lists them.
+  - **Ports:** keys on other ports than the main one keep theirs, each extra port with its own Shadowsocks listener. Ghostlink's VLESS, WireGuard and AmneziaWG ports move out of the way if they clash. Keys that cannot be kept (ports below 1024, a port the management API, dashboard, mesh or IKEv2/IPsec DNS listener uses, a cipher mix on one port) get a new key, and the report lists them.
   - **Check first:** `--check` shows what would happen, without a password, while Outline keeps running.
-  - **Atomic, with a way back:** the import is one change. If it fails, Outline is started again. When it works, Outline is stopped and kept from restarting, its files stay as a backup, and the rollback command is printed.
+  - **Atomic, with a way back:** the import is one change. If it fails or is interrupted, Outline is put back as it was. When it works, Outline is stopped and kept from restarting, its files stay as a backup, and the rollback command is printed.
   - **API:** `POST /import/outline` with Outline's two files and `dry_run`; `GET /server` reports `shadowsocks_extra_ports`.
-  - **On the server:** `sudo ghostlink-server import-outline --dir DIR [--check]`.
+  - **Inside the container:** `ghostlink-server admin import-outline --dir DIR [--check]` imports two files from a directory the server can read; `migrate-outline` runs it for you.
 
 ### Changed
 
@@ -281,7 +310,11 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.2.1...v0.3.0

@@ -2,20 +2,39 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## Review of v0.8.0 after its release (2026-11-08, on `main`, not in the 0.8.0 packages)
+
+Two independent reviews (Go server code; scripts, CI and docs) were checked against the source before fixing. What was fixed is listed in the CHANGELOG under [Unreleased].
+
+| Check | Result actually observed |
+|---|---|
+| UDP head-of-line blocking (source reading) | Confirmed in sing `common/udpnat/service.go`: each Shadowsocks UDP session is fed with a blocking send into a 64-packet channel from the inbound's read path, so a session that waited held up the others. `TestPolicedPacketConnDropsInsteadOfWaiting`: 1,000 packets of 10 KB at a 100 KB/s cap are read in well under a second, about the burst passes, the rest is dropped, and the buffer keeps its front headroom; unlimited clients lose nothing |
+| Pacer (Go) | `TestPacerArithmetic`: a 10 MB chunk waits the full 10 s (no 5 s cut-off), the next chunk waits for the whole debt, a new rate starts with a full bucket. `TestPacerAllow`: policing takes only what the bucket holds. `TestPacerWaitEndsWhenTheLimitChanges`: a 9 s wait ended about 1 s after the limit was removed. `TestSpeedLimitsEndToEnd` still holds 1 MB/s over Shadowsocks and WireGuard |
+| IKEv2/IPsec rules (Go) | The `hashlimit` table name is derived from the client and its rate (9 characters plus the direction); a changed rate gives a new name |
+| Server commands (Go) | `user speed Alice 10Mbps` and `set --speed-limit 8mbit` are refused |
+| Go, UI | The full Go suite passes on Windows; the UI typecheck, `npm test` and both builds pass |
+| Host script | `sh -n` and `bash -n` pass locally; shellcheck passes in CI |
+| IKEv2/IPsec rate change (CI interop, real strongSwan client) | 1.5 MB took 0.008 s without a cap and 4.37 s at 300 KB/s; with the cap raised to 600 KB/s **on the same connected session**, 1.67 s. Before the fix the kernel kept the first rate |
+| Failed Outline import (release CI dry run, x64 and arm64) | With another program holding one of Outline's ports, `migrate-outline` failed after stopping Outline and printed "the import did not go through; Outline is back as it was"; both containers were running again with restart `always`, Ghostlink had no clients and the private copies were gone. The successful migration, the refused second run and the rollback passed after it |
+| CI on `fix/review-0.8` | Desktop and local engine verification (Windows and Linux), Web UI, IPsec interop, Mesh end-to-end and the release dry run all pass |
+
+### Not verified
+
+- A real Shadowsocks UDP flood by a capped client next to another client's UDP (the fix is checked by reading the library and by a unit test).
+
 ## v0.8.0 Speed limits and the move from Outline (2026-11-08)
 
 | Check | Result actually observed |
 |---|---|
 | Pacer (Go) | `TestPacerArithmetic`: the bucket starts full (250 KB at 1 MB/s), 500 KB over an empty bucket waits 0.5 s, a refill stops at the burst, one wait is capped at 5 s, unlimited never waits, small caps get 64 KB. `TestPacerHoldsTheRateAcrossConnections`: three connections sharing a 4 MB/s cap moved 6 MiB in the time the cap allows (±15 %) |
 | Speed limits with real clients (Go, `TestSpeedLimitsEndToEnd`, 13 s) | Real sing-box clients against the server. A client capped at 1 MB/s downloaded 3 MB at the cap through **Shadowsocks** and through **WireGuard** (the userspace stack's connections); an unlimited client took under 1.5 s. A 2 MB/s server default capped the others at once, and the capped client kept its own 1 MB/s. "No limit" (-1) overrode the default. The engine reload counter did not change through all of it. -2, 2,000,000,000 and a too-high default got `400` |
-| Outline import (Go) | `TestOutlineImportPlan` on 11 Outline keys: main port and cipher by majority; an `aes-256-gcm` key on another port kept its own listener (VLESS moved off that port); new keys, with reasons, for a port below 1024, a cipher mix on one port, the management API's port, an unknown cipher and a password with a newline; names "Key 1" and "alice (2)"; per-key and default data limits; a 0-byte limit imported as turned off; two keys sharing a password noted. Every kept key renders as the exact `ss://` its owner has. The report holds no password. Moving the main port onto an imported key's port is refused. `TestOutlineImportRefusals`: a server with clients, no keys, 501 keys; all keys below 1024 |
+| Outline import (Go) | `TestOutlineImportPlan` on 11 Outline keys: main port and cipher by majority; an `aes-256-gcm` key on another port kept its own listener (VLESS moved off that port); new keys, with reasons, for a port below 1024, a cipher mix on one port, the management API's port, an unknown cipher and a password with a newline; names "Key 1" and "alice (2)"; per-key and default data limits; a 0-byte limit imported as turned off; two keys sharing a password noted. Every kept key renders as the exact `ss://` its owner has. The report holds no password. Moving the main port onto an imported key's port is refused. `TestOutlineImportRefusals`: a server with clients, no keys and 501 keys are refused; when every key is below 1024, the import keeps the server's own port and gives everyone a new key |
 | Outline keys still work (Go, `TestOutlineImportEndToEnd`) | Outline's **original** `ss://` URLs (two on the main port with chacha20-ietf-poly1305, one on an extra port with aes-256-gcm) carried traffic through real sing-box clients after the import over the API, and the traffic was seen for the right clients. The dry run changed nothing. A second import got `400` |
 | Server commands (Go, `TestAdminCommands`) | `user speed` (2MB, default, none), `user add --speed 1.5MB`, `set --speed-limit 500KB/s` and none, the SPEED column, `settings`; bad speeds refused. `import-outline --dir DIR --check` reported 2 clients and the port-80 key, then the import ran and left its input files in place |
 | IKEv2/IPsec rules (Go) | `TestSpeedLimitRules`: for a capped identity's sessions, `hashlimit` rules on each virtual IP (download and upload), sharing one name per client; other users' sessions untouched; the chain jumped to before established traffic is accepted. Validation refuses label injection, long labels, rates of 0 or over 1.25 GB/s, bad identities and duplicates. The server's `desired.json` carries the client's four identities and its own limit, then the default, and nothing for "no limit" |
 | Rust | `cargo fmt`, `clippy -D warnings` and the workspace tests pass. A new CLI test covers `--speed-limit` parsing (MB/s, none, default, out-of-range values) |
 | UI | Typecheck, `npm test` (the request mapping passes with the new fields, which are part of the Rust contract) and both builds |
 | Desktop app and dashboard (WebView2 DevTools, isolated profile, local server, real Shadowsocks traffic of 24 MB from Cloudflare's speed endpoint) | <ul><li>**Live:** Maya, capped at 1 MB/s, showed ↓ 983 KB/s to 1.0 MB/s during her downloads.</li><li>**Desktop (through the service and the Rust contract):** chips "1.0 MB/s" and "2.0 MB/s" (the default) on the cards, none on the client with no limit. The client sheet showed Custom 1 MB/s; saving 1.5 reached the server (1,500,000). Server default, then No limit (-1). The server settings' default 2, saved as 3 (`ServerPatch`). New client with 0.5 MB/s (500,000).</li><li>**Dashboard:** rates in KB/s and MB/s, no "bit/s"; the list's Speed limit column (1.0 MB/s, 500 KB/s, "—"); back to the server default; 5000 MB/s refused in the form.</li><li>No page errors in either.</li></ul> |
-
 | IKEv2/IPsec speed limit (CI, `tests/ipsec/interop.sh`, real strongSwan client) | The capped session got its two `hashlimit` rules within seconds of the change. 1.5 MB took 0.011 s without a cap and **4.17 s at 300 KB/s** (about 5 s less the burst). Removing the cap removed the rules |
 | Move from Outline (release CI, x64 and arm64, `linux-package.yml`) | A fake Outline: shadowbox's two files in `/opt/outline/persisted-state` (four keys, one on another port with aes-256-gcm, one on port 443), and `shadowbox`/`watchtower` containers with restart `always`, one holding Outline's port. `install-server.sh --package … --migrate-outline --check` reported 4 clients and the port-443 key, while Outline kept running and Ghostlink had no clients. Then `--migrate-outline`: both containers stopped with restart `no`; Ghostlink listened on Outline's port (TCP and UDP) and the extra port; the four clients with names and the default data limit; `keys --show` gave the exact original `ss://` credentials for the main and extra port; the installer listed the extra port; the private copies were gone and Outline's files unchanged. A second migration was refused before touching Outline, and the printed rollback brought Outline back |
 | Other CI | Desktop and local engine verification, Web UI and IPsec interop pass. Mesh end-to-end passed on push; on the pull request it failed once in "open mesh: relay reaches natb:8080" (no mesh code changed) and passed when re-run, a timing flake to watch. On one Windows run, the engine's independent Shadowsocks peer exited at startup (`outline_traffic.rs`): the test checked its port on TCP only while the peer also binds UDP. It now picks a port free on both; the six real-traffic engine tests pass locally with sing-box 1.14.4 and the worker |
@@ -350,8 +369,8 @@ Commands:
 ./scripts/cargo.ps1 test --locked --workspace
 ./scripts/cargo.ps1 clippy --locked --workspace --all-targets '--' -D warnings
 npm test
-$env:GHOSTLINK_TEST_SING_BOX = 'D:\custom vpn\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
-$env:GHOSTLINK_TEST_OUTLINE_WORKER = 'D:\custom vpn\target\debug\ghostlink-tunnel.exe'
+$env:GHOSTLINK_TEST_SING_BOX = 'D:\ghostlink\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe'
+$env:GHOSTLINK_TEST_OUTLINE_WORKER = 'D:\ghostlink\target\debug\ghostlink-tunnel.exe'
 ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic '--' --ignored --nocapture
 ```
 

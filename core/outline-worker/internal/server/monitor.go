@@ -14,7 +14,9 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"golang.org/x/net/publicsuffix"
 )
@@ -248,7 +250,8 @@ func (m *Monitor) RoutedPacketConnection(_ context.Context, conn N.PacketConn, m
 	}
 	u, up, down := m.counters(metadata)
 	u.active.Add(1)
-	paced := bufio.NewCounterPacketConn(conn, []N.CountFunc{u.upPace.Wait}, []N.CountFunc{u.downPace.Wait})
+	// What the client sends over UDP is policed (dropped above the rate), not delayed.
+	paced := bufio.NewCounterPacketConn(&policedPacketConn{PacketConn: conn, pace: &u.upPace}, nil, []N.CountFunc{u.downPace.Wait})
 	return &trackedPacketConn{CounterPacketConn: bufio.NewInt64CounterPacketConn(paced, up, nil, down, nil), user: u}
 }
 
@@ -282,6 +285,27 @@ type trackedPacketConn struct {
 func (c *trackedPacketConn) Close() error {
 	c.once.Do(func() { c.user.active.Add(-1) })
 	return c.CounterPacketConn.Close()
+}
+
+// policedPacketConn drops the UDP packets a capped client sends above its rate. Waiting would
+// be wrong here: the Shadowsocks inbound hands every client's UDP sessions their packets from
+// one read loop, through a small blocking queue per session, so one session that waited would
+// hold up all the others. It must stay opaque to sing's unwrapping (no Upstream, no read
+// waiter), so the copy loops call its ReadPacket.
+type policedPacketConn struct {
+	N.PacketConn
+	pace *pacer
+}
+
+func (c *policedPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	start := buffer.Start()
+	for {
+		destination, err := c.PacketConn.ReadPacket(buffer)
+		if err != nil || c.pace.Allow(int64(buffer.Len())) {
+			return destination, err
+		}
+		buffer.Resize(start, 0)
+	}
 }
 
 type flowCounter struct {

@@ -13,47 +13,79 @@ import (
 // pacer holds one client's traffic in one direction to a rate, across all of the client's
 // connections. sing's copy loops call a connection's count functions synchronously after each
 // chunk they move (also on the splice path), so a count function that sleeps throttles every
-// protocol without wrapping Read or Write, which those loops bypass.
+// protocol without wrapping Read or Write, which those loops bypass. UDP sent by the client is
+// policed with Allow instead (see policedPacketConn).
 //
 // The bucket may go into debt: a chunk larger than the burst (splice moves up to 1 MiB) is let
-// through and paid for by waiting, so the average stays at the rate.
+// through and paid for by waiting, and with many connections each waits for the debt of all
+// of them, so the average stays at the rate whatever the number of connections.
 type pacer struct {
 	rate   atomic.Int64 // bytes per second; 0 means unlimited
+	epoch  atomic.Int64 // bumped by every change of rate, which ends waits under the old one
 	mu     sync.Mutex
 	tokens float64
 	last   time.Time
 }
 
-// maxPause bounds one wait, so a tiny cap and a huge chunk never park a copy loop for minutes;
-// the remaining debt is paid by the next chunks.
-const maxPause = 5 * time.Second
+const (
+	// waitStep is how often a waiting connection checks whether its limit changed.
+	waitStep = time.Second
+	// maxPause only guards the arithmetic; real debts are far smaller.
+	maxPause = time.Hour
+)
 
 func burstFor(rate int64) float64 {
 	return math.Max(float64(rate)/4, 64<<10)
 }
 
 // SetRate changes the rate at once, also for connections already open; 0 removes the limit.
+// A new rate starts with a full bucket: debt run up under the old one is forgiven, and
+// connections waiting it off go on at once.
 func (p *pacer) SetRate(bytesPerSecond int64) {
 	if bytesPerSecond < 0 {
 		bytesPerSecond = 0
 	}
 	p.mu.Lock()
-	if p.rate.Load() == 0 && bytesPerSecond > 0 {
-		// Coming from unlimited: start with a full bucket, not with what was moved meanwhile.
-		p.tokens, p.last = burstFor(bytesPerSecond), time.Time{}
+	defer p.mu.Unlock()
+	if p.rate.Load() == bytesPerSecond {
+		return
 	}
+	p.tokens, p.last = burstFor(bytesPerSecond), time.Time{}
 	p.rate.Store(bytesPerSecond)
-	p.mu.Unlock()
+	p.epoch.Add(1)
 }
 
-// Wait accounts n bytes and sleeps as long as the rate requires.
+// Wait accounts n bytes and sleeps as long as the rate requires, or until the rate changes.
 func (p *pacer) Wait(n int64) {
 	if n <= 0 || p.rate.Load() == 0 {
 		return
 	}
-	if pause := p.take(n, time.Now()); pause > 0 {
-		time.Sleep(pause)
+	epoch := p.epoch.Load()
+	pause := p.take(n, time.Now())
+	for pause > 0 && p.epoch.Load() == epoch {
+		step := min(pause, waitStep)
+		time.Sleep(step)
+		pause -= step
 	}
+}
+
+// Allow takes n bytes if the bucket holds them and reports whether it did. It never waits.
+func (p *pacer) Allow(n int64) bool {
+	if n <= 0 || p.rate.Load() == 0 {
+		return true
+	}
+	return p.allow(n, time.Now())
+}
+
+// refill adds what the rate earned since the last call, up to the burst. Called locked.
+func (p *pacer) refill(rate float64, now time.Time) {
+	burst := burstFor(int64(rate))
+	if p.last.IsZero() {
+		p.tokens = burst
+	} else if elapsed := now.Sub(p.last).Seconds(); elapsed > 0 {
+		p.tokens = math.Min(burst, p.tokens+elapsed*rate)
+	}
+	p.last = now
 }
 
 // take accounts n bytes at now and returns how long the caller should pause.
@@ -64,16 +96,25 @@ func (p *pacer) take(n int64, now time.Time) time.Duration {
 	if rate == 0 {
 		return 0
 	}
-	burst := burstFor(int64(rate))
-	if p.last.IsZero() {
-		p.tokens = burst
-	} else if elapsed := now.Sub(p.last).Seconds(); elapsed > 0 {
-		p.tokens = math.Min(burst, p.tokens+elapsed*rate)
-	}
-	p.last = now
+	p.refill(rate, now)
 	p.tokens -= float64(n)
 	if p.tokens >= 0 {
 		return 0
 	}
-	return min(time.Duration(-p.tokens/rate*float64(time.Second)), maxPause)
+	return time.Duration(math.Min(-p.tokens/rate, maxPause.Seconds()) * float64(time.Second))
+}
+
+func (p *pacer) allow(n int64, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rate := float64(p.rate.Load())
+	if rate == 0 {
+		return true
+	}
+	p.refill(rate, now)
+	if p.tokens < float64(n) {
+		return false
+	}
+	p.tokens -= float64(n)
+	return true
 }

@@ -166,7 +166,7 @@ refused ikev2-cert "removed key (revoked certificate)"
 step "Speed limit: a capped client is held to its rate, and the cap lifts at once"
 head -c 1500000 /dev/urandom > "$work/www/big.bin"
 download() { in_client curl -s --fail --max-time 40 -o /dev/null -w '%{time_total}' http://198.51.100.10:8080/big.bin; }
-limit_rules() { iptables-save | grep -c 'GHOSTLINK-IPSEC-LIM .*hashlimit-above 300000b/s' || true; }
+limit_rules() { iptables-save | grep -c "GHOSTLINK-IPSEC-LIM .*hashlimit-above ${1:-300000}b/s" || true; }
 connect ikev2-eap
 fast=$(download) || fail "no download through the tunnel"
 api PATCH "/users/$user" '{"speed_limit_bps":300000}' >/dev/null
@@ -178,10 +178,20 @@ slow=$(download) || fail "no download through the tunnel with a speed limit"
 python3 -c 'import sys; f, s = map(float, sys.argv[1:]); sys.exit(0 if 2.5 <= s <= 30 and s > 2 * f else 1)' "$fast" "$slow" ||
     fail "1.5 MB took ${slow} s capped at 300 KB/s (${fast} s without a cap)"
 echo "1.5 MB: ${fast} s without a cap, ${slow} s at 300 KB/s"
+# A new cap applies to the session that is still connected (the kernel keeps a hashlimit
+# table's first rate, so the rules must move to a new table).
+api PATCH "/users/$user" '{"speed_limit_bps":600000}' >/dev/null
+wait_applied
+for i in $(seq 1 20); do iptables-save | grep -q 'GHOSTLINK-IPSEC-LIM .*hashlimit-above 600000b/s' && break; sleep 1; done
+iptables-save | grep -q 'GHOSTLINK-IPSEC-LIM .*hashlimit-above 600000b/s' || fail "the raised cap has no rules"
+raised=$(download) || fail "no download through the tunnel with the raised cap"
+python3 -c 'import sys; s, r = map(float, sys.argv[1:]); sys.exit(0 if r < s * 0.8 else 1)' "$slow" "$raised" ||
+    fail "raising the cap to 600 KB/s did not speed the connected session up (${raised} s, was ${slow} s)"
+echo "1.5 MB: ${raised} s at 600 KB/s, same session"
 api PATCH "/users/$user" '{"speed_limit_bps":0}' >/dev/null
 wait_applied
-for i in $(seq 1 20); do [ "$(limit_rules)" = 0 ] && break; sleep 1; done
-[ "$(limit_rules)" = 0 ] || fail "the speed limit rules stayed after the cap was removed"
+for i in $(seq 1 20); do [ "$(limit_rules "[0-9]*")" = 0 ] && break; sleep 1; done
+[ "$(limit_rules "[0-9]*")" = 0 ] || fail "the speed limit rules stayed after the cap was removed"
 swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
 
 step "Usage is counted and the data limit cuts the user off"
