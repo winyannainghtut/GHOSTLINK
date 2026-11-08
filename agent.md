@@ -102,12 +102,12 @@ The user is moving to a new chat. This section is the current state; the numbere
   Worker build: the same with `-o ../../target/debug/ghostlink-tunnel.exe .`.
 - **Rust:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cargo.ps1 <fmt|clippy|test|build> …`. The desktop app is a separate workspace: `--manifest-path apps/desktop/src-tauri/Cargo.toml`.
 - **UI:** run `cd ui && npm run build && npm test`, and commit the build output in `core/outline-worker/internal/server/dashboard` and `apps/desktop/ui`. The Web UI workflow checks that the committed output matches the build. Rebuild the Go server after a UI build; the dashboard is embedded.
-- **Process tests:** root `npm test`, 19 tests. They need fresh debug binaries, including the worker.
-- **Real-engine tests:** set
-  - `GHOSTLINK_TEST_SING_BOX=.tools/sing-box/sing-box-1.14.4-windows-amd64/sing-box.exe`
-  - `GHOSTLINK_TEST_OUTLINE_WORKER=target/debug/ghostlink-tunnel.exe`
+- **Process tests:** root `npm test`, 19 tests. They need fresh debug builds of `ghostlinkd`, `ghostlink` and `ghostlink-mcp`, plus `target/debug/ghostlink-server.exe` built with `go build` (or `GHOSTLINK_TEST_SERVER`). Without the server binary the managed-server test is skipped. OpenVPN is optional (its test skips without it), and the worker is used only by the opt-in `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED` branch.
+- **Real-engine tests:** set **absolute** paths. Cargo runs the test binaries from `core/vpn-engine`, and the worker check refuses relative paths, so relative ones make the tests fail or pass without testing anything:
+  - `GHOSTLINK_TEST_SING_BOX=D:\ghostlink\.tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe`
+  - `GHOSTLINK_TEST_OUTLINE_WORKER=D:\ghostlink\target\debug\ghostlink-tunnel.exe`
 
-  then run `cargo test -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --test-threads=1`.
+  then run `cargo test -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --test-threads=1` through `scripts/cargo.ps1`.
 - **Version bump:** change every declaration together:
   - `Cargo.toml` and `Cargo.lock`;
   - `apps/desktop/src-tauri/Cargo.toml`, its `Cargo.lock` and `tauri.conf.json`;
@@ -198,7 +198,7 @@ This handover is named `agent.md` as requested. It is an explicit handover file;
 |---|---|---|
 | Windows CLI/service | Rust binaries, typed local IPC, authorization, profile/key management, optional OpenVPN and Outline worker integration | Root builds, unit tests, clippy and actual subprocess/IPC tests pass; full successful privileged TUN session remains unverified |
 | Windows desktop | Tauri GUI using the real daemon: server cards with protocol badges, key paste and `.conf` file import, split-tunnel settings (global and per server), settings and tray | Debug/release apps launched; imports, badges, split dialog save and per-server override inspected via screenshots and confirmed through CLI |
-| Windows packaging | Optimized executables, MSI and portable ZIP | WiX compiled/linked/validated; installation, elevated service lifecycle and uninstall have not been run |
+| Windows packaging (updated) | Optimized executables, MSI and portable ZIP | The user installed v0.3.0 on their PC: the service ran as LocalSystem with the expected pipe owner and DACL, and the fixed client (v0.3.1) answered from it. Not yet verified: a routed connection through an installed service, service stop/restart and uninstall clean-up |
 | Client protocols (v0.2.0) | Shadowsocks (Outline), VLESS-REALITY, WireGuard and AmneziaWG in the managed worker; `ss://`/`ssconf://`/`vless://`/`vpn://`/`.conf` import; split tunneling | Real encrypted traffic for every protocol through the worker; AmneziaWG interop against upstream amneziawg-go; REALITY against sing-box; split routing in the real engine. Full-TUN sessions still need an administrator |
 | OpenVPN transport | External Community engine adapter, strict inline profile validation | Real executable unavailable-server test and management parsing pass; no successful routed OpenVPN server session verified |
 | Linux (updated) | Headless client `.deb`/`.rpm`/archives (x64, arm64) since v0.2.1 | Release CI installs the `.deb` as a systemd service; a routed VPN session on a real host and the Linux GUI are unverified |
@@ -335,13 +335,13 @@ ghostlink-tunnel check -c PRIVATE_CONFIG.json
 ghostlink-tunnel run -c PRIVATE_CONFIG.json
 ```
 
-Exact version identity currently required by Rust:
+Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.1.0; sing-box 1.14.4
+Ghostlink tunnel worker 0.8.0; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
-The Rust check expects that line with a newline. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
+The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
 
 Lifecycle:
 
@@ -364,7 +364,7 @@ These are implementation values, not proven leak-prevention guarantees:
 
 - Full TUN interface `Ghostlink`, addresses `172.28.85.1/30` and `fdfe:85:85::1/126`, MTU 1500, mixed stack, automatic/strict routing and DNS hijack.
 - Loopback mixed health proxy and statistics/controller API use reserved ephemeral ports and random per-session credentials. They are not public unauthenticated listeners.
-- DNS uses DoH at `1.1.1.1`, TLS name `cloudflare-dns.com`, through the Outline outbound. Local resolver is used for bootstrap server-name resolution. Current strategy is IPv4-only.
+- DNS: the tunnel resolver (`vpn-dns`) is DoH to `1.1.1.1` (TLS name `cloudflare-dns.com`) through the `proxy` outbound or endpoint; a WireGuard/AmneziaWG profile with `DNS =` uses UDP to its first DNS server through the tunnel instead. The local resolver (`bootstrap`) resolves server names, the API host names of managed servers, bypassed sites in bypass mode, and every unlisted name in "only" mode (`dns.final`). Strategy is IPv4-only.
 - IPv6 entering the Outline TUN is rejected by policy. This is not complete tested IPv6 VPN support.
 - Health target is `https://www.gstatic.com/generate_204`, checked periodically (5-second interval), expecting status 204. It is an external request after an actual native session starts; document its availability/privacy implications if changing the product.
 - Traffic totals/rates come from the authenticated upstream controller, not invented counters.
@@ -402,15 +402,15 @@ Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engi
 ### IPC and authorization
 
 - Newline-delimited UTF-8 JSON, one request/response per local connection, schema version 1, maximum frame 2 MiB.
-- Unknown action fields/schema versions fail closed; framing/connection/time bounds are enforced.
+- Unknown actions, unsupported schema versions, unknown request fields and unknown fields on actions that take fields fail closed; framing/connection/time bounds are enforced. Caveat: serde ignores extra keys on the field-less variants of the internally tagged `Action` and `ServerOp` enums (for example `{"type":"status","x":1}`); see the pitfall in §13.
 - Windows server named pipe has a protected DACL for SYSTEM and the configured authorized owner SID; remote clients are rejected.
-- Windows clients use identification-only security QoS and verify server identity is the current user or SYSTEM.
-- Linux socket code uses configured owner UID, restrictive permissions and peer credential checks. Runtime verification is pending.
+- Windows clients use identification-only security QoS and refuse a pipe unless its **owner** is SYSTEM, BUILTIN\Administrators (the default owner of objects a SYSTEM service creates) or the client's own user. They do not inspect the server process: opening a SYSTEM process token fails for standard users (the v0.3.1 fix).
+- Linux socket code uses the configured owner UID, mode 0600 and peer-credential checks (root is always accepted). CI runs it: the process suite on Ubuntu, and release CI's `.deb` smoke test with `ghostlinkd` as root and the client as the owner. Refusal of another UID is not tested yet.
 - One OS owner is the human trust boundary. Same-user hostile processes are not isolated by an agent label.
 
 ### Persistent store
 
-- `state.json`: profile metadata, sealed profile/key content, default selection, autoconnect flag and agent grants with token hashes.
+- `state.json`: profiles (metadata, sealed content, optional per-server split-tunnel override), default selection, autoconnect flag, agent grants with token hashes, the per-installation fingerprint salt, the global split-tunnel policy, and managed servers (the sealed management key, which gives full control of that server, plus host, port, server name, version and when it was added). Back it up as a secret.
 - `daemon.lock`: exclusive state ownership; do not start two daemons against one data directory.
 - `audit.jsonl` and rotated `audit.previous.jsonl`: timestamp/actor/operation/fixed outcome. No raw keys/configuration/engine logs.
 - Maximum profiles/grants are bounded (currently 32 each).
@@ -455,7 +455,7 @@ Examples refer to existing profiles/private input files; they are not instructio
 
 Global options: `--json`, `--timeout` (default 75 seconds, range 1–600), `--endpoint` / `GHOSTLINK_ENDPOINT`, `--agent-token-file` / `GHOSTLINK_AGENT_TOKEN_FILE`.
 
-- Split tunneling: `ghostlink split show|set|clear [--profile NAME]` (IPC `routing_policy_get/set`, owner-only). Global policy in `Store.routing_policy`, per-server overrides in `StoredProfile.routing_override` (kept across `--replace`). `core/vpn-engine/src/split.rs` validates and renders sing-box rules: `sniff` first, the health proxy pinned to the tunnel, then bypass/only matchers (`process_name`/`process_path` with `find_process`, `domain_suffix`, `ip_cidr`, `ip_is_private`) and DNS rules. OpenVPN ignores it.
+- Split tunneling: `ghostlink split show|set|clear [--profile NAME]` (IPC `routing_policy_get/set`, owner-only). Global policy in `Store.routing_policy`, per-server overrides in `StoredProfile.routing_override` (kept across `--replace`). `core/vpn-engine/src/split.rs` validates the policy and renders only its part: per-kind matchers (`process_name`/`process_path` with `find_process`, `domain_suffix`, `ip_cidr`) sent direct (bypass) or through the tunnel (only), an `ip_is_private` → direct rule when LAN-direct is on and the mode is not "only", and the DNS rules and finals. `worker_session.rs` puts them after its fixed rules: `sniff`, the health proxy pinned to the tunnel, the managed-server API direct rules, the TUN IPv6 reject and `hijack-dns`. OpenVPN ignores split tunneling.
 - Key input is file or stdin, never a credential argument. Normal list/status/info/logs do not reveal keys.
 - `key add` and `profile import` reject an existing server/profile ID with `invalid_request` (exit 2) unless `--replace` is given. The IPC actions carry `replace` (default `false`), so a client with a stale list can no longer silently overwrite a saved credential.
 - CLI profile subcommands currently include import/list/default/remove. Rename exists through GUI/private typed IPC, not a delivered `profile rename` CLI command.
@@ -523,7 +523,8 @@ Since v0.7.0 the desktop app's interface is built from `ui/desktop` (React 19, T
 - **Design:**
   - Frosted surfaces (`.glass`) over three slow glass waves (`WaveBackground`: Subtle, Calm or Still; still for reduced motion).
   - Finishes Obsidian, Titanium and Daylight are CSS variables on `<html data-finish>`; the finish and motion are kept in localStorage.
-  - Sentence-case labels, `.mono` only for addresses, keys and ports, `.num` (tabular figures) for live numbers.
+  - Sentence-case labels; `.mono` only for machine-readable text (addresses, host names, CIDRs, keys, identities, ports, interface names, shell commands, mesh rule selectors; every `textarea.field` is monospace); `.num` (tabular figures) for live numbers.
+  - Speeds use `speed()`/`byteRate()` in `ui/shared/format.ts`; compact live readouts (the Islands) use `LiveRates` in `ui/shared/glass.tsx`, each rate with its own unit in a fixed slot.
   - The fonts are self-hosted (OFL). No inline styles: React's `style` prop is applied through the CSSOM, which the CSP allows, and is used only for computed popover positions.
 - **Shell:** a floating navigation bar with My servers, Servers I run and Settings. Its Dynamic Island shows the connection (state, server, duration, live speed) and opens a server switcher. Floating panels render in a portal (`shared/Popover.tsx`), because a frosted element cannot blur through a frosted parent.
 - **My servers:**
@@ -535,7 +536,7 @@ Since v0.7.0 the desktop app's interface is built from `ui/desktop` (React 19, T
   - **Files:** QR codes are shown as `data:` URLs. Files go to Downloads through the shell's `save_download` (html, mobileconfig, conf).
   - **On this device:** "Use on this device" imports a key as a local VPN connection.
 - **Settings:** connect when the service starts, split tunneling for all servers, finish, motion, diagnostics (`doctor`), About.
-- **Service state:** polled every second (`desktop/src/service.tsx`). Changes go through `act`, which serializes them and refreshes.
+- **Service state:** polled every second (`desktop/src/service.tsx`). Connect, disconnect, switch, make default, remove, rename and autoconnect go through `act`: while one runs, `act` refuses another (it returns false, with no message), and it refreshes after each success. Key and `.conf` imports, split tunneling, adding and forgetting managed servers, all `server_call` admin changes and the tray's Disconnect call the service directly.
 - **Window:** close hides to tray; quitting the GUI leaves the daemon running.
 
 The pre-0.7 hand-written UI (`app.js`, `manage.js`, `mesh.js`) is in git history.
@@ -581,7 +582,7 @@ go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,wit
 Pop-Location
 ```
 
-`with_gvisor,with_utls,with_wireguard` is intentional: gVisor for the userspace stacks, uTLS for REALITY, and the WireGuard endpoint. Preserve `go.mod`, `go.sum`, upstream pins and checksum verification. Do not substitute an arbitrary standalone engine binary.
+`with_gvisor` (the TUN "mixed" stack and the userspace network stack under the WireGuard and AmneziaWG endpoints) and `with_utls` (uTLS for REALITY) are required. `with_wireguard` changes nothing in these binaries (it only selects sing-box's `include/wireguard*.go`, which this module never imports; `main.go` registers `protocol/wireguard` directly), but keep it so every build uses the same tags. Preserve `go.mod`, `go.sum`, upstream pins and checksum verification. Do not substitute an arbitrary standalone engine binary.
 
 ### User-owned development runtime
 
@@ -682,7 +683,7 @@ The independent standalone peer and the managed worker have distinct roles. Thes
 
 ### Process suite coverage and switches
 
-The 19 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove with overwrite protection and a salted fingerprint; failed startup autoconnect keeps the service reachable; crash leftovers are removed at startup; dynamic SSRF/obsolete cipher/plugin rejection.
+The 19 Node tests cover real named-pipe/Unix protocol schema; import/list/default persistence without secrets; unsafe options; traversal/malformed/expired certificate rejection; 32 concurrent status requests; unknown schema/actions; scoped/revoked agent tokens; real MCP advertisement/tool calls; real OpenVPN unavailable-server failure; daemon restart without invented surviving tunnel; version/exit/switch validation; Outline import/rename/default/remove with overwrite protection and a salted fingerprint; failed startup autoconnect keeps the service reachable; crash leftovers are removed at startup; dynamic SSRF/obsolete cipher/plugin rejection; WireGuard/AmneziaWG/VLESS/Amnezia `vpn://` imports with strict validation (hooks, plaintext VLESS and full-access `vpn://` refused, no key material listed); split-tunnel policies (global and per server, kept across `--replace`, agents refused); and a real Ghostlink server managed through its pinned key, the only test that drives `ghostlink server …` (users, keys, rules, live/stats/clients, QR, kit, IKEv2/IPsec profiles, pin mismatch, agent refusal).
 
 | Variable | Use |
 |---|---|
@@ -690,6 +691,7 @@ The 19 Node tests cover real named-pipe/Unix protocol schema; import/list/defaul
 | `GHOSTLINK_TEST_ENGINE` | Override optional OpenVPN executable for process/Python tests |
 | `GHOSTLINK_TEST_OUTLINE_WORKER` | Managed worker executable |
 | `GHOSTLINK_TEST_SING_BOX` | Independent original peer; also used for generated server config checks |
+| `GHOSTLINK_TEST_SERVER` | `ghostlink-server` executable for the managed-server process test (default `target/<profile>/ghostlink-server[.exe]`); the test is skipped without it |
 | `OPENSSL` | Node suite OpenSSL path |
 | `GHOSTLINK_TEST_OPENSSL` | Python provisioning suite OpenSSL path |
 | `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED=1` | Deliberately exercise native startup failure; only after verifying the process is unelevated |
@@ -698,7 +700,7 @@ The unprivileged-start option was run after an actual administrator-role check. 
 
 ### Still unverified
 
-No successful full TUN connection, all-application routing, full/split route comparison, DNS/IPv6 leak test, assigned/public egress correlation, native network-change recovery, suspend/resume, installed service crash/stop/restart, cross-user installed authorization, uninstall recovery or persistent kill-switch test has passed here. No mobile test or Linux runtime test has run. Hosted CI definitions are not hosted CI results.
+No successful full TUN connection, all-application routing, full/split route comparison, DNS/IPv6 leak test, assigned/public egress correlation, native network-change recovery, suspend/resume, installed service crash/stop/restart, cross-user installed authorization, uninstall recovery or persistent kill-switch test has passed here. No mobile test and no routed (TUN) VPN session on Linux has run. Hosted CI does run on Linux: the process suite, the Python and proxy-mode real-engine tests, the `.deb` as a systemd service (release CI), the mesh end-to-end test and IPsec interop.
 
 ## 13. Self-hosted servers and infrastructure
 
@@ -746,7 +748,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
   - Go unit tests in `internal/mesh`, `meshproto`, `meshagent` and `server`.
 
 Client side:
-- **Daemon:** `ManagedServerAdd/List/Remove` and typed `ServerCall` live in `services/vpn-daemon/src/remote.rs`, and run **without the daemon lock** during network calls.
+- **Daemon:** `ManagedServerAdd` and typed `ServerCall` are served by `remote::handle` in `services/vpn-daemon/src/remote.rs`, which releases the **daemon lock** during the probe or call. `ManagedServerList` and `ManagedServerRemove` are local arms of `Daemon::dispatch` in `main.rs`.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
 - **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`.
 - **Access:** everything is owner-only and never exposed over MCP.
@@ -758,7 +760,10 @@ Pitfalls found here:
 
 ### Speed limits and the move from Outline (v0.8.0)
 
-- **Speed limits:** `User.SpeedLimitBps` (0 = server default, -1 = none, >0 = cap) and `State.DefaultSpeedLimitBps`, in bytes per second. They are not in the engine config. `internal/server/pace.go` is a token bucket per client and direction; `Monitor.RoutedConnection`/`RoutedPacketConnection` wrap each connection in `bufio.NewCounterConn` with the pacer's `Wait` as count functions, which sing's copy loop calls after each chunk (a plain wrapper would be bypassed by its unwrapping). `Service.Change` and `Start` call `Monitor.SetSpeedLimits`. IKEv2/IPsec: `ipsecproto.Desired.SpeedLimits`; the agent renders `hashlimit` rules in `GHOSTLINK-IPSEC-LIM` from the current sessions' virtual IPs and re-renders when they change.
+- **Speed limits:** `User.SpeedLimitBps` (0 = server default, -1 = none, >0 = cap) and `State.DefaultSpeedLimitBps`, in bytes per second. They are not in the engine config. `internal/server/pace.go` is a token bucket per client and direction.
+  - **TCP:** `Monitor.RoutedConnection` wraps each connection in `bufio.NewCounterConn` with `upPace.Wait`/`downPace.Wait` as count functions, which sing's copy loop calls after each chunk (a plain wrapper would be bypassed by its unwrapping).
+  - **UDP:** `RoutedPacketConnection` wraps `policedPacketConn` in `bufio.NewCounterPacketConn`. What the client sends is policed with `pacer.Allow` (dropped above the rate, never delayed, because the Shadowsocks inbound feeds every client's UDP from one loop); UDP to the client waits on `downPace`. `policedPacketConn` must stay opaque to read unwrapping (no `Upstream`, `UpstreamReader`, `ReaderReplaceable` or read waiter), but it must expose `UpstreamWriter`: sing sizes write buffers from the header and tag room the writer behind it needs, and hiding it made the first Shadowsocks UDP reply crash the server (found before release; `udp_test.go` and `police_test.go` guard it).
+  - **Online state:** `isOnline` in `monitor.go`: seen within 60 s. Only what the client sends moves "last seen" (new connections, uploads, downloads of at least 16 KB in a second, a WireGuard/AmneziaWG peer whose receive counter grew, polled every 5 s, or a handshake, and IKEv2/IPsec reports). Open connections don't count. `Service.Change` and `Start` call `Monitor.SetSpeedLimits`. IKEv2/IPsec: `ipsecproto.Desired.SpeedLimits`; the agent renders `hashlimit` rules in `GHOSTLINK-IPSEC-LIM` from the current sessions' virtual IPs and re-renders when they change.
 - **Outline import:** `internal/server/outline.go` (`POST /import/outline`, report without secrets, dry run through a sentinel error in `Service.Change`), `admin_outline.go` (`import-outline --dir DIR [--check]`, read-only). Keys may carry `Port`/`Method` overrides; `render.go` adds an inbound `shadowsocks-<port>` per extra port and `CheckPorts` refuses moving the main port onto one. The host command `ghostlink-server migrate-outline` copies Outline's files into `$STATE/outline-import` (0700/0600, server account), checks, stops `shadowbox`/`watchtower` with restart `no`, imports, restores Outline on failure and deletes the copies. `install-server.sh --migrate-outline [--check]` wraps it.
 - **Units:** all speeds in the UI and `top` are bytes per second (`byteRate`, `speed`, `megabytes` in `ui/shared/format.ts`).
 
@@ -820,7 +825,7 @@ Build script uses optimized Rust binaries with static MSVC CRT, optimized manage
 
 MSI behavior in source:
 
-- Installs x64 Program Files application files, `engine/ghostlink-tunnel.exe`, notices, Start menu shortcut and machine CLI PATH entry.
+- Installs x64 Program Files application files, `engine/ghostlink-tunnel.exe`, notices, Start menu and desktop shortcuts, and the machine CLI PATH entry.
 - Installs automatic LocalSystem service **`Ghostlink`** with explicit worker/data-directory/owner arguments.
 - Owner SID property `GHOSTLINK_OWNER_SID` is read from existing installation metadata or interactive Windows Installer UserSID; explicitly supply intended user's SID for unattended installation. Never authorize Everyone/a broad group.
 - Service owns `%ProgramData%\Ghostlink` state and DPAPI identity. GUI/CLI run as the ordinary authorized user.
@@ -839,6 +844,8 @@ Administrator installation is a human step on an authorized test machine. No UAC
 | Windows x64 | `windows-2022` | `Ghostlink-<v>-windows-x64.msi`, `-portable.zip`, `Ghostlink-<v>-worker-corresponding-source.zip` |
 | Linux x64 | `ubuntu-22.04` | `ghostlink-<v>-linux-x64.tar.gz`, `ghostlink_<v>-1_amd64.deb`, `ghostlink-<v>-1.x86_64.rpm` (headless; `scripts/build-linux.sh` + nfpm 2.48.0; the `.deb` is smoke-tested as a systemd service) |
 | Linux arm64 | `ubuntu-22.04-arm` | `ghostlink-<v>-linux-arm64.tar.gz`, `ghostlink_<v>-1_arm64.deb`, `ghostlink-<v>-1.aarch64.rpm` |
+
+Each Linux job also builds the server (`ghostlink-server_<v>-1_<arch>.deb`, `ghostlink-server-<v>-1.<arch>.rpm`), the mesh agent (`ghostlink-mesh_<v>-1_<arch>.deb`, `ghostlink-mesh-<v>-1.<arch>.rpm`) and `Ghostlink-<v>-ipsec-component-source-<arch>.tar.gz`; see `docs/development/releases.md`.
 
 Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
@@ -925,7 +932,7 @@ It runs on every push and pull request (hosted runs observed since v0.2.0). It d
 - **Full tunnel is disabled by default on Linux.** Preserve the SSH administrator route and explicitly authorize route changes before an override adds `--allow-full-tunnel`.
 - Client daemon service is distinct from the unprivileged server proxy service; do not use the wrong unit on a VPS.
 - Verify resolver integration per distro, IPC ownership, routes/IPv6 before/during/after, crashes and service lifecycle; the `.deb`/`.rpm` packages exist since v0.2.1, but a full VPN session on a real host is still unverified.
-- Resolve Linux GUI advisories and review root-private credential storage/vault policy. Current Linux Go artifact is a cross-build only.
+- Resolve Linux GUI advisories and review root-private credential storage/vault policy. The Linux worker is built natively in CI on x64 and arm64 and runs there (real-engine tests, and `doctor` inside the installed service); a real tunnel session on a Linux host is what remains unverified.
 
 ### Android / iOS continuation
 

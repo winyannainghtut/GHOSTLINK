@@ -94,7 +94,7 @@ Full-tunnel routing is off on Linux until you add `GHOSTLINK_FLAGS=--allow-full-
 ## Quick start
 
 1. Open **Ghostlink** and choose **Add access key**.
-2. Paste the key your server owner gave you, or choose **Import a file…** for a WireGuard/AmneziaWG `.conf`.
+2. Paste the key your server owner gave you, or choose **Import a .conf file** for a WireGuard/AmneziaWG `.conf`.
 3. Choose **Connect**. The card shows the protocol, and the panel shows time connected and traffic.
 
 Closing the window keeps Ghostlink in the tray, and the VPN service keeps running. Use **Disconnect** to stop the VPN.
@@ -173,9 +173,9 @@ More: [protocol design](docs/architecture/protocols.md) · [architecture record]
 ## Security and privacy
 
 - **Local control:** a named pipe (Windows) or Unix socket restricted to SYSTEM/root and the one authorized user. Clients check who created the pipe before sending anything.
-- **Credentials:** encrypted at rest. Keys never appear in process arguments, lists, status or audit logs, and agent fingerprints are salted. Server management keys are sealed the same way and are owner-only.
+- **Credentials:** on Windows, encrypted at rest with DPAPI under the service's identity, in storage only the service can read. On Linux they are not encrypted: they are kept in root-only files (mode 0600 in a 0700 directory), with no OS vault yet. Keys never appear in process arguments, lists, status or audit logs, and agent fingerprints are salted. Server management keys are kept the same way and are owner-only.
 - **Imports:** strict allowlist parsing everywhere; no imported setting can run a command.
-- **Network health:** "connected" requires an observed tunnel interface and a successful HTTPS check through it. A cleanup failure blocks the next connection until it is investigated.
+- **Network health:** "connected" requires a tunnel address the worker observed on the interface and a successful HTTPS check through the tunnel (optional OpenVPN profiles: OpenVPN's own connected event with a valid address). A cleanup failure blocks the next connection until the service restarts.
 - **Not yet provided:** a persistent kill switch, an approval queue for agent actions, and signed builds.
 
 Details: [security model](docs/security/model.md) · [dependency scans](docs/security/dependencies.md) · [licensing](docs/security/licensing.md).
@@ -206,7 +206,7 @@ Paste the key into **Servers I run → Add server** (or `ghostlink server add`).
 - **Rules:** block sites, IPs, ports, BitTorrent or outgoing mail for everyone or for one user.
 - **Usage and monitoring:** see live speeds, who is online, data used, traffic types and, if you turn it on, each user's top services.
 - **Sharing:** show a key's QR code, or save a connection kit page for each person.
-- **iPhone, iPad, Mac:** run `sudo ghostlink-server ipsec enable` once and open UDP 500 and 4500. Then create IKEv2 (or IPsec) keys and save each as a profile to send.
+- **iPhone, iPad, Mac:** run `sudo ghostlink-server ipsec enable` once, open UDP 500 and 4500, and turn the protocols on with `sudo ghostlink-server set --enable ikev2` (and/or `--enable ipsec`) or their switch in the app or dashboard; the installer's `--ipsec` does all of this. Then create IKEv2 (or IPsec) keys and save each as a profile to send.
 
 Upgrading the package keeps everything. Full guide: [Ghostlink server](docs/deployment/ghostlink-server.md).
 
@@ -221,11 +221,11 @@ New in 0.6.0: your Ghostlink server can coordinate a **mesh**, a private network
 ```sh
 # on the Ghostlink server: coordinate the mesh and join it as the relay
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --mesh
-# in the app: Servers I run → Manage → Mesh → Add node, then run the command it gives on each server:
+# in the app: Servers I run → Manage → Network → Mesh → Add node, then run the command it gives on each server:
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash -s -- --join 'glmesh1:…'
 ```
 
-**Open mesh map** in the app, or the dashboard's **Mesh** view, shows every node and link: direct or through the relay, with latency and traffic. From the map you can approve servers, set tags, subnets and the relay, edit access rules, and disable or remove servers. The same is available with `sudo ghostlink-server mesh …` and `ghostlink server mesh …`.
+The **Mesh** card in the **Network** view, in the app (**Servers I run → Manage**) and in the dashboard, shows every node and link: direct or through the relay, with latency and traffic. From the map you can approve servers, set tags, subnets and the relay, edit access rules, and disable or remove servers. The same is available with `sudo ghostlink-server mesh …` and `ghostlink server mesh …`.
 
 Mesh nodes are Linux servers in this version; Windows servers and the Ghostlink app on Windows will follow. Guide: [Ghostlink mesh](docs/deployment/mesh.md).
 
@@ -274,11 +274,11 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Split tunneling | Routing rules tested in the real engine; app matching and full-device behavior need an elevated test |
 | Linux | CLI/service/worker build and tests pass in CI; release CI installs the `.deb` and checks the service runs; a full VPN session is not yet verified on a real host; no desktop app yet |
 | Ghostlink server, management, monitoring | Server API, rules, data and speed limits, monitoring and all four protocols tested end to end with real clients; the Outline import tested with Outline's own keys and, in release CI, with a fake Outline on the host; server commands and dashboard tested; release CI installs the server `.deb` with Docker and exercises API, commands and dashboard; a real internet-facing VPS deployment is not yet verified |
-| IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component, and measures a capped download at its speed limit. Installing on a real Apple device is checked by hand |
+| IKEv2/IPsec for iPhone, iPad, Mac | Profiles and server checked by unit tests. CI connects a real strongSwan client with each profile's parameters (all four sign-in methods) through the packaged component, and measures a capped download at its speed limit. Installing and connecting a profile on a real iPhone, iPad or Mac is not verified yet: it needs a check by hand on a device |
 | Mesh of Linux servers | Tested in CI with kernel WireGuard between network namespaces: direct and relayed paths through NAT, access rules, shared subnets, names, disable/remove and clean-up. Release CI installs the agent package, joins it to the installed server and removes it cleanly. Not yet run across real cloud servers. Windows nodes are planned |
 | Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
 
-**Latest release:** v0.8.0, a pre-release (2026-11-07). Fixes found since are on `main` and listed under *Unreleased* in the [changelog](CHANGELOG.md), which lists what each release changed. The first non-pre-release, v1.0.0, waits for signed builds or a decision to launch unsigned, and for real-device checks of the Windows installer, a VPS server and an Apple device.
+**Latest release:** v0.8.0, a pre-release (2026-11-08). Fixes found since are on `main` and listed under *Unreleased* in the [changelog](CHANGELOG.md), which lists what each release changed. The first non-pre-release, v1.0.0, waits for signed builds or a decision to launch unsigned, and for real-device checks of the Windows installer, a VPS server and an Apple device.
 
 ## Documentation
 

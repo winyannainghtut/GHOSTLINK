@@ -6,7 +6,7 @@ The user resumed work with **“continue”** and selected **“Continue with lo
 
 The detailed standalone AI handover is [agent.md](agent.md), created on 2026-11-06. It consolidates the current architecture, source map, exact workflows, verified results, artifacts, security/licensing boundaries and continuation plan; this file retains the chronological history.
 
-## Current handoff — November 6
+## Handoff log, newest first (November 6–8)
 
 ### November 8 (later): review of 0.8.0 and handover
 
@@ -250,7 +250,9 @@ The approved plan is in four phases: (1) client protocols, (2) client split tunn
 - **Releases.** `.github/workflows/release.yml`, `scripts/build-linux.sh`, `scripts/release-version.mjs` and `docs/development/releases.md` add Windows x64 and Linux x64/arm64 packages and a draft GitHub pre-release on `v*` tags. No tag has been pushed and no release has been created.
 - Observed results are recorded in [the verification ledger](docs/development/verification.md).
 
-### Product direction and implemented state
+### November 6, morning (historical): product direction and implemented state at v0.1.0
+
+The four sections from here to the archived October snapshot describe the state before the first release: no tag, CI not yet run, the checkout at `D:\custom vpn`. Everything since is in the entries above and in [agent.md](agent.md).
 
 Outline-style UI and standard Outline access keys remain the primary product direction. OpenVPN is optional. The Windows Rust daemon, CLI, restricted MCP bridge and Tauri GUI use the same real local IPC and encrypted storage. Native GUI runs were performed this session, including actual key import followed by CLI confirmation, light/dark views, Settings and server details.
 
@@ -266,7 +268,7 @@ Additional changes:
 - Terraform formatting/init (backend disabled)/validate passed; AWS provider lock recorded. No plan/apply/cloud changes. Linux daemon service defaults protect SSH by denying full tunnel until deliberately overridden.
 - Added Windows/Linux CI definitions; they have not been run on hosted runners. Android and iOS remain unimplemented, without native toolchains/devices/signing here.
 
-### Verification actually run
+### November 6, morning (historical): verification actually run
 
 See `docs/development/verification.md` for precise limits.
 
@@ -280,7 +282,7 @@ See `docs/development/verification.md` for precise limits.
 - Final optimized binaries passed the same **14 process tests** again after security dependency updates. The rebuilt worker passed all **3 real-engine tests** again. The worker also built from its vendored corresponding-source staging with the published Go flags; its version command succeeded. Vendored build metadata omits module checksums, so its bytes differ from module-cache builds; no byte-identical build claim is made.
 - Dependency scan fixed five reachable Go HTTP/2 advisories and then non-reachable module findings; final govulncheck reports no vulnerabilities. JS audit reports zero. Root Rust OpenSSL lock updated to 0.10.82/0.9.118. OSV scans 472 unique Rust package versions; remaining 3 IDs cover glib iterator unsoundness and an unmaintained GTK build dependency. These are Linux GUI dependencies, not compiled on Windows; see `docs/security/dependencies.md`. Do not claim every dependency scan is clean.
 
-### Builds and tooling
+### November 6, morning (historical): builds and tooling
 
 Working directory remains `D:\custom vpn`, PowerShell. Git is now initialized on `main`; inspect `git status` and `git log` before committing. `.gitignore` now covers nested Cargo targets, build tools, caches, state, generated keys/tokens, artifacts and vendored worker source. Do not stage private state or binaries.
 
@@ -298,7 +300,7 @@ The worker is GPL-3.0-or-later; original Rust/UI is MIT. Corresponding-source ar
 
 The user-owned `.state-dev` contains no saved profiles after cleanup. Temporary UI fixture `ui-local-test` was removed through CLI after verifying disconnected state. Owned development GUI/daemon processes were stopped for release rebuild. Before starting anything, check current processes; do not kill unrelated VPN software.
 
-### Resume order and remaining requirements
+### November 6, morning (historical): resume order and remaining requirements
 
 1. Read this section plus verification/security reports. Keep the Outline key flow and real shared daemon intact. Check Git and package timestamps rather than recreating the project.
 2. Privileged Windows verification is the next major gate: human-installed MSI on an authorized test machine, owner/other-user IPC authorization, local server full TUN connection, actual route/DNS/IPv6/egress checks, disconnect restoration, worker/daemon crashes, service stop/restart and uninstall. No admin token is available in this session. No automatic UAC or security-prompt bypass.
