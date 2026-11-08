@@ -17,7 +17,9 @@ import (
 	"ghostlink.local/outline-worker/internal/meshproto"
 )
 
-// The agent's own chains; built-in chains only get one jump to each, matching the interface.
+// The agent's own chains; built-in chains only get one jump to each. The filter jumps match the
+// mesh interface; the nat and mangle ones match everything, but the rules inside them only touch
+// mesh traffic.
 const (
 	chainIn  = "GHOSTLINK-MESH-IN"
 	chainFwd = "GHOSTLINK-MESH-FWD"
@@ -47,21 +49,27 @@ func address(c *meshproto.Config) string {
 	return p.Addr().String() + "/32"
 }
 
-// allowRules renders the accept rules of chain for traffic to dest.
-func allowRules(chain, dest string, fw meshproto.Firewall) []string {
+// allowRules renders the accept rules of chain for traffic to dest. With dnat it matches
+// connections the host redirected (DNAT) away from dest instead, by the address and port the
+// peer connected to.
+func allowRules(chain, dest string, fw meshproto.Firewall, dnat bool) []string {
+	to, dport := "-d "+dest, "--dport"
+	if dnat {
+		to, dport = "-m conntrack --ctstate DNAT --ctorigdst "+dest, "--ctorigdstport"
+	}
 	var rules []string
 	if fw.Ping {
-		rules = append(rules, fmt.Sprintf("-A %s -d %s -p icmp --icmp-type echo-request -j ACCEPT", chain, dest))
+		rules = append(rules, fmt.Sprintf("-A %s %s -p icmp --icmp-type echo-request -j ACCEPT", chain, to))
 	}
 	if fw.Open {
-		return append(rules, fmt.Sprintf("-A %s -d %s -j ACCEPT", chain, dest))
+		return append(rules, fmt.Sprintf("-A %s %s -j ACCEPT", chain, to))
 	}
 	for _, a := range fw.Allow {
 		if !slices.Contains(a.Destinations, dest) {
 			continue
 		}
 		for _, src := range a.Sources {
-			base := fmt.Sprintf("-A %s -s %s -d %s", chain, src, dest)
+			base := fmt.Sprintf("-A %s -s %s %s", chain, src, to)
 			switch {
 			case a.Protocol == "any":
 				rules = append(rules, base+" -j ACCEPT")
@@ -71,7 +79,7 @@ func allowRules(chain, dest string, fw meshproto.Firewall) []string {
 				rules = append(rules, fmt.Sprintf("%s -p %s -j ACCEPT", base, a.Protocol))
 			default:
 				for _, port := range a.Ports {
-					rules = append(rules, fmt.Sprintf("%s -p %s --dport %s -j ACCEPT", base, a.Protocol, strings.Replace(port, "-", ":", 1)))
+					rules = append(rules, fmt.Sprintf("%s -p %s %s %s -j ACCEPT", base, a.Protocol, dport, strings.Replace(port, "-", ":", 1)))
 				}
 			}
 		}
@@ -80,23 +88,33 @@ func allowRules(chain, dest string, fw meshproto.Firewall) []string {
 }
 
 // Rules renders iptables-restore input for a configuration on interface iface:
-//   - IN: what the mesh may reach on this machine (replies, pings, then the rules);
-//   - FWD: relayed traffic between peers, and mesh traffic to this node's shared subnets
-//     under the same rules; everything else arriving from the mesh is dropped, so the mesh
+//   - IN: what the mesh may reach on this machine (replies, pings, then the rules), at its mesh
+//     address and at its own addresses in the subnets it shares (a LAN gateway, for example);
+//   - FWD: connections the host redirects from this node's mesh address (published container
+//     ports), relayed traffic between peers, and mesh traffic to this node's shared subnets,
+//     all under the same rules; everything else arriving from the mesh is dropped, so the mesh
 //     can't use this machine to reach networks it does not share;
 //   - OUT: replies going back into the mesh;
 //   - POST: masquerading toward shared subnets; MSS clamping for the smaller tunnel MTU.
 func Rules(c *meshproto.Config, iface string) map[string]string {
 	filter := []string{"*filter", ":" + chainIn + " - [0:0]", ":" + chainFwd + " - [0:0]", ":" + chainOut + " - [0:0]",
 		"-A " + chainIn + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"}
-	filter = append(filter, allowRules(chainIn, address(c), c.Firewall)...)
+	filter = append(filter, allowRules(chainIn, address(c), c.Firewall, false)...)
+	// Packets for the node's own address in a shared subnet are delivered here, not forwarded.
+	for _, shared := range c.Shared {
+		filter = append(filter, allowRules(chainIn, shared, c.Firewall, false)...)
+	}
 	filter = append(filter, "-A "+chainIn+" -j DROP",
 		"-A "+chainFwd+" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT")
+	// Docker's and Podman's published ports and Kubernetes NodePorts are DNATed in PREROUTING,
+	// so a connection to one of them at this node's mesh address is forwarded (to the
+	// container), not delivered locally. It is still a service of this node, under its rules.
+	filter = append(filter, allowRules(chainFwd, address(c), c.Firewall, true)...)
 	if c.Relay {
 		filter = append(filter, fmt.Sprintf("-A %s -o %s -j ACCEPT", chainFwd, iface))
 	}
 	for _, shared := range c.Shared {
-		filter = append(filter, allowRules(chainFwd, shared, c.Firewall)...)
+		filter = append(filter, allowRules(chainFwd, shared, c.Firewall, false)...)
 	}
 	filter = append(filter, "-A "+chainFwd+" -j DROP",
 		"-A "+chainOut+" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT")
@@ -195,4 +213,42 @@ func PeerChanges(current []wgtypes.Peer, wanted []meshproto.Peer, applied map[st
 		}
 	}
 	return changes, next, nil
+}
+
+// meshRoutes splits other nodes' shared subnets into those to route into the mesh and those it
+// must leave alone, because the route would
+//   - replace or hide a route the main table already has for exactly that subnet (the agent's
+//     routes have metric 0, so the kernel replaces an equal one, and nothing would put it back);
+//   - take over part or all of a network this machine is on itself (connected), cutting it off
+//     from its own LAN;
+//   - carry a peer's WireGuard endpoint into the mesh (for example the subnet router's address
+//     on the same LAN), which loops; a more specific existing route for the endpoint prevents
+//     that.
+//
+// routed is every main-table route but the agent's own.
+func meshRoutes(routes []string, connected, routed []netip.Prefix, endpoints []netip.Addr) (keep, skip []string) {
+	for _, text := range routes {
+		p, err := netip.ParsePrefix(text)
+		if err != nil {
+			keep = append(keep, text) // setRoutes reports it
+			continue
+		}
+		taken := slices.Contains(routed, p)
+		for _, n := range connected {
+			taken = taken || (n.Bits() <= p.Bits() && n.Contains(p.Addr()))
+		}
+		for _, e := range endpoints {
+			captured := p.Contains(e)
+			for _, r := range routed {
+				captured = captured && !(r.Bits() > p.Bits() && r.Contains(e))
+			}
+			taken = taken || captured
+		}
+		if taken {
+			skip = append(skip, text)
+		} else {
+			keep = append(keep, text)
+		}
+	}
+	return keep, skip
 }

@@ -7,6 +7,7 @@ package meshagent
 
 import (
 	"errors"
+	"net/netip"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -20,7 +21,8 @@ func openDevice(string) (*device, error)                               { return 
 func (d *device) configure(string, uint16, []wgtypes.PeerConfig) error { return errLinuxOnly }
 func (d *device) peers() ([]wgtypes.Peer, error)                       { return nil, errLinuxOnly }
 func (d *device) setAddress(string) error                              { return errLinuxOnly }
-func (d *device) setRoutes([]string) error                             { return errLinuxOnly }
+func (d *device) setRoutes([]string, []netip.Addr) ([]string, error)   { return nil, errLinuxOnly }
+func (d *device) gone() bool                                           { return false }
 func (d *device) close()                                               {}
 func removeInterface(string)                                           {}
 func readForwarding() string                                           { return "" }

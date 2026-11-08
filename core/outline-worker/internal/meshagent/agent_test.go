@@ -4,12 +4,25 @@
 package meshagent
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"ghostlink.local/outline-worker/internal/hostfw"
 	"ghostlink.local/outline-worker/internal/meshproto"
 )
 
@@ -38,6 +51,13 @@ func TestFirewallRules(t *testing.T) {
 		"-A GHOSTLINK-MESH-FWD -o glmesh0 -j ACCEPT",
 		"-A GHOSTLINK-MESH-FWD -s 100.96.0.3/32 -d 192.168.50.0/24 -j ACCEPT",
 		"-A GHOSTLINK-MESH-OUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		// Published container ports (DNAT from the mesh address) follow the same rules, by the
+		// port the peer connected to.
+		"-A GHOSTLINK-MESH-FWD -s 100.96.0.2/32 -m conntrack --ctstate DNAT --ctorigdst 100.96.0.5/32 -p tcp --ctorigdstport 8000:8100 -j ACCEPT",
+		"-A GHOSTLINK-MESH-FWD -s 100.96.0.3/32 -m conntrack --ctstate DNAT --ctorigdst 100.96.0.5/32 -j ACCEPT",
+		// The node's own address in its shared subnet (a LAN gateway) is part of the node.
+		"-A GHOSTLINK-MESH-IN -s 100.96.0.3/32 -d 192.168.50.0/24 -j ACCEPT",
+		"-A GHOSTLINK-MESH-IN -d 192.168.50.0/24 -p icmp --icmp-type echo-request -j ACCEPT",
 	} {
 		if !strings.Contains(filter, want) {
 			t.Errorf("filter lacks %q", want)
@@ -48,14 +68,15 @@ func TestFirewallRules(t *testing.T) {
 	}
 	// Each chain ends by dropping what was not allowed.
 	if strings.Index(filter, "-A GHOSTLINK-MESH-IN -j DROP") < strings.LastIndex(filter, "-A GHOSTLINK-MESH-IN -s") ||
-		!strings.Contains(filter, "-A GHOSTLINK-MESH-FWD -j DROP") {
+		strings.Index(filter, "-A GHOSTLINK-MESH-FWD -j DROP") < strings.LastIndex(filter, "-A GHOSTLINK-MESH-FWD -s") {
 		t.Error("chains must end with DROP after the accepts")
 	}
 	if !strings.Contains(rules["nat"], "-A GHOSTLINK-MESH-POST -s 100.96.0.0/16 -d 192.168.50.0/24 ! -o glmesh0 -j MASQUERADE") {
 		t.Errorf("nat: %s", rules["nat"])
 	}
 	open := &meshproto.Config{MeshCIDR: "100.96.0.0/16", Address: "100.96.0.5/16", Firewall: meshproto.Firewall{Open: true}}
-	if f := Rules(open, "glmesh0")["filter"]; !strings.Contains(f, "-A GHOSTLINK-MESH-IN -d 100.96.0.5/32 -j ACCEPT") || strings.Contains(f, "-o glmesh0 -j ACCEPT") {
+	if f := Rules(open, "glmesh0")["filter"]; !strings.Contains(f, "-A GHOSTLINK-MESH-IN -d 100.96.0.5/32 -j ACCEPT") || strings.Contains(f, "-o glmesh0 -j ACCEPT") ||
+		!strings.Contains(f, "-A GHOSTLINK-MESH-FWD -m conntrack --ctstate DNAT --ctorigdst 100.96.0.5/32 -j ACCEPT") {
 		t.Errorf("open, not relay: %s", f)
 	}
 	for _, j := range Jumps("glmesh0") {
@@ -121,5 +142,136 @@ func TestPeerChangesKeepSessions(t *testing.T) {
 	}
 	if _, _, err := PeerChanges(nil, []meshproto.Peer{{Name: "x", PublicKey: "bad"}}, nil); err == nil {
 		t.Fatal("a bad key was accepted")
+	}
+}
+
+// Without the node's own consent it neither relays nor shares subnets, whatever the
+// coordinator says, even where IPv4 forwarding is already on.
+func TestForwardingNeedsConsent(t *testing.T) {
+	c := &meshproto.Config{MeshCIDR: "100.96.0.0/16", Address: "100.96.0.5/16", Relay: true, Shared: []string{"192.168.50.0/24"},
+		Masquerade: true, Firewall: meshproto.Firewall{Open: true}}
+	without := (&Node{Interface: "glmesh0"}).rules(c)
+	if strings.Contains(without["filter"], "-o glmesh0 -j ACCEPT") || strings.Contains(without["filter"], "192.168.50.0/24") ||
+		strings.Contains(without["nat"], "MASQUERADE") {
+		t.Fatalf("forwarding rules without consent:\n%s%s", without["filter"], without["nat"])
+	}
+	with := (&Node{Interface: "glmesh0", Forwarding: true}).rules(c)
+	if !strings.Contains(with["filter"], "-A GHOSTLINK-MESH-FWD -o glmesh0 -j ACCEPT") || !strings.Contains(with["nat"], "MASQUERADE") {
+		t.Fatalf("forwarding rules with consent:\n%s%s", with["filter"], with["nat"])
+	}
+	if !c.Relay || len(c.Shared) != 1 {
+		t.Fatal("rendering changed the configuration itself")
+	}
+}
+
+// The firewall goes in before the interface: when it fails, nothing is open to the mesh.
+func TestFirewallBeforeInterface(t *testing.T) {
+	private, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{Dir: t.TempDir(), Node: &Node{Name: "alpha", Interface: "gltest9", PrivateKey: private.String(), Forwarding: true},
+		FW: &hostfw.Firewall{}} // an unknown backend: every firewall call fails
+	c := &meshproto.Config{Name: "alpha", MeshCIDR: "100.96.0.0/16", Address: "100.96.0.5/16", ListenPort: 51820, Relay: true,
+		Firewall: meshproto.Firewall{Open: true}, Peers: []meshproto.Peer{
+			{Name: "beta", PublicKey: key(t).String(), Endpoint: "203.0.113.2:51820", AllowedIPs: []string{"100.96.0.6/32"}, Keepalive: 25}}}
+	err = a.apply(c)
+	if err == nil || !strings.HasPrefix(err.Error(), "firewall:") || a.dev != nil || a.applied != nil {
+		t.Fatalf("apply: %v (interface opened: %v)", err, a.dev != nil)
+	}
+}
+
+// Other nodes' shared subnets are not routed into the mesh where that would replace one of this
+// machine's routes, cut it off from its own LAN, or loop its traffic to a peer.
+func TestMeshRoutesLeaveLocalNetworks(t *testing.T) {
+	prefixes := func(list ...string) []netip.Prefix {
+		var out []netip.Prefix
+		for _, p := range list {
+			out = append(out, netip.MustParsePrefix(p))
+		}
+		return out
+	}
+	// A LAN host: on 192.168.50.0/24, with another VPN routing 10.20.0.0/16 and 172.16.0.0/12.
+	connected := prefixes("192.168.50.0/24")
+	routed := prefixes("192.168.50.0/24", "10.20.0.0/16", "172.16.0.0/12")
+	keep, skip := meshRoutes([]string{"192.168.50.0/24", "192.168.50.0/25", "10.20.0.0/16", "10.30.0.0/16", "172.16.5.0/24", "192.168.0.0/16"},
+		connected, routed, []netip.Addr{netip.MustParseAddr("192.168.50.7")})
+	// Wider or narrower than someone else's route is fine: the more specific route wins, and the
+	// LAN route keeps the peer at 192.168.50.7 off the mesh route 192.168.0.0/16.
+	if !slices.Equal(keep, []string{"10.30.0.0/16", "172.16.5.0/24", "192.168.0.0/16"}) ||
+		!slices.Equal(skip, []string{"192.168.50.0/24", "192.168.50.0/25", "10.20.0.0/16"}) {
+		t.Fatalf("LAN host: keep %v, skip %v", keep, skip)
+	}
+	// A cloud VM with a /32 address: the subnet router in its VPC is a peer at 10.128.0.9, so
+	// routing the VPC range into the mesh would loop.
+	keep, skip = meshRoutes([]string{"10.128.0.0/20", "10.140.0.0/20"}, prefixes("10.128.0.5/32"), prefixes("10.128.0.1/32"),
+		[]netip.Addr{netip.MustParseAddr("10.128.0.9"), netip.MustParseAddr("203.0.113.4")})
+	if !slices.Equal(keep, []string{"10.140.0.0/20"}) || !slices.Equal(skip, []string{"10.128.0.0/20"}) {
+		t.Fatalf("cloud VM: keep %v, skip %v", keep, skip)
+	}
+}
+
+// Leaving keeps IPv4 forwarding on where container or VM networking may rely on it.
+func TestForwardingUsers(t *testing.T) {
+	if got := forwardingUsers([]string{"lo", "eth0", "ens3"}); len(got) != 0 {
+		t.Fatalf("plain server: %v", got)
+	}
+	if got := forwardingUsers([]string{"lo", "eth0", "docker0", "br-3f2a19c0", "virbr0"}); !slices.Equal(got, []string{"Docker", "libvirt"}) {
+		t.Fatalf("Docker and libvirt host: %v", got)
+	}
+}
+
+// fakeCoordinator answers every sync with status and counts them.
+func fakeCoordinator(t *testing.T, status string) (*Node, *atomic.Int32) {
+	t.Helper()
+	syncs := &atomic.Int32{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		syncs.Add(1)
+		_ = json.NewEncoder(w).Encode(meshproto.SyncResponse{Status: status})
+	}))
+	t.Cleanup(server.Close)
+	private, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(server.Certificate().Raw)
+	// Hosts stays off and the firewall backend unknown, so the agent touches nothing on this machine.
+	return &Node{URL: server.URL, Pin: hex.EncodeToString(sum[:]), NodeID: "1", Secret: "1.secret", PrivateKey: private.String(),
+		Name: "alpha", Address: "100.96.0.5", Interface: "gltest9", ListenPort: 51820}, syncs
+}
+
+// A node waiting for approval asks again only after a pause, even when the coordinator answers
+// at once.
+func TestWaitingNodeDoesNotBusyLoop(t *testing.T) {
+	node, syncs := fakeCoordinator(t, meshproto.StatusPending)
+	dir := t.TempDir()
+	if err := node.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{Dir: dir, Node: node, Log: log.New(io.Discard, "", 0), FW: &hostfw.Firewall{}, Version: "test"}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := a.Serve(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs.Load(); n != 1 {
+		t.Fatalf("%d syncs in 1.5 s while waiting for approval", n)
+	}
+	if s, err := ReadStatus(dir); err != nil || s.State != meshproto.StatusPending {
+		t.Fatalf("status: %+v %v", s, err)
+	}
+}
+
+// After `ghostlink-mesh leave` removed the node here (the coordinator could not be told), the
+// running agent stops instead of setting the node up again.
+func TestAgentStopsAfterLeave(t *testing.T) {
+	node, syncs := fakeCoordinator(t, meshproto.StatusActive)
+	dir := t.TempDir()
+	a := &Agent{Dir: dir, Node: node, Log: log.New(io.Discard, "", 0), FW: &hostfw.Firewall{}, Version: "test"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	if err := a.Serve(ctx); err != nil || time.Since(started) > 2*time.Second || syncs.Load() != 0 {
+		t.Fatalf("serve: %v after %v, %d syncs", err, time.Since(started), syncs.Load())
 	}
 }

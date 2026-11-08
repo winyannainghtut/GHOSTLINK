@@ -99,32 +99,66 @@ func (d *device) setAddress(prefix string) error {
 	return netlink.AddrReplace(link, want)
 }
 
-// setRoutes keeps exactly the wanted subnets routed into the mesh.
-func (d *device) setRoutes(routes []string) error {
+// setRoutes keeps exactly the wanted subnets routed into the mesh, except those it must leave
+// alone (see meshRoutes), which it returns. endpoints are the peers' WireGuard endpoints.
+func (d *device) setRoutes(routes []string, endpoints []netip.Addr) ([]string, error) {
 	link, err := d.link()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	current, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{LinkIndex: link.Attrs().Index}, netlink.RT_FILTER_OIF)
+	index := link.Attrs().Index
+	// The networks this machine is on, from its own addresses on other interfaces.
+	var connected []netip.Prefix
+	if list, err := netlink.AddrList(nil, netlink.FAMILY_V4); err == nil {
+		for _, a := range list {
+			if ip, ok := netip.AddrFromSlice(a.IP.To4()); ok && a.LinkIndex != index && a.IPNet != nil {
+				bits, _ := a.Mask.Size()
+				connected = append(connected, netip.PrefixFrom(ip, bits).Masked())
+			}
+		}
+	}
+	// Every route in the main table that is not one of the agent's own.
+	all, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{}, 0)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var routed []netip.Prefix
+	for _, r := range all {
+		if r.Dst == nil || (r.LinkIndex == index && r.Protocol == routeProtocol) {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(r.Dst.IP.To4()); ok {
+			bits, _ := r.Dst.Mask.Size()
+			routed = append(routed, netip.PrefixFrom(ip, bits).Masked())
+		}
+	}
+	keep, skip := meshRoutes(routes, connected, routed, endpoints)
+	current, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{LinkIndex: index}, netlink.RT_FILTER_OIF)
+	if err != nil {
+		return nil, err
 	}
 	for _, r := range current {
-		if r.Protocol == routeProtocol && r.Dst != nil && !slices.Contains(routes, r.Dst.String()) {
+		if r.Protocol == routeProtocol && r.Dst != nil && !slices.Contains(keep, r.Dst.String()) {
 			_ = netlink.RouteDel(&r)
 		}
 	}
-	for _, text := range routes {
+	for _, text := range keep {
 		_, dst, err := net.ParseCIDR(text)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		route := &netlink.Route{LinkIndex: link.Attrs().Index, Dst: dst, Protocol: routeProtocol, Scope: netlink.SCOPE_LINK}
+		route := &netlink.Route{LinkIndex: index, Dst: dst, Protocol: routeProtocol, Scope: netlink.SCOPE_LINK}
 		if err := netlink.RouteReplace(route); err != nil {
-			return fmt.Errorf("route %s: %w", text, err)
+			return nil, fmt.Errorf("route %s: %w", text, err)
 		}
 	}
-	return nil
+	return skip, nil
+}
+
+// gone reports that the interface was deleted under the running agent.
+func (d *device) gone() bool {
+	_, err := d.wg.Device(d.name)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func (d *device) close() {
