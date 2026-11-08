@@ -51,7 +51,9 @@ jobs:
           cargo build --locked --workspace
           cargo test --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
+      # bash on both systems: Windows' default PowerShell would only check the last command.
       - name: Process and provisioning tests
+        shell: bash
         run: |
           npm ci --ignore-scripts
           npm test
@@ -85,6 +87,7 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Formatting
+        shell: bash
         run: |
           cargo fmt --all --check
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
