@@ -11,7 +11,7 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
-- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by all of the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
+- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
 - **Moving from Outline:** take over an Outline server on the same machine, and its `ss://` keys keep working. See [Move from Outline](migrate-from-outline.md).
 - **Monitoring:**
   - live speed per user, open connections and who is online;
@@ -245,12 +245,12 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 
 ## Speed limits
 
-A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by all of the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s.
+A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s. IKEv2/IPsec sessions share a budget of their own, so a user with one device on IKEv2 and another on WireGuard can reach about twice the cap.
 
 - **Per user:** a speed (`user speed Alice 2MB` on the server, the client's Settings in the app or dashboard, `--speed-limit 2` in the CLI); **none**, meaning no limit even when there is a default; or **default**, which follows the server's default (the setting for new users).
 - **Default for everyone:** `set --speed-limit 5MB` (Server settings in the app or dashboard), or none.
 - **Live:** a change applies within a second to every open connection, without restarting the engine or disconnecting anyone.
-- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
+- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KiB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. While the user's TCP upload fills the cap, UDP still gets a share of it, so a large upload does not cut off a call. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
 - **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5GB` (optionally with `/s`); a bare number, or bits such as `Mbps`, is refused.
 
 ## Monitoring and privacy
