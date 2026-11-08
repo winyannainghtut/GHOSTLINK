@@ -6,7 +6,7 @@ If an Outline server (Jigsaw's `shadowbox`) runs on a Linux machine, Ghostlink c
 - each key keeps its password, port and cipher, so the `ss://` keys people already have **keep working**, with nothing to re-send;
 - Outline is stopped and stays off after a reboot, and its files are left as they were, as a backup.
 
-After the move you manage everything with Ghostlink: the app, the dashboard or `sudo ghostlink-server`. You can also give the same people AmneziaWG, WireGuard, VLESS-REALITY or IKEv2 keys, speed limits and traffic rules.
+After the move you manage everything with Ghostlink: the app, the dashboard or `sudo ghostlink-server`. You can also turn on AmneziaWG, WireGuard, VLESS-REALITY or IKEv2 and give the same people keys for them, plus speed limits and traffic rules.
 
 ## Check first
 
@@ -45,7 +45,7 @@ If Ghostlink is already installed, the same is done by `sudo ghostlink-server mi
 3. The import runs as **one change**. If it fails (for example, another program holds one of Outline's ports) or is interrupted (Ctrl+C, a lost SSH session) before it is saved, nothing changes in Ghostlink and Outline is put back as it was: each container gets its old restart policy, and those that were running start again. If the import was already saved when a later step failed (for example, its answer was lost), Ghostlink keeps the imported clients and Outline stays stopped; the message says so, and the installer still prints the management key and the ports.
 4. The copies are deleted. The installer then prints the management key and the ports to allow.
 
-Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Ghostlink's management API, VLESS, WireGuard and AmneziaWG ports are new: allow the ones the installer lists.
+Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Only the management API's port is new, because a new Ghostlink server runs only Shadowsocks: allow the one the installer lists for it. VLESS, WireGuard and AmneziaWG stay off. A port of one of them that Outline's keys use still moves to a free one, so that you can turn the protocol on later (for example `sudo ghostlink-server set --enable amneziawg`, or `--enable amneziawg` on the installer) and allow its port then.
 
 ## What moves, and what doesn't
 

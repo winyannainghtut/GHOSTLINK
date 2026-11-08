@@ -6,9 +6,9 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - commands on the server itself (`sudo ghostlink-server …`);
 - a web dashboard served by the server.
 
-- **Protocols:** AmneziaWG (2.0 obfuscation), WireGuard, VLESS with REALITY, and Outline-compatible Shadowsocks. Each can be turned off or moved to another port.
+- **Protocols:** Outline-compatible Shadowsocks, AmneziaWG (2.0 obfuscation), WireGuard and VLESS with REALITY. A new server runs only Shadowsocks: the others get their ports and keys when the server is created, and stay off until you turn them on. Each can be turned on or off, or moved to another port.
 - **iPhone, iPad and Mac with no app:** optional IKEv2 and IPsec for Apple's built-in VPN, delivered as configuration profiles (see [iPhone, iPad and Mac](#iphone-ipad-and-mac-built-in-vpn)).
-- **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
+- **Users and keys:** create users, then issue keys for each protocol that is on. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
 - **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 [`scripts/install-server.sh`](../../scripts/install-server.sh) does the following:
 - picks the right package for the distribution and CPU, and installs Docker if it is missing: the distribution's package on Debian, Ubuntu, Fedora and Amazon Linux; on RHEL, CentOS Stream, Rocky, AlmaLinux and Oracle Linux, `docker-ce` from Docker's own repository (`download.docker.com`), which it adds;
 - downloads the newest **published** release's package and checks it against that release's `SHA256SUMS.txt`, which protects against corrupted downloads, not against a compromised GitHub account;
-- installs it, then prints the management key and every port to allow.
+- installs it, then prints the management key and the ports to allow: the management API and each protocol that is on (a new server has only Shadowsocks on).
 
 Run it again to upgrade; users, keys and rules are kept.
 
@@ -52,6 +52,7 @@ Run it again to upgrade; users, keys and rules are kept.
 | `--package FILE` | Install a package you already have (offline) |
 | `--hostname HOST` | Set the address in keys |
 | `--ipsec` | Start the IKEv2/IPsec component and turn on IKEv2 |
+| `--enable PROTOCOL` | Also turn on `amneziawg`, `wireguard` or `vless` (repeat it for more than one). The installer then lists the protocol's port, and `--open-firewall` opens it. With `--migrate-outline --check` it is not applied |
 | `--mesh` | Turn on the [mesh](mesh.md), install the `ghostlink-mesh` agent and join this server as its relay (`--mesh-package FILE` for an offline agent package) |
 | `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
 | `--no-docker` | Never install Docker |
@@ -73,7 +74,7 @@ The installer:
 1. Starts Docker if it is installed as a systemd service.
 2. Creates the `ghostlink-server` system account and `/var/lib/ghostlink-server` (mode 0700, owned by that account).
 3. Loads the bundled image (`docker load`).
-4. On first install, creates the server: random ports, new keys for every protocol, a self-signed TLS certificate and a random 128-bit API secret. On an upgrade, it first stops the running server, which saves its usage and history.
+4. On first install, creates the server: random ports, new keys for every protocol (with only Shadowsocks turned on), a self-signed TLS certificate and a random 128-bit API secret. On an upgrade, it first stops the running server, which saves its usage and history.
 5. Starts the container, removes the images of older versions of the package and prints the management key:
 
 ```json
@@ -105,11 +106,14 @@ Then add users and keys:
 
 ```sh
 ghostlink server users add --server home --name Alice --data-limit-gb 50 --speed-limit 2   # 2 MB/s
+ghostlink server keys create --server home --user 1 --protocol shadowsocks --import alice-here   # also use it on this device
+ghostlink server set --server home --enable amneziawg --enable vless   # a new server runs only Shadowsocks
 ghostlink server keys create --server home --user 1 --protocol amneziawg --output alice-awg.txt
-ghostlink server keys create --server home --user 1 --protocol vless --import alice-here   # also use it on this device
 ghostlink server rules set --server home --block-site ads.example --block-bittorrent --block-smtp
 ghostlink server usage --server home
 ```
+
+A key for a protocol that is off is refused (the message says it is turned off), so turn the protocol on first. Turning one on tries its port, and a port another program already uses is refused. Allow the port in the firewall too: `sudo ghostlink-server set --enable` on the server prints it, and the app and the dashboard show every protocol's port under Network.
 
 In the app, **Servers I run → Manage** has the same actions. **Keys** shows a key's QR code, copies the key, saves a `.conf` (WireGuard and AmneziaWG) or an Apple profile to Downloads, saves a connection kit, or adds the key to this device with **Use on this device**.
 
@@ -122,7 +126,9 @@ sudo ghostlink-server users                          # users, usage and status
 sudo ghostlink-server user add Alice --limit 50GB    # also: user enable|disable|remove|reset|rename|limit|exempt
 sudo ghostlink-server user speed Alice 2MB           # speed limit, 2 MB/s; none or default
 sudo ghostlink-server set --speed-limit 5MB          # default for users without their own; none
-sudo ghostlink-server key add Alice amneziawg        # prints the key, the .conf and a QR code to scan
+sudo ghostlink-server key add Alice shadowsocks      # prints the key and a QR code to scan
+sudo ghostlink-server set --enable amneziawg         # turn on another protocol (wireguard, vless); prints the port to allow
+sudo ghostlink-server key add Alice amneziawg        # then: the key, the .conf and a QR code to scan
 sudo ghostlink-server keys Alice [--show]            # key text only with --show; key qr|remove NAME ID
 sudo ghostlink-server kit Alice --output alice.html  # one private page with all of Alice's keys, QR codes and app help
 sudo ghostlink-server rules set --block-site ads.example --block-bittorrent --block-smtp
@@ -159,9 +165,9 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
 - **The page** (since 0.7.0 the same frosted-glass views as the app's **Servers I run**):
   - **Navigation bar:** Overview, Clients and Network. A live capsule shows whether the server is live, who is online and the current speed. Opening it gives a switch for each protocol; pausing one disconnects its users until it is back on. Server settings sit on the right.
   - **Overview:** active tunnels, live throughput, server uptime and the address pool, then throughput for the last 60 seconds, hour or 24 hours. Below that: server health, today by client, traffic types, protocols and top services.
-  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, when the client was last seen, live speed, data used and the speed limit in force. A client is online while it sends something at least once a minute (see [Monitoring](#monitoring-and-privacy)). Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
-  - **New client:** a name, a protocol, an optional data limit and a speed limit (the server's default, none, or MB/s); the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
-  - **Network:** protocols (on/off and ports), the address pools, the rules for everyone and the [mesh](mesh.md) map.
+  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, when the client was last seen, live speed, data used and the speed limit in force. A client is online while it sends something at least once a minute (see [Monitoring](#monitoring-and-privacy)). Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create a key for any protocol that is on, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
+  - **New client:** a name, a protocol (Shadowsocks unless you pick another that is on), an optional data limit and a speed limit (the server's default, none, or MB/s); the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
+  - **Network:** protocols (on/off and ports; turning one on names the port to allow in the firewall), the address pools, the rules for everyone and the [mesh](mesh.md) map.
   - **Appearance:** Obsidian, Titanium or Daylight; background waves Subtle, Calm or Still. These are kept in the browser.
 
 ## iPhone, iPad and Mac (built-in VPN)
@@ -308,18 +314,18 @@ Every port is random on first install (10000–32000, all different) and shown b
 | IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
 | Mesh coordinator (when the mesh is on) | TCP, for mesh agents; VPN users cannot reach it. A host that is also a mesh node needs UDP 51820 too ([mesh ports](mesh.md#ports)) |
 
-Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities: moving a service to one is refused, as is a port another program uses.
+Open the ports of the services you use in the host firewall and any cloud security group. A protocol that is off keeps its port, so only the ports of the protocols that are on need to be open: a new server needs the management API and Shadowsocks. When you turn a protocol on, `sudo ghostlink-server set --enable` prints the port to allow. Turning one on tries its port first; if another program took it since, the change is refused (choose another with `set --port`). Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities: moving a service to one is refused, as is a port another program uses.
 
 ## Upgrade and remove
 
-- **Upgrade:** install the newer package. It loads the new images and recreates the containers, including the IPsec component if it was enabled. Users, keys, rules and the management key are kept.
+- **Upgrade:** install the newer package. It loads the new images and recreates the containers, including the IPsec component if it was enabled. Users, keys, rules, the management key and which protocols are on are kept: an existing server that has all four on keeps them on (to match a new server, turn off what you do not use with `sudo ghostlink-server set --disable amneziawg --disable wireguard --disable vless`; keys for a protocol that is off stop working).
 - **Remove:** `sudo apt remove ghostlink-server` stops and removes the container and image, and keeps `/var/lib/ghostlink-server`.
 - **Purge:** `sudo apt purge ghostlink-server` also deletes the state and the system account. On RPM systems, removal keeps the state; delete `/var/lib/ghostlink-server` yourself if you want it gone.
 
 ## How it is built
 
 - One Go program, `ghostlink-server` (GPL-3.0-or-later, from `core/outline-worker/cmd/ghostlink-server`), runs the management API and one unmodified sing-box 1.14.4 instance. Shadowsocks and VLESS are sing-box inbounds. WireGuard and AmneziaWG are both served by Ghostlink's `amneziawg` endpoint on unmodified amneziawg-go (zero obfuscation for plain WireGuard), on a userspace network stack. So every user's traffic, whatever the protocol, passes the same router and rules.
-- **Changes:** each change is applied to a copy of the state and saved only if it worked. A change to what the engine serves (protocols, ports, keys, rules, users) starts a new engine instance first, so a change the engine refuses leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own. Names, monitoring, speed limits and the dashboard change without a restart. A new port for a protocol or the dashboard is tried before the change is saved, also for a protocol without keys yet, so a port below 1024 or one another program uses is refused at once.
+- **Changes:** each change is applied to a copy of the state and saved only if it worked. A change to what the engine serves (protocols, ports, keys, rules, users) starts a new engine instance first, so a change the engine refuses leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own. Names, monitoring, speed limits and the dashboard change without a restart. A new port for a protocol or the dashboard is tried before the change is saved, also for a protocol without keys yet, and so is the port of a protocol being turned on, also one that is off, so a port below 1024 or one another program uses is refused at once. The dashboard or another protocol cannot take the port of a protocol that is off.
 - **Starting:** if the engine cannot start, usually because another program holds one of its ports, the management API, the dashboard and the server commands still start, so the port can be changed with `set --port`. The log says why, `GET /live` reports it as `health.engine_error`, and the engine is tried again every 30 seconds. `setup` (run on every upgrade) and the installer still finish and say the server is running, and `status`, the app and the dashboard don't show the error: if nobody can connect, check `sudo ghostlink-server logs`.
 - **Container:**
   - image: `gcr.io/distroless/static-debian12:nonroot`, pinned by digest, plus the static binary and its notices;
@@ -356,9 +362,9 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 
 | Method and path | Purpose |
 |---|---|
-| `GET` / `PATCH /server` | Name, hostname used in keys, VLESS-REALITY site, each protocol's `enabled` and `port` |
+| `GET` / `PATCH /server` | Name, hostname used in keys, VLESS-REALITY site, each protocol's `enabled` and `port` (only shadowsocks is on in a new server) |
 | `GET` / `POST /users`, `GET` / `PATCH` / `DELETE /users/{id}` | Users: `name`, `enabled`, `data_limit_bytes`, `speed_limit_bps`, `exempt_from_global_rules`, `rules`, `reset_usage` |
-| `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}`, or `{"protocol":"ikev2"\|"ipsec","auth":…}` with optional `server_address`, `remote_identifier`, `local_identifier` |
+| `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}`, or `{"protocol":"ikev2"\|"ipsec","auth":…}` with optional `server_address`, `remote_identifier`, `local_identifier`; `400` for a protocol that is off |
 | `GET` / `PUT /rules` | Rules for everyone: `blocked_domains`, `blocked_ips`, `blocked_ports`, `block_bittorrent`, `block_smtp` |
 | `GET /metrics` | Per-user and total bytes |
 | `GET /live` | Speeds, open connections, online users, the last 2 minutes of server rates, health |

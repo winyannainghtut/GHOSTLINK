@@ -135,7 +135,7 @@ The CLI talks to the same service as the app. Keys are read from a file or stdin
 | Status and diagnostics | `ghostlink status` · `info` · `doctor` · `logs --tail 100` |
 | Split tunneling | `ghostlink split set --mode bypass --site netflix.com --ip 192.168.1.0/24 --app steam.exe --lan-direct` · `split show` · `split clear` (add `--profile NAME` for one server) |
 | Start-up connection | `ghostlink autoconnect enable` / `disable` |
-| Manage your server | `ghostlink server add --name home --key-file key.json` · `server users add --server home --name Alice` · `server keys create --server home --user 1 --protocol amneziawg --import alice` · `server rules set --server home --block-site ads.example` · `server usage --server home` (`ghostlink server install-help` for setup) |
+| Manage your server | `ghostlink server add --name home --key-file key.json` · `server users add --server home --name Alice` · `server keys create --server home --user 1 --protocol shadowsocks --import alice` · `server rules set --server home --block-site ads.example` · `server usage --server home` (`ghostlink server install-help` for setup) |
 | Monitor and share | `ghostlink server live --server home` · `server stats --server home --user 1 --range 7d` · `server clients --server home` · `server keys qr --server home --user 1 --key 2` · `server keys kit --server home --user 1 --output alice.html` |
 
 Add `--json` for a versioned machine-readable envelope ([CLI contract](docs/development/cli-contract.md)). `connect` waits until the tunnel is verified; `--no-wait` returns immediately. Exit codes: 0 ok, 1 connection/internal failure, 2 invalid input, 3 permission denied, 4 service or engine unavailable, 5 timeout, 6 busy, 130 interrupted.
@@ -182,11 +182,11 @@ Details: [security model](docs/security/model.md) · [dependency scans](docs/sec
 
 ## Running your own server
 
-**The Ghostlink server** runs AmneziaWG, WireGuard, VLESS-REALITY and Shadowsocks in one hardened Docker container on Linux (x64 or arm64). Since v0.5.0 it can also run IKEv2/IPsec for Apple devices in an optional second container. The package carries both images, so nothing is downloaded from a registry:
+**The Ghostlink server** can run Shadowsocks (Outline-compatible), AmneziaWG, WireGuard and VLESS-REALITY in one hardened Docker container on Linux (x64 or arm64). A new server runs only Outline-compatible Shadowsocks: the other three have their ports and keys ready but stay off until you turn them on (their switch in the app or the dashboard, or `sudo ghostlink-server set --enable amneziawg`), which prints the port to allow in your firewall. A server you already run keeps the protocols it has on. Since v0.5.0 it can also run IKEv2/IPsec for Apple devices in an optional second container. The package carries both images, so nothing is downloaded from a registry:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash
-# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --ipsec (iPhone/iPad/Mac)  --mesh (mesh of servers)  --open-firewall  --add-swap  --help
+# options: --hostname YOUR_PUBLIC_IP_OR_NAME  --enable amneziawg|wireguard|vless  --ipsec (iPhone/iPad/Mac)  --mesh (mesh of servers)  --open-firewall  --add-swap  --help
 ```
 
 **Already running Outline?** Take it over on the same machine; its `ss://` keys keep working ([guide](docs/deployment/migrate-from-outline.md)):
@@ -202,7 +202,7 @@ The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64
 
 Paste the key into **Servers I run → Add server** (or `ghostlink server add`). You can also manage everything on the server itself (`sudo ghostlink-server users`, `key add`, `top`…) or in its web dashboard (`sudo ghostlink-server dashboard`). From there:
 - **Users:** add users, with optional data limits and speed limits (MB/s, or a default for everyone).
-- **Keys:** issue keys per protocol. You can copy them, share a `.conf` for WireGuard/AmneziaWG apps, or use one on this device.
+- **Keys:** issue keys for each protocol that is on. You can copy them, share a `.conf` for WireGuard/AmneziaWG apps, or use one on this device.
 - **Rules:** block sites, IPs, ports, BitTorrent or outgoing mail for everyone or for one user.
 - **Usage and monitoring:** see live speeds, who is online, data used, traffic types and, if you turn it on, each user's top services.
 - **Sharing:** show a key's QR code, or save a connection kit page for each person.
