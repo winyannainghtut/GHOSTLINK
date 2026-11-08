@@ -1,5 +1,7 @@
 # Architecture and implementation plan
 
+> This is the original OpenVPN-era plan, kept as a record. It was superseded as the main path the same day: Outline-compatible keys became the primary experience ([outline-access-keys.md](outline-access-keys.md)), carried since 2026-11-06 by the managed sing-box/amneziawg-go worker ([protocols.md](protocols.md)). OpenVPN remains an optional backend. The environment described at the end is the one of that day.
+
 2026-10-30. This is an incremental engineering project. A platform is complete only after the definition of done in the supplied brief is demonstrated. No mock backend is shipped.
 
 ## Inspected upstream
