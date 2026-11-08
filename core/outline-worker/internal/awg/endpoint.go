@@ -341,6 +341,13 @@ func (r userRouter) PreMatch(metadata adapter.InboundContext, firstPacket []byte
 }
 
 func (e *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
+	if e.isClient() {
+		// A client starts its own flows through DialContext and ListenPacket, and their replies
+		// reach those sockets directly. A flow that gets here was started on the far side of the
+		// tunnel. Routing it by this device's rules would let the server, or a peer the server
+		// forwards, reach this device's loopback and LAN, or use it as an exit, so drop it.
+		return tun.FlowVerdict{Action: tun.ActionDrop}
+	}
 	for _, localPrefix := range e.localAddresses {
 		if localPrefix.Contains(destination.Addr()) {
 			return tun.FlowVerdict{Action: tun.ActionAccept}

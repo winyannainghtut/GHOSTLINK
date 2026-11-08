@@ -135,8 +135,9 @@ func fetch(proxyPort uint16, target string) (string, error) {
 }
 
 // upstreamServer runs an unmodified amneziawg-go device on a userspace netstack, listening on
-// UDP and serving HTTP at 10.77.0.1 inside the tunnel.
-func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscation map[string]string) {
+// UDP and serving HTTP at 10.77.0.1 inside the tunnel. It returns the server's side of the
+// tunnel.
+func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscation map[string]string) *netstack.Net {
 	t.Helper()
 	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.77.0.1")}, nil, 1376)
 	if err != nil {
@@ -165,6 +166,7 @@ func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscati
 	go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "hello through amneziawg")
 	}))
+	return tnet
 }
 
 func obfuscationJSON(obfuscation map[string]string) string {
@@ -211,6 +213,32 @@ func TestClientInteroperatesWithUpstreamAmneziaWG(t *testing.T) {
 				t.Fatalf("no traffic through %s: body=%q err=%v", name, body, err)
 			}
 		})
+	}
+}
+
+// A client starts its own flows; one the far side of the tunnel starts must not be routed by the
+// client's rules. These rules send everything but the local proxy direct, as "only" mode does,
+// so a routed flow to the client's tunnel address would reach this device's loopback.
+func TestClientRefusesFlowsFromTheFarSide(t *testing.T) {
+	server, client := newKeyPair(t), newKeyPair(t)
+	serverPort, proxyPort := freePort(t, "udp"), freePort(t, "tcp")
+	far := upstreamServer(t, server, client, serverPort, legacyParameters)
+	startBox(t, fmt.Sprintf(`{
+	  "inbounds":[{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":%d}],
+	  "endpoints":[{"type":"amneziawg","tag":"awg","address":["10.77.0.2/32"],"private_key":%q,
+	    "peers":[{"address":"127.0.0.1","port":%d,"public_key":%q,"allowed_ips":["0.0.0.0/0"],"persistent_keepalive":"15"}]%s}],
+	  "outbounds":[{"type":"direct","tag":"direct"}],
+	  "route":{"rules":[{"inbound":["in"],"outbound":"awg"}],"final":"direct"}
+	}`, proxyPort, client.private, serverPort, server.public, obfuscationJSON(legacyParameters)))
+	if body, err := fetch(proxyPort, "http://10.77.0.1/"); err != nil || body != "hello through amneziawg" {
+		t.Fatalf("no traffic through the tunnel: body=%q err=%v", body, err)
+	}
+	webPort := localWeb(t, "client loopback")
+	intruder := &http.Client{Transport: &http.Transport{DialContext: far.DialContext, DisableKeepAlives: true}, Timeout: 2 * time.Second}
+	if response, err := intruder.Get(fmt.Sprintf("http://10.77.0.2:%d/", webPort)); err == nil {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("the far side of the tunnel reached the client's loopback: %q", body)
 	}
 }
 
