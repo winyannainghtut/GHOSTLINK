@@ -2,17 +2,19 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
-## Second full review and a report from a running server (2026-11-08, pull request #3, not in the 0.8.0 packages)
+## v0.8.1 Second full review and a report from a running server (2026-11-08, pull request #3)
 
-Every subsystem was read in full, reviewed again for new defects, checked by a skeptical verifier, fixed area by area in separate worktrees with tests, and merged. What changed is in the CHANGELOG under [Unreleased].
+Every subsystem was read in full, reviewed again for new defects, checked by a skeptical verifier, fixed area by area in separate worktrees with tests, and merged. What changed is in the CHANGELOG under [0.8.1].
+
+Before the release, five reviewers checked every claim of the CHANGELOG section against the code on `main` and v0.8.0, and a skeptic re-checked each finding: all 27 findings held and were corrected (overstated fixes, missing caveats, two items about code that never shipped). `govulncheck` v1.9.0 found no vulnerabilities (Go 1.26.10).
 
 | Check | Result actually observed |
 |---|---|
-| UDP reply crash (real binaries, Windows) | One Shadowsocks UDP exchange (an NTP request through the server) against a `main` build before this round (`7a0c560`) crashed the server for capped and uncapped clients: `panic: buffer overflow: capacity 16384, start 0, need 55` in the Shadowsocks UDP writer. The released v0.8.0 answered. The fixed build answered and stayed up. `TestUDPRepliesKeepTheWritersHeadroom` and `TestShadowsocksUDPThroughTheServer` fail with the same panic without the fix |
+| UDP reply crash (real binaries, Windows) | One Shadowsocks UDP exchange (an NTP request through the server) against a `main` build before this round (`56ae4a7`) crashed the server for capped and uncapped clients: `panic: buffer overflow: capacity 16384, start 0, need 55` in the Shadowsocks UDP writer. The released v0.8.0 answered. The fixed build answered and stayed up. `TestUDPRepliesKeepTheWritersHeadroom` and `TestShadowsocksUDPThroughTheServer` fail with the same panic without the fix |
 | Online and idle (Go) | `TestOnlineFollowsWhatTheClientSends`: an open connection and a small write to the client do not count, an upload or a 16 KB download in a second does; online means seen within 60 s. `TestPeersSeenThroughTheirReceiveCounter`: a keepalive counts, an unchanged, new or reset counter does not, a handshake counts at its own time. `TestMonitoringEndToEnd` reads a real WireGuard client's receive counter |
 | Dashboard (WebView2 DevTools, isolated profile and endpoint, local server, real Shadowsocks traffic from Cloudflare's speed endpoint, Daylight) | The Island read `↓ 983 KB/s ↑ 0 B/s` during a capped 1 MB/s download; the off switches of IKEv2 and IPsec had the track `rgba(120, 120, 128, 0.24)`; the list said "Last seen". With one idle TCP connection held open through Shadowsocks (to an SSH server, which waits for the client), the client showed `active: 1, online: false` and **Idle** 70 s after its last traffic; a client that never connected showed Idle; no page errors |
 | UDP rules per packet (Go, `guard_test.go`) | Over Shadowsocks, VLESS and WireGuard, 5 of 5 later packets reached a blocked loopback port without the check and none with it |
-| TCP and UDP under one cap (Go) | `TestPacerSharesTheCapBetweenTCPAndUDP`: 0 of 146 UDP packets passed while TCP filled the cap before the fix, 80 % or more after |
+| TCP and UDP under one cap (Go) | `TestPacerSharesTheCapBetweenTCPAndUDP`: 0 of 146 UDP packets passed while TCP filled the cap before the fix (in the unreleased code of pull request #2), 80 % or more after |
 | IKEv2/IPsec (Go) | 14 new tests in `ipsec_review_test.go`: identities for any user name, a refused key left out without blocking the others, renames and pinning, no double counting after a restart or an ended session, settings written only when they change and one at a time, the profile identifier, certificate renewal at start and after a hostname change. Each fix was reverted in turn and its test failed |
 | WireGuard and AmneziaWG endpoints (Go, `internal/awg`) | One client UDP socket: an allowed port answered, a blocked port stayed silent, a further allowed port answered (before the fix the blocked port answered). The far side dialing an AmneziaWG client's tunnel address was dropped (before: it reached a loopback web server). Validate-only engines and start/close cycles left no goroutines (before: 160 and 5) |
 | Mesh (Go) | Coordinator, protocol, agent and firewall-helper tests pass, including consent, firewall order, routes, pacing of waiting nodes and the long-poll on disable |
@@ -29,9 +31,9 @@ Every subsystem was read in full, reviewed again for new defects, checked by a s
 - `dnf upgrade` of the client and mesh `.rpm` on Fedora/RHEL, and an MSI upgrade with a new `GHOSTLINK_OWNER_SID` (both were checked only by tests of the scripts and logic).
 - The host addresses that the server blocks, read from `net.InterfaceAddrs` inside the container on a real host; the mesh across real cloud servers; the race detector (no cgo toolchain on the development machine).
 
-## Review of v0.8.0 after its release (2026-11-08, on `main`, not in the 0.8.0 packages)
+## v0.8.1 Review of v0.8.0 after its release (2026-11-08, pull request #2)
 
-Two independent reviews (Go server code; scripts, CI and docs) were checked against the source before fixing. What was fixed is listed in the CHANGELOG under [Unreleased].
+Two independent reviews (Go server code; scripts, CI and docs) were checked against the source before fixing. What was fixed is listed in the CHANGELOG under [0.8.1].
 
 | Check | Result actually observed |
 |---|---|
@@ -296,7 +298,7 @@ Observed on the Windows development host (unelevated, loopback only) unless note
 | Daemon/CLI with a **real** `ghostlink-server` (Node suite) | `server add` with the printed key, no overwrite without `--replace`, and list output with neither the secret nor the pin (nor in Windows state). Then: user with a 5 GB limit; an AmneziaWG key created with `--import` became a working profile via the Rust parser; VLESS and WireGuard keys written to new private files (`.conf` imported as `wireguard`), with no overwrite; a printed `ss://` key imported. `keys list` hid key material unless `--show-keys`. Global and per-user rules, usage, disabling WireGuard (key creation then refused) and disabling a user worked. A wrong pin gave `server_identity_mismatch`; `http`, missing-pin and extra-field keys gave `invalid_request` without echoing the secret. Agent tokens were refused for all server actions; the audit log never contained the secret; a stopped server gave `server_unreachable` |
 | Pinned client (Rust unit) | With a wrong pin, the TLS server received **zero** application bytes (the secret path was never sent). Outline servers were recognized and refused as unsupported; server error text came back without the key; operations map to fixed paths, with path-traversal IDs and unknown protocols refused |
 | Desktop GUI | Debug app against an isolated dev daemon and a real local server, driven over the WebView2 DevTools protocol. Inspected: server list; server page (users with status chips, limit meter, rules summary, ports); keys dialog; per-user rules; server settings; creating a WireGuard key with "Also use it on this device", which then appeared under My servers as "Alice @ Home lab" with its badge; dark and light themes |
-| AmneziaWG close race (Linux CI of v0.2.1, `596633b`→`5ea1347`) | Hosted CI crashed an AWG 2.0 client worker during graceful stop: nil dereference in sing-box's stack `Write`, called from amneziawg-go's receive goroutine after the TUN closed. Fixed in the TUN adapter; a regression test passes with the fix and panics ("write after close") without it |
+| AmneziaWG close race (Linux CI of v0.2.1, `cbc567f`→`02a9d06`) | Hosted CI crashed an AWG 2.0 client worker during graceful stop: nil dereference in sing-box's stack `Write`, called from amneziawg-go's receive goroutine after the TUN closed. Fixed in the TUN adapter; a regression test passes with the fix and panics ("write after close") without it |
 | Corresponding source | The v0.2.1 zip was rebuilt from the `v0.2.1` tag with the fixed script: it built every command on Windows inside the script and `ghostlink-tunnel` for linux/amd64 from the unzipped copy, reporting `0.2.1`, with 0 backslash paths. It replaced the incomplete zip in the v0.2.1 draft, and `SHA256SUMS.txt` was refreshed |
 | Static checks | Rust fmt and clippy (`-D warnings`) clean; 33 Rust unit tests (29 engine, 4 contracts) and 19 Node process tests passed; Go vet clean; Go tests passed; `govulncheck` **No vulnerabilities found**; server cross-builds for linux/amd64 and arm64 |
 | Package spec (local) | nfpm built placeholder server `.deb`/`.rpm`; the `.deb` control has `Depends: docker.io \| docker-ce \| moby-engine \| docker-engine \| podman-docker, passwd`, the three maintainer scripts and a `0755` `/usr/sbin/ghostlink-server` |
@@ -306,7 +308,7 @@ Observed on the Windows development host (unelevated, loopback only) unless note
 
 | Check | Result actually observed |
 |---|---|
-| Linux SIGPIPE fix in CI | The full CI run after the fix (`596633b`) passed on Ubuntu 24.04 and Windows 2022, including all real-engine protocol and split-tunnel tests |
+| Linux SIGPIPE fix in CI | The full CI run after the fix (`cbc567f`) passed on Ubuntu 24.04 and Windows 2022, including all real-engine protocol and split-tunnel tests |
 | Package spec (local) | nfpm 2.48.0 built a `.deb` and an `.rpm` from the template with placeholder binaries. The `.deb` control has `Depends: libc6 (>= 2.35), libssl3 \| libssl3t64`, a conffile for `/etc/ghostlink/ghostlinkd.env`, postinst/prerm/postrm, root-owned `0755` binaries in `/usr/bin` and `/usr/lib/ghostlink`, and the unit with `/usr` paths and `$GHOSTLINK_FLAGS` |
 | Checksum refresh for arm64 files | The idempotent update was exercised locally twice: a stale line was replaced, with no duplicates |
 | Release CI (run 42175275443) | On Ubuntu 22.04 x64 and arm64 the `.deb` installed as a real systemd service: the installer set owner UID 1001 from `sudo`, `ghostlinkd` was `active`, and `ghostlink status`/`doctor` answered as that user. Purge removed it. The `.rpm` passed `rpm -qip/-qlp/--scripts`. The draft had all 10 files. A cosmetic dpkg warning about `/usr/lib/systemd/system` was fixed in v0.3.0 |
