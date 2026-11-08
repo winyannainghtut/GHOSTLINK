@@ -13,7 +13,7 @@ import { WaveBackground } from '@shared/WaveBackground';
 import { FinishPicker, Mark, MotionButton, useAppearance, type Appearance } from '@shared/appearance';
 import { Button, Card, IconButton, Segmented, UIProvider } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
-import { signIn, signOut } from './session';
+import { loginToken, signIn, signOut } from './session';
 
 const VIEWS = ['overview', 'clients', 'network'] as const;
 type View = (typeof VIEWS)[number];
@@ -25,15 +25,30 @@ export function App() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    signIn().then(result => {
-      if (result.server) {
-        setServer(result.server);
-        setPhase('ready');
-      } else {
-        setMessage(result.error);
-        setPhase('signin');
-      }
-    });
+    // Only the newest sign-in may set the page, if a second one starts while the first runs.
+    let attempt = 0;
+    const start = () => {
+      const mine = ++attempt;
+      setPhase('loading');
+      signIn().then(result => {
+        if (mine !== attempt) return;
+        if (result.server) {
+          setServer(result.server);
+          setPhase('ready');
+        } else {
+          setMessage(result.error);
+          setPhase('signin');
+        }
+      });
+    };
+    start();
+    // Opening the login link again in this tab changes only the part after #, which does not
+    // reload the page: sign in with the new token here.
+    const again = () => {
+      if (loginToken()) start();
+    };
+    window.addEventListener('hashchange', again);
+    return () => window.removeEventListener('hashchange', again);
   }, []);
 
   return (

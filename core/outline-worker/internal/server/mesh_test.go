@@ -140,8 +140,14 @@ func TestMeshCoordinator(t *testing.T) {
 
 	var created inviteCreated
 	server.must(t, http.StatusCreated, "POST", "/mesh/invites", map[string]any{"tags": []string{"web"}, "local": true}, &created)
-	if !strings.HasPrefix(created.Command, "curl -fsSL "+MeshScript+" | sudo bash -s -- --join 'glmesh1:") {
+	if !strings.HasPrefix(created.Command, "curl -fsSL "+MeshScript+" | sudo bash -s -- --join 'glmesh1:") || strings.Contains(created.Command, "--relay") {
 		t.Fatalf("join command: %s", created.Command)
+	}
+	// A relay invite's command gives the server's consent to forwarding.
+	var relayInvite inviteCreated
+	server.must(t, http.StatusCreated, "POST", "/mesh/invites", map[string]any{"relay": true}, &relayInvite)
+	if !strings.HasSuffix(relayInvite.Command, "' --relay") {
+		t.Fatalf("relay join command: %s", relayInvite.Command)
 	}
 	inv, _ := meshproto.DecodeInvite(created.Invite)
 	pin := ""
@@ -225,9 +231,91 @@ func TestMeshCoordinator(t *testing.T) {
 	if after, _, _ := web.sync(0, "10.20.0.0/24"); len(after.Config.Peers) != 0 {
 		t.Fatal("the removed node is still a peer")
 	}
-	// Turning the mesh off stops the agent API and tells nodes.
+	// Turning the mesh off answers the waiting syncs with "disabled" before the port closes, so
+	// their nodes take their links down; then the agent API stops.
+	current, _, _ := web.sync(0, "10.20.0.0/24")
+	told := make(chan string, 1)
+	go func() {
+		data, _ := json.Marshal(meshproto.SyncRequest{Protocol: meshproto.Version, Version: "test", Applied: current.Config.Generation,
+			ListenPort: 51820, Endpoints: []string{"203.0.113.9:51820"}, AdvertiseRoutes: []string{"10.20.0.0/24"}, Peers: []meshproto.PeerStatus{}})
+		request, _ := http.NewRequest(http.MethodPost, web.url+"/v1/sync", bytes.NewReader(data))
+		request.Header.Set("Authorization", "Bearer "+web.secret)
+		response, err := web.client.Do(request)
+		if err != nil {
+			told <- "no answer (" + err.Error() + ")"
+			return
+		}
+		defer response.Body.Close()
+		var out meshproto.SyncResponse
+		_ = json.NewDecoder(response.Body).Decode(&out)
+		told <- out.Status
+	}()
+	time.Sleep(300 * time.Millisecond)
 	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": false}, nil)
+	if status := <-told; status != meshproto.StatusDisabled {
+		t.Fatalf("a waiting node was told %q when the mesh was turned off", status)
+	}
 	if _, err := web.client.Get(web.url + "/v1/sync"); err == nil {
 		t.Fatal("the mesh port still answers after turning the mesh off")
+	}
+}
+
+// A node waiting for approval waits for a change like an up-to-date node (answering it at once
+// made it ask again at once, over and over), and hears at once when it is approved.
+func TestMeshWaitingNodeLongPolls(t *testing.T) {
+	previousWait := meshWait
+	meshWait = 1500 * time.Millisecond
+	defer func() { meshWait = previousWait }()
+	server := newTestServer(t, nil)
+	meshServer := NewMeshServer(server.service)
+	server.service.OnChange(func(previous, next *State) {
+		if err := meshServer.Apply(); err != nil {
+			t.Errorf("mesh apply: %v", err)
+		}
+	})
+	t.Cleanup(meshServer.Close)
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": true}, nil)
+	var created inviteCreated
+	server.must(t, http.StatusCreated, "POST", "/mesh/invites", map[string]any{"approval": true, "local": true}, &created)
+	inv, _ := meshproto.DecodeInvite(created.Invite)
+	agent := newMeshAgent(t, created.Invite)
+	if joined := agent.join(inv.Token, "waiting-1"); joined.Status != meshproto.StatusPending {
+		t.Fatalf("join: %+v", joined)
+	}
+	if out, _, took := agent.sync(0); out.Status != meshproto.StatusPending || took < meshWait-200*time.Millisecond {
+		t.Fatalf("a waiting node was answered after %v: %+v", took, out)
+	}
+	type answer struct {
+		out  meshproto.SyncResponse
+		took time.Duration
+	}
+	woke := make(chan answer, 1)
+	go func() {
+		out, _, took := agent.sync(0)
+		woke <- answer{out, took}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	var topology mesh.Topology
+	server.must(t, http.StatusOK, "GET", "/mesh/topology", nil, &topology)
+	server.must(t, http.StatusOK, "PATCH", "/mesh/nodes/"+topology.Nodes[0].ID, map[string]any{"status": "active"}, nil)
+	if got := <-woke; got.out.Status != meshproto.StatusActive || got.out.Config == nil || got.took > meshWait-300*time.Millisecond {
+		t.Fatalf("approval reached the waiting node after %v: %+v", got.took, got.out)
+	}
+}
+
+// Choosing another network does not turn a mesh that is off back on.
+func TestMeshNetworkChangeKeepsItOff(t *testing.T) {
+	server := newTestServer(t, nil)
+	var info meshInfo
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": true}, nil)
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": false}, nil)
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"cidr": "10.77.0.0/16"}, &info)
+	if info.Enabled || info.CIDR != "10.77.0.0/16" {
+		t.Fatalf("new network on a mesh that is off: %+v", info)
+	}
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": true}, nil)
+	server.must(t, http.StatusOK, "PATCH", "/mesh", map[string]any{"enabled": false, "cidr": "10.78.0.0/16"}, &info)
+	if info.Enabled || info.CIDR != "10.78.0.0/16" {
+		t.Fatalf("turned off with a new network: %+v", info)
 	}
 }

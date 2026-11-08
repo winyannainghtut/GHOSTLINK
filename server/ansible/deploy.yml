@@ -75,6 +75,8 @@
         dest: /etc/systemd/system/ghostlink-nat.service
         mode: '0644'
       register: nat_unit
+      # A started oneshot unit keeps the commands it ran until it is restarted.
+      notify: Restart VPN NAT
     - name: Start NAT unit
       ansible.builtin.systemd:
         name: ghostlink-nat
@@ -91,6 +93,10 @@
       ansible.builtin.systemd:
         name: ghostlink-nat
         state: reloaded
+    - name: Restart VPN NAT
+      ansible.builtin.systemd:
+        name: ghostlink-nat
+        state: restarted
     - name: Restart VPN
       ansible.builtin.systemd:
         name: openvpn-server@ghostlink

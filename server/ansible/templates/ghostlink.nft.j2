@@ -1,5 +1,14 @@
 # Only this dedicated table is replaced. Never flush the host ruleset.
+# Adding, deleting and adding the table again in one file replaces it in one transaction,
+# so a reload also applies changed chain definitions.
 add table ip ghostlink_nat
-flush table ip ghostlink_nat
+delete table ip ghostlink_nat
+add table ip ghostlink_nat
 add chain ip ghostlink_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }
 add rule ip ghostlink_nat postrouting ip saddr 10.8.0.0/24 oifname "{{ ghostlink_public_interface }}" masquerade
+# VPN clients reach the internet, but not each other (the server has no client-to-client),
+# private networks or cloud metadata. Ports the host forwards on purpose (DNAT) stay reachable.
+# This chain only drops: it cannot open forwarding that a host firewall (ufw, Docker) blocks.
+add chain ip ghostlink_nat forward { type filter hook forward priority filter; policy accept; }
+add rule ip ghostlink_nat forward ip saddr 10.8.0.0/24 ct status dnat accept
+add rule ip ghostlink_nat forward ip saddr 10.8.0.0/24 ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3 } drop

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -22,6 +23,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/vless"
 	boxjson "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
 
 	"ghostlink.local/outline-worker/internal/awg"
 )
@@ -69,13 +71,33 @@ type Engine struct {
 	mu       sync.Mutex
 	box      *box.Box
 	lastGood []byte
-	monitor  *Monitor
-	logLevel string
-	reloads  atomic.Int64
+	// lastGuard is the UDP guard built from the same state as lastGood.
+	lastGuard *udpGuard
+	monitor   *Monitor
+	logLevel  string
+	reloads   atomic.Int64
 }
 
 func NewEngine(monitor *Monitor, logLevel string) *Engine {
 	return &Engine{monitor: monitor, logLevel: logLevel}
+}
+
+// engineTracker is what one engine instance reports its connections to: the Monitor, which
+// outlives reloads, with the UDP guard built from the same state as the instance.
+type engineTracker struct {
+	*Monitor
+	guard *udpGuard
+}
+
+func (t *engineTracker) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+	return t.Monitor.routedPacketConnection(conn, metadata, t.guard)
+}
+
+// Running reports whether an instance runs, and the configuration it runs.
+func (e *Engine) Running() (bool, []byte) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.box != nil, e.lastGood
 }
 
 // PeerStatus reports WireGuard/AmneziaWG peers, keyed by protocol and then public key.
@@ -104,12 +126,12 @@ func (e *Engine) PeerStatus() map[string]map[string]awg.PeerStatus {
 // Reloads counts successful engine (re)starts.
 func (e *Engine) Reloads() int64 { return e.reloads.Load() }
 
-func (e *Engine) start(config []byte) (*box.Box, error) {
+func (e *Engine) start(config []byte, guard *udpGuard) (*box.Box, error) {
 	instance, err := newBox(config)
 	if err != nil {
 		return nil, err
 	}
-	instance.Router().AppendTracker(e.monitor)
+	instance.Router().AppendTracker(&engineTracker{Monitor: e.monitor, guard: guard})
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		return nil, err
@@ -124,6 +146,7 @@ func (e *Engine) Apply(state *State) error {
 	if err != nil {
 		return err
 	}
+	guard := newUDPGuard(state)
 	// Validate fully before touching the running instance.
 	if candidate, err := newBox(config); err != nil {
 		return err
@@ -136,10 +159,10 @@ func (e *Engine) Apply(state *State) error {
 		e.box.Close()
 		e.box = nil
 	}
-	instance, err := e.start(config)
+	instance, err := e.start(config, guard)
 	if err != nil {
 		if e.lastGood != nil {
-			if previous, restoreErr := e.start(e.lastGood); restoreErr == nil {
+			if previous, restoreErr := e.start(e.lastGood, e.lastGuard); restoreErr == nil {
 				e.box = previous
 			} else {
 				err = errors.Join(err, restoreErr)
@@ -147,7 +170,7 @@ func (e *Engine) Apply(state *State) error {
 		}
 		return err
 	}
-	e.box, e.lastGood = instance, config
+	e.box, e.lastGood, e.lastGuard = instance, config, guard
 	e.reloads.Add(1)
 	return nil
 }

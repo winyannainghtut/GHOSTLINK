@@ -22,6 +22,8 @@ type Health struct {
 	EngineReloads int64    `json:"engine_reloads"`
 	DetailPaused  bool     `json:"detail_paused"`
 	HistoryBytes  int      `json:"history_bytes"`
+	// EngineError is why the VPN engine is not running (it is tried again every 30 s).
+	EngineError string `json:"engine_error,omitempty"`
 }
 
 // healthSampler keeps the previous CPU and network readings to turn counters into rates.

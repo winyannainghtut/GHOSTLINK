@@ -12,7 +12,7 @@ The scan found and fixed vulnerable locked dependencies before producing the fin
 - v0.5.0 adds `github.com/strongswan/govici` 0.8.2 (MIT, strongSwan vici client) and `software.sslmate.com/src/go-pkcs12` 0.7.4 (BSD-3-Clause) to the server and the new IPsec agent; `github.com/sagernet/netlink` (Apache-2.0) was already in the module graph. `govulncheck` over the whole module, and over the Linux server and agent (`GOOS=linux`): **No vulnerabilities found**. The IPsec image's Alpine 3.24 packages (strongSwan 6.0.7, iptables 1.8.13, libnftnl, libmnl, libcap, OpenSSL 3.5, musl) are pinned by the base image digest and listed with versions in the image; they are not covered by govulncheck. Rebuild the image when Alpine publishes security updates.
 - v0.4.0 adds `rsc.io/qr` 0.2.0 (BSD-3-Clause, pure Go QR encoder) to the server. `github.com/makiuchi-d/gozxing` 0.1.1 (Apache-2.0) is a **test-only** QR decoder and is not compiled into any shipped binary. `govulncheck` over the whole module: **No vulnerabilities found**.
 - `npm audit`: **zero known vulnerabilities** in the verification tooling dependency tree.
-- `python scripts/audit-lockfiles.py`: queries OSV for **472** unique registry package versions in both Cargo locks, including non-Windows targets. Initially found eight OpenSSL advisory IDs; updated the root lock from `openssl` 0.10.75 / `openssl-sys` 0.9.111 to 0.10.82 / 0.9.118. Rescan removed those findings.
+- `python scripts/audit-lockfiles.py`: queries OSV for every unique registry package version in both Cargo locks, including non-Windows targets: **472** at this first scan, 501 since v0.3.0. Initially found eight OpenSSL advisory IDs; updated the root lock from `openssl` 0.10.75 / `openssl-sys` 0.9.111 to 0.10.82 / 0.9.118. Rescan removed those findings.
 
 The Rust scan still returns three IDs covering two dependencies in the Linux desktop dependency chain:
 
@@ -23,7 +23,7 @@ The Rust scan still returns three IDs covering two dependencies in the Linux des
 
 These GTK dependencies are not compiled into the Windows application. The all-target Rust scan intentionally returns nonzero while the findings remain; there is no hidden ignore list. It checks lockfile version matches, not call reachability, system OpenSSL, drivers, WebView2 Runtime, external OpenVPN or the separately obtained local test peer. Keep those system components patched and review each target before distribution.
 
-Local scan reports are under ignored `artifacts/rust-vulnerability-scan.json` and `artifacts/go-vulnerability-scan.txt`. Commands:
+`audit-lockfiles.py` writes its report to the ignored `artifacts/rust-vulnerability-scan.json`. `govulncheck` only prints its report; to keep one, redirect it, for example to `artifacts/go-vulnerability-scan.txt`. Commands:
 
 ```powershell
 python scripts/audit-lockfiles.py

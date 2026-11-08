@@ -39,21 +39,31 @@ type InitOptions struct {
 	PortFree func(network string, port uint16) bool
 }
 
+// portFree reports whether a port can be bound where the server will listen. In production
+// that is every address, so it tries the dual-stack wildcard and the IPv4 one: Windows reserves
+// port ranges per IP version, so a port free on [::] can still be refused on 0.0.0.0 or
+// 127.0.0.1. Tests listen on loopback only, so they check just that address, which also keeps
+// Windows Defender Firewall from asking about every freshly built test binary.
 func portFree(network string, port uint16) bool {
-	address := fmt.Sprintf(":%d", port)
-	switch network {
-	case "tcp":
-		listener, err := net.Listen("tcp", address)
-		if err != nil {
-			return false
+	addresses := []string{fmt.Sprintf(":%d", port), fmt.Sprintf("0.0.0.0:%d", port)}
+	if ip := net.ParseIP(listenAddress); ip != nil && ip.IsLoopback() {
+		addresses = []string{net.JoinHostPort(listenAddress, fmt.Sprint(port))}
+	}
+	for _, address := range addresses {
+		switch network {
+		case "tcp":
+			listener, err := net.Listen("tcp", address)
+			if err != nil {
+				return false
+			}
+			listener.Close()
+		case "udp":
+			conn, err := net.ListenPacket("udp", address)
+			if err != nil {
+				return false
+			}
+			conn.Close()
 		}
-		listener.Close()
-	case "udp":
-		conn, err := net.ListenPacket("udp", address)
-		if err != nil {
-			return false
-		}
-		conn.Close()
 	}
 	return true
 }
@@ -204,11 +214,24 @@ func Initialize(dir string, options InitOptions) (*Store, bool, error) {
 				return nil, false, err
 			}
 		}
+		// Apple keys keep the identity they were created with, even if their user is renamed.
+		if store.State.pinIdentities(time.Now()) {
+			if err := store.Save(); err != nil {
+				return nil, false, err
+			}
+		}
 		if host := strings.TrimSpace(options.Hostname); host != "" && host != store.State.Hostname {
 			if err := ValidHostname(host); err != nil {
 				return nil, false, err
 			}
 			store.State.Hostname = host
+			// IKEv2/IPsec profiles name the new address, so the server certificate must too
+			// (as when the address is changed through the API).
+			if store.State.IPsec.CAPEM != "" {
+				if err := store.State.ensureIPsecPKI(time.Now(), free); err != nil {
+					return nil, false, err
+				}
+			}
 			if err := store.Save(); err != nil {
 				return nil, false, err
 			}

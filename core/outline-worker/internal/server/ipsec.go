@@ -29,18 +29,51 @@ var errIPsecNotRunning = errors.New("start the IPsec component first: sudo ghost
 
 func (s *State) appleEnabled() bool { return s.IPsec.IKEv2Enabled || s.IPsec.IPsecEnabled }
 
+// agentIdentity is the key's identity, if the agent will accept it. The agent refuses a whole
+// file for one identity it does not like, and then no user's change would arrive any more, so a
+// key with such an identity (only a hand-edited state has one) is left out: it cannot connect.
+func (k *Key) agentIdentity(user *User) (string, bool) {
+	identity := k.localIdentity(user)
+	return identity, k.isApple() && ipsecproto.ValidIdentity(identity)
+}
+
 // IPsecDesired builds the agent's configuration: identities of active users only, NT hashes for
 // EAP, and the firewall the pools are held to.
 func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
+	return s.signIPsec(s.ipsecSettings(now), now)
+}
+
+// signIPsec adds the CRL, which is signed with the CA key (the slow part), and validates.
+func (s *State) signIPsec(desired ipsecproto.Desired, now time.Time) (ipsecproto.Desired, error) {
+	if desired.CA != "" {
+		crl, err := s.CRL(now)
+		if err != nil {
+			return desired, err
+		}
+		desired.CRL = crl
+	}
+	return desired, desired.Validate()
+}
+
+// ipsecFingerprint identifies what the agent would be told, leaving out what changes with every
+// write: the generation, and the CRL's dates and signature (the CRL's entries are included).
+func (s *State) ipsecFingerprint(desired ipsecproto.Desired) string {
+	desired.Generation, desired.CRL = 0, ""
+	data, _ := json.Marshal(desired)
+	var holds strings.Builder
+	for _, e := range s.crlEntries(time.Time{}) {
+		fmt.Fprintf(&holds, "%s/%d,", e.SerialNumber, e.ReasonCode)
+	}
+	return string(data) + "|" + holds.String()
+}
+
+// ipsecSettings is IPsecDesired without the CRL.
+func (s *State) ipsecSettings(now time.Time) ipsecproto.Desired {
 	desired := ipsecproto.Desired{Version: ipsecproto.Version, Generation: now.UnixNano(), Allowed: []string{}}
 	if !s.appleEnabled() || s.IPsec.CAPEM == "" {
-		return desired, nil
+		return desired
 	}
-	crl, err := s.CRL(now)
-	if err != nil {
-		return desired, err
-	}
-	desired.CA, desired.Server, desired.ServerKey, desired.CRL = s.IPsec.CAPEM, s.IPsec.ServerPEM, s.IPsec.ServerKeyPEM, crl
+	desired.CA, desired.Server, desired.ServerKey = s.IPsec.CAPEM, s.IPsec.ServerPEM, s.IPsec.ServerKeyPEM
 	desired.ServerID = s.serverIdentity()
 	if s.IPsec.IKEv2Enabled {
 		desired.IKEv2 = &ipsecproto.IKEv2{Pool: ikev2Pool, Gateway: ikev2Gateway, EAP: []ipsecproto.NTLMSecret{}}
@@ -50,7 +83,10 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 	}
 	for _, u := range s.activeUsers() {
 		for _, k := range u.Keys {
-			identity := k.localIdentity(u)
+			identity, ok := k.agentIdentity(u)
+			if !ok {
+				continue
+			}
 			switch {
 			case k.Protocol == IKEv2 && desired.IKEv2 != nil:
 				desired.Allowed = append(desired.Allowed, identity)
@@ -78,8 +114,8 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 		}
 		limit := ipsecproto.SpeedLimit{Name: u.Tag(), BytesPerSecond: bps}
 		for _, k := range u.Keys {
-			if (k.Protocol == IKEv2 && desired.IKEv2 != nil) || (k.Protocol == IPsec && desired.IKEv1 != nil) {
-				limit.Identities = append(limit.Identities, k.localIdentity(u))
+			if identity, ok := k.agentIdentity(u); ok && ((k.Protocol == IKEv2 && desired.IKEv2 != nil) || (k.Protocol == IPsec && desired.IKEv1 != nil)) {
+				limit.Identities = append(limit.Identities, identity)
 			}
 		}
 		if len(limit.Identities) > 0 {
@@ -97,17 +133,36 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 		firewall.Blocked = []string{}
 	}
 	desired.Firewall = firewall
-	return desired, desired.Validate()
+	return desired
 }
 
-// WriteIPsecDesired gives the agent the current configuration (also refreshing the CRL).
-func (svc *Service) WriteIPsecDesired(now time.Time) error {
+// WriteIPsecDesired gives the agent the current configuration, also refreshing the CRL.
+func (svc *Service) WriteIPsecDesired(now time.Time) error { return svc.writeIPsecDesired(now, true) }
+
+// writeIPsecDesired writes the agent's configuration. Unless force is set, it writes nothing
+// when the agent would be told what it was told last (apart from the CRL's dates): each write
+// makes the agent reload strongSwan and its firewall, and every saved change calls this, the
+// 30-second usage accounting included. Writes go one at a time, each taking its snapshot after
+// the one before it finished, so the file always ends up holding the newest state.
+func (svc *Service) writeIPsecDesired(now time.Time, force bool) error {
+	svc.ipsecMu.Lock()
+	defer svc.ipsecMu.Unlock()
 	var desired ipsecproto.Desired
+	var fingerprint string
+	var unchanged bool
 	var err error
-	svc.Read(func(s *State) { desired, err = s.IPsecDesired(now) })
-	if err != nil {
+	svc.Read(func(s *State) {
+		desired = s.ipsecSettings(now)
+		fingerprint = s.ipsecFingerprint(desired)
+		if unchanged = !force && fingerprint == svc.ipsecWritten; unchanged {
+			return
+		}
+		desired, err = s.signIPsec(desired, now)
+	})
+	if err != nil || unchanged {
 		return err
 	}
+	svc.ipsecWritten = ""
 	// The agent runs as root with no file capabilities, in this account's group: the directory
 	// and the settings are shared with the group only.
 	dir := filepath.Join(svc.store.Dir(), IPsecDir)
@@ -121,7 +176,11 @@ func (svc *Service) WriteIPsecDesired(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	return writeFileMode(filepath.Join(dir, ipsecproto.DesiredFile), data, 0o640)
+	if err := writeFileMode(filepath.Join(dir, ipsecproto.DesiredFile), data, 0o640); err != nil {
+		return err
+	}
+	svc.ipsecWritten = fingerprint
+	return nil
 }
 
 // IPsecStatus reads the agent's report; ok is false when it is missing or stale.
@@ -134,11 +193,32 @@ func (svc *Service) IPsecStatus(now time.Time) (ipsecproto.Status, bool) {
 	return status, status.Running && now.Sub(time.Unix(status.UpdatedUnix, 0)) < statusFresh
 }
 
-// recordIPsec turns the agent's per-SA byte counters into per-user traffic.
+// ipsecBaseline is a CHILD_SA's byte counters at the last report that had it, and when.
+type ipsecBaseline struct {
+	in, out uint64
+	at      time.Time
+}
+
+// ipsecKeep is how long a child's counters are remembered after it was last reported. The agent
+// lists a session its enforcement ended only a few seconds later, as a closed child (which it
+// keeps reporting for a minute), and a failed listing leaves sessions out of a report: the
+// final counters must still find their baseline, or the whole total would be counted again.
+const ipsecKeep = 3 * time.Minute
+
+// recordIPsec turns the agent's per-SA byte counters into per-user traffic. It runs from Run
+// only (and tests), so it needs no lock.
 func (svc *Service) recordIPsec(now time.Time) {
 	status, fresh := svc.IPsecStatus(now)
 	if !fresh {
 		return
+	}
+	// The counters are totals since each session began, and the agent and its sessions outlive
+	// this server. The first report after a start (or after a long gap) therefore only sets the
+	// baseline: counting it would add every live session's whole total a second time.
+	baseline := svc.ipsecLast.IsZero() || now.Sub(svc.ipsecLast) > ipsecKeep
+	svc.ipsecLast = now
+	if baseline {
+		svc.ipsecSeen = map[string]ipsecBaseline{}
 	}
 	users := map[string]string{} // identity -> user tag
 	svc.Read(func(s *State) {
@@ -152,12 +232,13 @@ func (svc *Service) recordIPsec(now time.Time) {
 	})
 	// Counters are per CHILD_SA (its unique ID survives an IKE rekey). A child is counted
 	// against its last known counters once per report, whether still up or just closed.
-	seen := map[string][2]uint64{}
-	for _, sa := range append(append([]ipsecproto.SA{}, status.SAs...), status.Closed...) {
+	counted := map[string]bool{}
+	for i, sa := range append(append([]ipsecproto.SA{}, status.SAs...), status.Closed...) {
 		tag, ok := users[strings.ToLower(sa.Identity)]
 		if !ok {
 			continue
 		}
+		ended := i >= len(status.SAs)
 		protocol := IKEv2
 		if sa.Version == 1 {
 			protocol = IPsec
@@ -165,25 +246,37 @@ func (svc *Service) recordIPsec(now time.Time) {
 		remote := strings.Trim(sa.Remote, "[]")
 		for _, child := range sa.Children {
 			key := child.UniqueID
-			if _, done := seen[key]; done || key == "" {
+			if counted[key] || key == "" {
 				continue
 			}
+			counted[key] = true
 			previous := svc.ipsecSeen[key]
-			seen[key] = [2]uint64{child.BytesIn, child.BytesOut}
+			svc.ipsecSeen[key] = ipsecBaseline{child.BytesIn, child.BytesOut, now}
 			var up, down uint64
-			if child.BytesIn >= previous[0] {
-				up = child.BytesIn - previous[0]
+			if !baseline {
+				if child.BytesIn >= previous.in {
+					up = child.BytesIn - previous.in
+				}
+				if child.BytesOut >= previous.out {
+					down = child.BytesOut - previous.out
+				}
 			}
-			if child.BytesOut >= previous[1] {
-				down = child.BytesOut - previous[1]
+			// A closed child stays in the report for a minute. Its final bytes count once, but
+			// reporting it again must not keep the client looking present after it left.
+			if ended && up+down == 0 {
+				continue
 			}
 			svc.monitor.AddExternal(tag, protocol, up, down, remote, now)
 		}
-		if len(sa.Children) == 0 {
+		if len(sa.Children) == 0 && !ended {
 			svc.monitor.AddExternal(tag, protocol, 0, 0, remote, now)
 		}
 	}
-	svc.ipsecSeen = seen
+	for key, b := range svc.ipsecSeen {
+		if now.Sub(b.at) > ipsecKeep {
+			delete(svc.ipsecSeen, key)
+		}
+	}
 }
 
 // ipsecComponent describes the component for the API and the app.

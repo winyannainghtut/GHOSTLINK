@@ -53,7 +53,14 @@ impl Session {
     }
 }
 
-pub fn apply_event(line: &str, snapshot: &mut Snapshot) -> Option<&'static str> {
+/// `connected_once` is whether this session has already reached CONNECTED: only such a session
+/// is reported as reconnecting, as with the managed worker. Before that, a restart (a retry or
+/// the next `remote`) keeps the first attempt in `connecting`.
+pub fn apply_event(
+    line: &str,
+    snapshot: &mut Snapshot,
+    connected_once: bool,
+) -> Option<&'static str> {
     if let Some(data) = line.strip_prefix(">STATE:") {
         let fields: Vec<_> = data.split(',').collect();
         if fields.len() < 3 {
@@ -80,7 +87,11 @@ pub fn apply_event(line: &str, snapshot: &mut Snapshot) -> Option<&'static str> 
                 return Some("connected");
             }
             "RECONNECTING" => {
-                snapshot.status.status = ConnectionState::Reconnecting;
+                snapshot.status.status = if connected_once {
+                    ConnectionState::Reconnecting
+                } else {
+                    ConnectionState::Connecting
+                };
                 snapshot.status.vpn_ip = None;
                 snapshot.connected_since = None;
                 snapshot.status.receive_bytes_per_second = 0;
@@ -136,8 +147,11 @@ pub async fn start(
     let password = hex::encode(random);
     let config_path = run_dir.join("active.conf");
     let auth_path = run_dir.join("management.auth");
-    storage::atomic_write(&config_path, profile.canonical.as_bytes())?;
-    storage::atomic_write(&auth_path, password.as_bytes())?;
+    // The plaintext profile (with its private key) and the management password are removed
+    // again if anything below fails or this start is cancelled; the session keeps them until
+    // it ends.
+    let config_file = storage::PrivateConfig::write(&config_path, profile.canonical.as_bytes())?;
+    let auth_file = storage::PrivateConfig::write(&auth_path, password.as_bytes())?;
     #[cfg(windows)]
     let (listener, address, port) = {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
@@ -197,6 +211,7 @@ pub async fn start(
     let (stop, mut stop_rx) = mpsc::channel(1);
     let run_dir: PathBuf = run_dir.into();
     let task = tokio::spawn(async move {
+        let _runtime_files = (config_file, auth_file);
         let setup = async {
             loop {
                 let (stream, _) = listener.accept().await?;
@@ -243,9 +258,13 @@ pub async fn start(
                         let line = match line { Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_string(), Err(_) => { reason = Some("management_connection_lost"); break; } };
                         if !initialized && line.contains("SUCCESS: password is correct") {
                             initialized = true;
-                            if reader.get_mut().write_all(b"state on\nbytecount 1\nhold release\n").await.is_err() { reason = Some("management_connection_failed"); }
+                            // `hold release` frees only this start. With `--management-hold`
+                            // OpenVPN would hold again at every restart (a ping-restart, a
+                            // server restart, a TLS error, the next remote) and wait for a
+                            // release that never comes, so turn the hold off for those.
+                            if reader.get_mut().write_all(b"state on\nbytecount 1\nhold off\nhold release\n").await.is_err() { reason = Some("management_connection_failed"); }
                         } else if initialized {
-                            let event = apply_event(&line, &mut *shared.write().await);
+                            let event = apply_event(&line, &mut *shared.write().await, connected_once);
                             if let Some(event) = event {
                                 let _ = events.try_send(event);
                                 if event == "connected" { connected_once = true; }
@@ -297,9 +316,8 @@ pub async fn start(
         snapshot.status.send_bytes_per_second = 0;
         drop(snapshot);
         let _ = events.try_send(reason.unwrap_or("disconnected"));
-        for name in ["active.conf", "management.auth", "engine.sock"] {
-            let _ = std::fs::remove_file(run_dir.join(name));
-        }
+        // The profile and password files go with `_runtime_files` when this task ends.
+        let _ = std::fs::remove_file(run_dir.join("engine.sock"));
     });
     Ok(Session { stop, task })
 }
@@ -319,8 +337,11 @@ fn tcp_peer_pid(stream: &tokio::net::TcpStream) -> Result<u32> {
             TCP_TABLE_OWNER_PID_ALL,
             0,
         );
-        // u32 alignment is sufficient for MIB_TCPTABLE_OWNER_PID.
-        let mut data = vec![0u32; size as usize / 4 + 1];
+        // u32 alignment is sufficient for MIB_TCPTABLE_OWNER_PID. The slack covers connections
+        // opened between the two calls; without it the engine's own connection could be
+        // refused because the table grew.
+        let mut data = vec![0u32; size as usize / 4 + 64];
+        size = (data.len() * 4) as u32;
         let result = GetExtendedTcpTable(
             data.as_mut_ptr().cast(),
             &mut size,
@@ -331,8 +352,13 @@ fn tcp_peer_pid(stream: &tokio::net::TcpStream) -> Result<u32> {
         );
         ensure!(result == 0, "Cannot verify engine TCP identity");
         let table = data.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>();
-        let rows =
-            std::slice::from_raw_parts((*table).table.as_ptr(), (*table).dwNumEntries as usize);
+        let count = (*table).dwNumEntries as usize;
+        ensure!(
+            count
+                <= (data.len() * 4).saturating_sub(4) / std::mem::size_of::<MIB_TCPROW_OWNER_PID>(),
+            "Invalid TCP ownership table"
+        );
+        let rows = std::slice::from_raw_parts((*table).table.as_ptr(), count);
         for row in rows {
             if u16::from_be(row.dwLocalPort as u16) == remote.port()
                 && u16::from_be(row.dwRemotePort as u16) == local.port()
@@ -352,21 +378,36 @@ mod tests {
     #[test]
     fn only_real_valid_state_events_connect() {
         let mut snapshot = Snapshot::default();
-        apply_event("Initialization Sequence Completed", &mut snapshot);
+        apply_event("Initialization Sequence Completed", &mut snapshot, false);
         assert_eq!(snapshot.status.status, ConnectionState::Disconnected);
-        apply_event(">STATE:1,CONNECTED,SUCCESS,garbage,1.2.3.4", &mut snapshot);
+        apply_event(
+            ">STATE:1,CONNECTED,SUCCESS,garbage,1.2.3.4",
+            &mut snapshot,
+            false,
+        );
         assert_eq!(snapshot.status.status, ConnectionState::Disconnected);
         assert_eq!(
             apply_event(
                 ">STATE:1,CONNECTED,SUCCESS,10.8.0.2,1.2.3.4,1194",
-                &mut snapshot
+                &mut snapshot,
+                false
             ),
             Some("connected")
         );
         assert_eq!(snapshot.status.vpn_ip.as_deref(), Some("10.8.0.2"));
-        apply_event(">STATE:2,RECONNECTING,network-error", &mut snapshot);
+        apply_event(">STATE:2,RECONNECTING,network-error", &mut snapshot, true);
         assert_eq!(snapshot.status.status, ConnectionState::Reconnecting);
         assert!(snapshot.status.vpn_ip.is_none());
+    }
+    #[test]
+    fn a_first_attempt_that_restarts_is_still_connecting() {
+        let mut snapshot = Snapshot::default();
+        snapshot.status.status = ConnectionState::Connecting;
+        assert_eq!(
+            apply_event(">STATE:3,RECONNECTING,server_poll", &mut snapshot, false),
+            Some("reconnecting")
+        );
+        assert_eq!(snapshot.status.status, ConnectionState::Connecting);
     }
     #[test]
     fn password_events_are_sanitized() {
@@ -374,20 +415,78 @@ mod tests {
         assert_eq!(
             apply_event(
                 ">PASSWORD:Verification Failed: 'Auth' secret-value",
-                &mut snapshot
+                &mut snapshot,
+                false
             ),
             Some("authentication_failed")
         );
         assert_eq!(
-            apply_event(">PASSWORD:Need 'Auth' username/password", &mut snapshot),
+            apply_event(
+                ">PASSWORD:Need 'Auth' username/password",
+                &mut snapshot,
+                false
+            ),
             Some("credentials_required")
         );
     }
     #[test]
     fn counters_cannot_underflow() {
         let mut snapshot = Snapshot::default();
-        apply_event(">BYTECOUNT:100,200", &mut snapshot);
-        apply_event(">BYTECOUNT:1,2", &mut snapshot);
+        apply_event(">BYTECOUNT:100,200", &mut snapshot, true);
+        apply_event(">BYTECOUNT:1,2", &mut snapshot, true);
         assert_eq!(snapshot.status.receive_bytes_per_second, 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_removes_the_plaintext_profile_and_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = dir.path().join("run");
+        // An existing file that is not a program: everything up to the spawn succeeds.
+        let engine = dir.path().join("not-openvpn.exe");
+        std::fs::write(&engine, "not a program").unwrap();
+        let profile = ValidatedProfile {
+            canonical: "client\n<key>\ntest-only-private-key\n</key>\n".into(),
+            summary: crate::profile::ProfileSummary {
+                name: "test".into(),
+                kind: "openvpn".into(),
+                display_name: "test".into(),
+                remotes: vec![],
+                tunnel_mode: "split".into(),
+                certificate_expires_unix: None,
+                sha256: String::new(),
+                is_default: false,
+            },
+        };
+        let shared = Arc::new(RwLock::new(Snapshot::default()));
+        let (events, _receiver) = mpsc::channel(8);
+        let result = start(
+            &engine,
+            &run,
+            profile,
+            shared,
+            "wintun",
+            events,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(result.is_err(), "a text file started as OpenVPN");
+        for name in ["active.conf", "management.auth"] {
+            assert!(
+                !run.join(name).exists(),
+                "{name} remained after the failed start"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn engine_connections_are_matched_to_their_process() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let _client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (accepted, _) = listener.accept().await.unwrap();
+        assert_eq!(tcp_peer_pid(&accepted).unwrap(), std::process::id());
     }
 }

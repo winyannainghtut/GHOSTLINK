@@ -11,7 +11,7 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
-- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by all of the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
+- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
 - **Moving from Outline:** take over an Outline server on the same machine, and its `ss://` keys keep working. See [Move from Outline](migrate-from-outline.md).
 - **Monitoring:**
   - live speed per user, open connections and who is online;
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 ```
 
 [`scripts/install-server.sh`](../../scripts/install-server.sh) does the following:
-- picks the right package for the distribution and CPU, and installs Docker from the distribution if it is missing;
+- picks the right package for the distribution and CPU, and installs Docker if it is missing: the distribution's package on Debian, Ubuntu, Fedora and Amazon Linux; on RHEL, CentOS Stream, Rocky, AlmaLinux and Oracle Linux, `docker-ce` from Docker's own repository (`download.docker.com`), which it adds;
 - downloads the newest **published** release's package and checks it against that release's `SHA256SUMS.txt`, which protects against corrupted downloads, not against a compromised GitHub account;
 - installs it, then prints the management key and every port to allow.
 
@@ -56,7 +56,7 @@ Run it again to upgrade; users, keys and rules are kept.
 | `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
 | `--no-docker` | Never install Docker |
 | `--reinstall` | Install even if this version is already installed |
-| `--add-swap` | On a server with under 1 GB of memory and swap, add a 1 GB swap file so the installation is not killed |
+| `--add-swap` | On a server with under 900 MB of memory and swap, add a 1 GB swap file so the installation is not killed (without it, the installer stops there). With more, no swap file is needed or added |
 | `--migrate-outline [--check]` | Take over the Outline server on this machine ([Move from Outline](migrate-from-outline.md)); with `--check`, only report what would happen. `--outline-dir DIR` if Outline is not in `/opt/outline` |
 
 The installer refuses Docker from the Snap store, which cannot mount `/var/lib/ghostlink-server`. To read the script before running it, download it first: `curl -fsSLO …/install-server.sh && less install-server.sh && sudo bash install-server.sh`.
@@ -72,9 +72,9 @@ The installer:
 
 1. Starts Docker if it is installed as a systemd service.
 2. Creates the `ghostlink-server` system account and `/var/lib/ghostlink-server` (mode 0700, owned by that account).
-3. Loads the bundled image (`docker load`) and removes images from older versions of the package.
-4. On first install, creates the server: random ports, new keys for every protocol, a self-signed TLS certificate and a random 128-bit API secret.
-5. Starts the container and prints the management key:
+3. Loads the bundled image (`docker load`).
+4. On first install, creates the server: random ports, new keys for every protocol, a self-signed TLS certificate and a random 128-bit API secret. On an upgrade, it first stops the running server, which saves its usage and history.
+5. Starts the container, removes the images of older versions of the package and prints the management key:
 
 ```json
 {"apiUrl":"https://203.0.113.10:23456/Wq9…","certSha256":"3F0A…"}
@@ -111,7 +111,7 @@ ghostlink server rules set --server home --block-site ads.example --block-bittor
 ghostlink server usage --server home
 ```
 
-In the app, **Servers I run → Manage** has the same actions. **Keys** lets you copy a key or a `.conf`, or **Use on this device**.
+In the app, **Servers I run → Manage** has the same actions. **Keys** shows a key's QR code, copies the key, saves a `.conf` (WireGuard and AmneziaWG) or an Apple profile to Downloads, saves a connection kit, or adds the key to this device with **Use on this device**.
 
 ## Manage on the server
 
@@ -135,7 +135,9 @@ sudo ghostlink-server dashboard                      # web dashboard: tunnel com
 sudo ghostlink-server migrate-outline [--check]      # take over the Outline server on this machine
 ```
 
-These run inside the container (`docker exec`) and call the server's own management API on loopback with the same certificate pin as the app. Only root on the host can use them. Add `--json` after `ghostlink-server` for machine-readable output.
+These run inside the container (`docker exec`) and call the server's own management API on loopback with the same certificate pin as the app. Only root on the host can use them. A word a command does not take is refused, not ignored; switches such as `--exempt` take no value.
+
+For machine-readable output, put `--json` right after `ghostlink-server`, before the command: `sudo ghostlink-server --json users`. It works with `users`, `user`, `key`, `keys`, `rules`, `usage`, `stats`, `clients`, `settings`, `set`, `site-stats`, `dashboard` and `mesh`. `set` and `site-stats` give the settings after the change. A few actions still print text: `user remove`, `key qr`, `key remove`, and `mesh disable`, `revoke`, `remove` and `rules add|remove|clear`. Other commands, such as `top`, `kit` and `status`, refuse `--json`.
 
 ## Web dashboard
 
@@ -157,7 +159,7 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
 - **The page** (since 0.7.0 the same frosted-glass views as the app's **Servers I run**):
   - **Navigation bar:** Overview, Clients and Network. A live capsule shows whether the server is live, who is online and the current speed. Opening it gives a switch for each protocol; pausing one disconnects its users until it is back on. Server settings sit on the right.
   - **Overview:** active tunnels, live throughput, server uptime and the address pool, then throughput for the last 60 seconds, hour or 24 hours. Below that: server health, today by client, traffic types, protocols and top services.
-  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, last handshake, live speed, data used and the speed limit in force. Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
+  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, when the client was last seen, live speed, data used and the speed limit in force. A client is online while it sends something at least once a minute (see [Monitoring](#monitoring-and-privacy)). Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
   - **New client:** a name, a protocol, an optional data limit and a speed limit (the server's default, none, or MB/s); the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
   - **Network:** protocols (on/off and ports), the address pools, the rules for everyone and the [mesh](mesh.md) map.
   - **Appearance:** Obsidian, Titanium or Daylight; background waves Subtle, Calm or Still. These are kept in the browser.
@@ -173,7 +175,7 @@ Apple devices have IKEv2 and IPsec built in (`NEVPNProtocolIKEv2` and `NEVPNProt
 | **IPsec** (IKEv1, "Cisco IPsec"; older) | Certificate + XAuth password, the default | For devices or tools that only offer IPsec |
 | | Shared group key + XAuth password | **Weak** (see below); the API returns a warning |
 
-Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`).
+Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`). The identity is fixed when the key is created: renaming the user later does not change it, so profiles already on devices keep working. In the default, only letters, digits, `.`, `_` and `-` of the name are kept, and it must start with a letter or digit, so a name such as `_bob` gives `bob-ID@ghostlink` and one with no usable characters (for example `Иван`) gives `user-ID@ghostlink`.
 
 ### Turn it on
 
@@ -199,7 +201,7 @@ Open **UDP 500 and UDP 4500** in the host firewall and the cloud security group.
 2. **iPhone/iPad:** open it. Settings shows **Profile Downloaded**; tap it, then **Install** (iOS 16 and later: Settings → General → **VPN & Device Management**). **Mac:** double-click it, then open System Settings → Privacy & Security → **Profiles**.
 3. Turn the VPN on in Settings → **VPN**.
 
-The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA so the device can check the server's certificate. iOS does not trust it for websites unless someone enables it under Settings → General → About → Certificate Trust Settings. Don't. `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
+The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA so the device can check the server's certificate. iOS does not trust it for websites unless someone enables it under Settings → General → About → Certificate Trust Settings. Don't. A Mac may treat a root certificate from a profile as trusted for websites too, and the CA has no name constraints, so keep the server's state file safe (see [Security notes](#security-notes)). `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
 
 ### What applies to IKEv2/IPsec users
 
@@ -215,13 +217,13 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 
 ### How the component is isolated
 
-- The main server stays unprivileged. It writes the desired settings to `/var/lib/ghostlink-server/ipsec/desired.json` (mode 0640, shared only with its own group). They contain NT hashes of the EAP passwords, never the passwords themselves, and the CA's certificate but not its key.
+- The main server stays unprivileged. It writes the desired settings to `/var/lib/ghostlink-server/ipsec/desired.json` (mode 0640, shared only with its own group). The file is a secret, like the server's state. It holds NT hashes of the EAP passwords (never the passwords, but an NT hash is enough to sign in with EAP-MSCHAPv2), the XAuth passwords and the IPsec group key in plain text because strongSwan needs them, the server certificate with its private key, and the CA's certificate but not the CA's key. Do not give its group or a backup tool wider access than the server's state file has.
 - The component runs `ghostlink-ipsec-agent` as root inside its container, in the server account's group, with:
   - only `NET_ADMIN`, `NET_RAW` and `NET_BIND_SERVICE`;
   - `--read-only`, `no-new-privileges`, host networking;
   - only the `ipsec` directory mounted.
 - **What the agent does:**
-  - re-validates every field: identities, ranges, ports, hashes, PEM;
+  - re-validates every field: identities, ranges (the address pools must be private), ports, hashes, PEM. It does so in every state, also with IKEv2 and IPsec both off, because it applies the firewall then too;
   - uses only algorithms fixed in its own code;
   - writes strongSwan's configuration and its own iptables chains (`GHOSTLINK-IPSEC-*`), with one jump from each built-in chain; speed limits are rules in `GHOSTLINK-IPSEC-LIM`, rendered again whenever a capped user's session starts or ends;
   - creates a dummy interface `glipsec0` for the pool gateways;
@@ -240,18 +242,19 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
   - Aggressive Mode exposes material that allows offline guessing of the key.
 
   Use certificates if you need IPsec. `set --rotate-ipsec-psk` replaces the group key, after which every IPsec PSK profile must be reinstalled.
-- The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes. Client certificates last 5 years; removing the key revokes them.
+- The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes, whether the address is changed while the server runs or with `setup --hostname`; the server checks when it starts and then once a day. Client certificates last 5 years; removing the key revokes them.
+- The profile installs the CA as a root certificate on the device. It lasts 20 years and has no name constraints, so whoever holds its key (it is in the server's `state.json`) can sign a certificate for any name. On iOS the user must turn trust on by hand, and nobody should; on a Mac a root from a profile may be trusted for websites as well. Protect `state.json` and its backups, and remove the profile from a device that no longer needs it. Name constraints are not set, because the CA is never reissued and the allowed names (the address and every remote identifier) change.
 - Apple behaviour (installing profiles, connecting) is verified by hand, not by CI. CI runs a real strongSwan client with each profile's exact parameters against the component; see the [verification ledger](../development/verification.md).
 
 ## Speed limits
 
-A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by all of the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s.
+A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s. IKEv2/IPsec sessions share a budget of their own, so a user with one device on IKEv2 and another on WireGuard can reach about twice the cap.
 
 - **Per user:** a speed (`user speed Alice 2MB` on the server, the client's Settings in the app or dashboard, `--speed-limit 2` in the CLI); **none**, meaning no limit even when there is a default; or **default**, which follows the server's default (the setting for new users).
 - **Default for everyone:** `set --speed-limit 5MB` (Server settings in the app or dashboard), or none.
 - **Live:** a change applies within a second to every open connection, without restarting the engine or disconnecting anyone.
-- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
-- **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5GB` (optionally with `/s`); a bare number, or bits such as `Mbps`, is refused.
+- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KiB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. While the user's TCP upload fills the cap, UDP still gets a share of it, so a large upload does not cut off a call. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
+- **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5MB` (optionally with `/s`, or `ps` as in `2MBps`), up to `1.25GB`. A bare number is refused, and so are bits, written with a lower-case b: `10Mbps`, `10Mb/s` or `10 mb`.
 
 ## Monitoring and privacy
 
@@ -259,20 +262,22 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 
 | Record | Detail | Kept |
 |---|---|---|
-| Live | Speed per user (each second), open connections, online state, last activity | In memory, last 2 minutes |
+| Live | Speed per user (each second), open connections, online state, when the client was last seen | In memory, last 2 minutes |
 | Usage over time | Bytes up/down per user per hour, and per day | Hourly 7 days; daily 90 days (`set --history-days`, 7–365) |
-| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), DNS, Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, other TCP/UDP | With the daily records |
+| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, Time (NTP), other TCP/UDP, and "IPsec (not inspected)" for IKEv2/IPsec. DNS is answered by the server itself and is not counted | With the daily records |
 | Protocols used | Bytes per protocol a user connected with | With the daily records |
-| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times | 30 days (`set --site-days`, 1–90); turning it off deletes them at once |
+| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times. A name that is not a valid DNS name counts as "Other sites" | 30 days (`set --site-days`, 1–90), and never longer than the daily records; turning it off deletes them at once |
 | Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint | 30 days |
+
+**Online and idle.** A client is online when it was seen in the last minute: it opened a connection or sent data, its WireGuard/AmneziaWG peer received anything (the keys the server issues send a keepalive every 25 s, so an idle but connected client stays online), or one of its IKEv2/IPsec sessions is up. A download to it counts only while it is substantial, because a client that has gone cannot acknowledge one. Open connections alone don't count: a client that leaves without closing them, for example by switching WireGuard off, can leave them open on the server for many minutes. A client that disconnects shows as idle within about a minute.
 
 What it can't see: VPN traffic is encrypted, so the server never sees page contents or full URLs. Site names come from the TLS/QUIC handshake, HTTP Host and DNS, and apps that hide them (for example with ECH) show up only as their traffic type.
 
 **Rotation, so the disk never fills:**
-- **By age:** every save (every 5 minutes, and at shutdown) drops records past their retention.
+- **By age:** every save (every 5 minutes, and whenever the server stops, also for an upgrade) drops records past their retention.
 - **By size:** the file has a hard size limit (default 20 MB; `set --history-max-mb`). Over it, the oldest site totals go first, then the oldest breakdowns, then hourly records; daily totals go last.
-- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed.
-- **Container log:** Docker caps it at 10 MB × 3, and it holds only warnings and errors, never traffic.
+- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed. Usage that cannot be saved, for example on a full disk, is kept and saved later.
+- **Container log:** Docker caps it at 10 MB × 3, and it holds only the server's own warnings and errors, never traffic. The VPN engine's own messages are off, because they name the sites and addresses users try.
 
 ## Administer the container
 
@@ -303,7 +308,7 @@ Every port is random on first install (10000–32000, all different) and shown b
 | IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
 | Mesh coordinator (when the mesh is on) | TCP, for mesh agents; VPN users cannot reach it. A host that is also a mesh node needs UDP 51820 too ([mesh ports](mesh.md#ports)) |
 
-Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities.
+Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities: moving a service to one is refused, as is a port another program uses.
 
 ## Upgrade and remove
 
@@ -314,7 +319,8 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 ## How it is built
 
 - One Go program, `ghostlink-server` (GPL-3.0-or-later, from `core/outline-worker/cmd/ghostlink-server`), runs the management API and one unmodified sing-box 1.14.4 instance. Shadowsocks and VLESS are sing-box inbounds. WireGuard and AmneziaWG are both served by Ghostlink's `amneziawg` endpoint on unmodified amneziawg-go (zero obfuscation for plain WireGuard), on a userspace network stack. So every user's traffic, whatever the protocol, passes the same router and rules.
-- **Changes:** each change is applied to a copy of the state and started in a new engine instance, and only then saved. A change the engine refuses, such as a port already in use, leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own.
+- **Changes:** each change is applied to a copy of the state and saved only if it worked. A change to what the engine serves (protocols, ports, keys, rules, users) starts a new engine instance first, so a change the engine refuses leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own. Names, monitoring, speed limits and the dashboard change without a restart. A new port for a protocol or the dashboard is tried before the change is saved, also for a protocol without keys yet, so a port below 1024 or one another program uses is refused at once.
+- **Starting:** if the engine cannot start, usually because another program holds one of its ports, the management API, the dashboard and the server commands still start, so the port can be changed with `set --port`. The log says why, `GET /live` reports it as `health.engine_error`, and the engine is tried again every 30 seconds.
 - **Container:**
   - image: `gcr.io/distroless/static-debian12:nonroot`, pinned by digest, plus the static binary and its notices;
   - user: the host account `ghostlink-server`;
@@ -324,20 +330,23 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 
 ### Traffic rules, in order
 
-1. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
-2. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
-3. Names are resolved on the server, so the next blocks also catch names that point inside.
-4. **Always blocked:**
-   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`) and cloud metadata (`169.254.169.254`);
-   - multicast, and NAT64/IPv4-mapped forms of all of these;
-   - the management API port;
-   - the server's own address, when its hostname is an IP address.
+1. With IKEv2/IPsec on, the IPsec DNS listener answers DNS from the IPsec pools only.
+2. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
+3. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
+4. Names are resolved on the server, so the next blocks also catch names that point inside.
+5. **Always blocked:**
+   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`), cloud metadata (`169.254.169.254`), `0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`, multicast and the reserved `240.0.0.0/4`, and the IPv6 unspecified, unique-local, link-local and multicast ranges;
+   - every IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) address;
+   - the management API port, the dashboard port and, while the mesh is on, the mesh port, on any address;
+   - the server's own addresses: its hostname when that is an IP address, and every public address on the host's interfaces.
 
-   With host networking, this keeps VPN users away from services on the host and its network.
-5. Each user's own blocks.
-6. Users exempt from the rules for everyone go out directly.
-7. The rules for everyone.
-8. Everything else goes out directly.
+   With host networking, this keeps VPN users away from services on the host and its network. A connection to the host's own address would arrive over loopback, past host firewall allowlists.
+6. Each user's own blocks.
+7. Users exempt from the rules for everyone go out directly.
+8. The rules for everyone.
+9. Everything else goes out directly.
+
+The engine routes a UDP session by its first packet, but Shadowsocks, VLESS and WireGuard clients can address each later packet somewhere else. So every later packet to another address is checked again against the address and port rules above (DNS, always blocked, the user's own blocks, then, unless the user is exempt, the rules for everyone, including BitTorrent), and dropped if they refuse it. Site names cannot be checked per packet: a later packet to a name rather than an address is dropped.
 
 Disabled users and users over their limit are removed from the engine entirely, which also ends their open connections. Usage counts each user's payload bytes in both directions (not protocol overhead) and is saved every 30 seconds.
 
@@ -366,7 +375,7 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
 | `POST /import/outline` | Take over an Outline server's access keys on a server with no users: `{"access_keys": …, "server": …, "dry_run": true}` with Outline's two files; answers with a report and no passwords ([details](migrate-from-outline.md#over-the-api)) |
 
-`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour.
+`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour, and `health.engine_error` while the VPN engine cannot start.
 
 `PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
 
@@ -376,7 +385,7 @@ The Ghostlink service is the only intended client. It pins the certificate durin
 
 ## Limits and notes
 
-- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server.
+- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server. A DNS name must start with a letter or digit and have at most 128 characters, because it is also the server's IKEv2/IPsec identity.
 - **REALITY site:** VLESS-REALITY borrows the TLS 1.3 handshake of a public site, `www.googletagmanager.com` by default. Choose a site that is reachable from the server and not blocked where your users are.
 - **Amnezia apps:** the `vpn://` keys follow Amnezia's export format for AmneziaWG and WireGuard, with no SSH credentials. Importing them into Amnezia's own apps has not been verified yet.
 - **IKEv2/IPsec:** see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users). Apple-device behaviour is checked by hand.

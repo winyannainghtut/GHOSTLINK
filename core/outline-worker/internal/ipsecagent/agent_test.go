@@ -248,6 +248,54 @@ func TestValidateRefusesUnsafeSettings(t *testing.T) {
 	}
 }
 
+// With both protocols off the agent still applies the firewall, so what reaches iptables-restore
+// must be checked then too. The server's own disabled state (no firewall details, DNS port 0)
+// must keep passing.
+func TestValidateChecksFirewallWithBothProtocolsOff(t *testing.T) {
+	disabled := func() ipsecproto.Desired {
+		return ipsecproto.Desired{Version: ipsecproto.Version, Generation: 1, Allowed: []string{}}
+	}
+	if d := disabled(); d.Validate() != nil {
+		t.Fatalf("the server's disabled state was refused: %v", d.Validate())
+	}
+	for name, mutate := range map[string]func(*ipsecproto.Desired){
+		"port with injected rules": func(d *ipsecproto.Desired) {
+			d.Firewall.Ports = []string{"1\n-I INPUT 1 -j ACCEPT\n-A GHOSTLINK-IPSEC-OUT -p tcp --dport 2"}
+		},
+		"cidr injection":    func(d *ipsecproto.Desired) { d.Firewall.Blocked = []string{"10.0.0.0/8 -j ACCEPT"} },
+		"server ip garbage": func(d *ipsecproto.Desired) { d.Firewall.ServerIP = "1.2.3.4\nCOMMIT" },
+		"allowed identity":  func(d *ipsecproto.Desired) { d.Allowed = []string{"a\nb"} },
+		"speed limit": func(d *ipsecproto.Desired) {
+			d.SpeedLimits = []ipsecproto.SpeedLimit{{Name: "u1 -j ACCEPT", Identities: []string{"a@b"}, BytesPerSecond: 1000}}
+		},
+		"low dns port": func(d *ipsecproto.Desired) { d.Firewall.DNSPort = 53 },
+	} {
+		d := disabled()
+		mutate(&d)
+		if err := d.Validate(); err == nil {
+			t.Errorf("%s: accepted with both protocols off", name)
+		}
+	}
+}
+
+// The gateway is added to this host, so a pool must lie in private address space.
+func TestValidateRefusesPublicPools(t *testing.T) {
+	for _, c := range [][2]string{{"198.51.100.0/24", "198.51.100.1"}, {"8.8.8.0/24", "8.8.8.1"}, {"172.32.0.0/16", "172.32.0.1"}} {
+		d := fixture(t)
+		d.IKEv2.Pool, d.IKEv2.Gateway = c[0], c[1]
+		if err := d.Validate(); err == nil {
+			t.Errorf("pool %s accepted", c[0])
+		}
+	}
+	for _, c := range [][2]string{{"10.79.0.0/20", "10.79.0.1"}, {"172.16.0.0/16", "172.16.0.1"}, {"192.168.4.0/24", "192.168.4.1"}, {"100.64.0.0/16", "100.64.0.1"}} {
+		d := fixture(t)
+		d.IKEv2.Pool, d.IKEv2.Gateway = c[0], c[1]
+		if err := d.Validate(); err != nil {
+			t.Errorf("pool %s refused: %v", c[0], err)
+		}
+	}
+}
+
 func TestParseSAsAndEnforcement(t *testing.T) {
 	sa := func(state, version, eap, xauth, remote string, children map[string][2]string) *vici.Message {
 		m := vici.NewMessage()

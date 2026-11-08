@@ -1,8 +1,9 @@
 name: Web UI
 # Typechecks and builds the web UI (ui/) and checks that the builds committed in
 # core/outline-worker/internal/server/dashboard (embedded in ghostlink-server) and apps/desktop/ui
-# (bundled by the Tauri desktop app) are exactly what the sources produce.
-on: [push, pull_request, workflow_dispatch]
+# (bundled by the Tauri desktop app) are exactly what the sources produce. Also called by
+# release.yml, so that a draft release needs these checks to pass.
+on: [push, pull_request, workflow_dispatch, workflow_call]
 permissions:
   contents: read
 jobs:

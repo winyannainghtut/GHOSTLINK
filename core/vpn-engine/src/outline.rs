@@ -44,14 +44,11 @@ impl AccessKey {
             value.len() <= 16384 && value.starts_with("ss://"),
             "Paste a static Outline access key beginning with ss://"
         );
-        let (main, fragment) = value.split_once('#').unwrap_or((value, ""));
-        let label = if fragment.is_empty() {
-            None
-        } else {
-            let label = decode(fragment)?;
-            ensure!(valid_label(&label), "Invalid server name in access key");
-            Some(label)
+        let (main, fragment) = match value.split_once('#') {
+            Some((main, fragment)) => (main, Some(fragment)),
+            None => (value, None),
         };
+        let label = fragment_label(fragment)?;
         let raw = main.strip_prefix("ss://").unwrap();
         let normalized = if raw.contains('@') {
             main.to_string()
@@ -128,6 +125,31 @@ pub fn valid_label(value: &str) -> bool {
     !value.trim().is_empty() && value.chars().count() <= 80 && !value.chars().any(char::is_control)
 }
 
+/// A key's server name as the app shows it: trimmed and cut to 80 characters, because Ghostlink
+/// servers name keys "user @ server", which can be longer. `None` when it is empty or has
+/// control characters: a name the app cannot show never makes the key itself unusable.
+pub fn key_label(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(
+        text.chars()
+            .take(80)
+            .collect::<String>()
+            .trim_end()
+            .to_string(),
+    )
+}
+
+/// The name in an `ss://` or `ssconf://` key's `#fragment`. A bare `#` is no name.
+fn fragment_label(fragment: Option<&str>) -> Result<Option<String>> {
+    match fragment.filter(|f| !f.is_empty()) {
+        Some(fragment) => Ok(key_label(&decode(fragment)?)),
+        None => Ok(None),
+    }
+}
+
 pub async fn resolve(source: &str) -> Result<AccessKey> {
     let source = source.trim();
     if source.starts_with("ss://") {
@@ -139,7 +161,7 @@ pub async fn resolve(source: &str) -> Result<AccessKey> {
     );
     let mut url = Url::parse(&source.replacen("ssconf://", "https://", 1))
         .map_err(|_| anyhow::anyhow!("Malformed dynamic access key"))?;
-    let label = url.fragment().map(decode).transpose()?;
+    let label = fragment_label(url.fragment())?;
     url.set_fragment(None);
     ensure!(
         url.username().is_empty() && url.password().is_none(),
@@ -218,9 +240,8 @@ pub async fn resolve(source: &str) -> Result<AccessKey> {
             config.server_port
         ))?
     };
-    if let Some(label) = label {
-        ensure!(valid_label(&label), "Invalid server name");
-        key.label = Some(label);
+    if label.is_some() {
+        key.label = label;
     }
     Ok(key)
 }
@@ -247,9 +268,13 @@ fn is_public(ip: IpAddr) -> bool {
             if let Some(v4) = ip.to_ipv4_mapped() {
                 return is_public(IpAddr::V4(v4));
             }
-            // Public global unicast only; exclude translation, ULA, link-local and documentation.
-            (ip.segments()[0] & 0xe000 == 0x2000)
-                && !(ip.segments()[0] == 0x2001 && ip.segments()[1] == 0xdb8)
+            // Public global unicast only; exclude translation, ULA, link-local and documentation,
+            // and 6to4 (2002::/16) and Teredo (2001::/32), which carry an IPv4 address that
+            // may be private.
+            let s = ip.segments();
+            (s[0] & 0xe000 == 0x2000)
+                && !(s[0] == 0x2001 && (s[1] == 0xdb8 || s[1] == 0))
+                && s[0] != 0x2002
         }
     }
 }
@@ -280,6 +305,36 @@ mod tests {
         );
     }
     #[test]
+    fn long_or_unusable_server_names_never_reject_the_key() {
+        // A Ghostlink server labels keys "user @ server"; both names may have 64 characters.
+        let name = format!(
+            "{} @ {}",
+            "Grandma's iPad and Grandpa's Android phone", "Hetzner Frankfurt family server (CX22)"
+        );
+        assert_eq!(name.chars().count(), 83);
+        let fragment =
+            percent_encoding::utf8_percent_encode(&name, percent_encoding::NON_ALPHANUMERIC);
+        let key = AccessKey::parse(&format!(
+            "ss://aes-256-gcm:secret@192.0.2.1:443/?outline=1#{fragment}"
+        ))
+        .unwrap();
+        let label = key.label.unwrap();
+        assert_eq!(label.chars().count(), 80);
+        assert!(name.starts_with(&label) && valid_label(&label));
+        for fragment in ["", "%20%20", "bad%0Aname"] {
+            let key =
+                AccessKey::parse(&format!("ss://aes-256-gcm:secret@192.0.2.1:443#{fragment}"))
+                    .unwrap();
+            assert!(key.label.is_none(), "{fragment:?}");
+        }
+        // Dynamic keys share the rule: a trailing '#' is no name.
+        assert_eq!(fragment_label(Some("")).unwrap(), None);
+        assert_eq!(
+            fragment_label(Some("Office")).unwrap().as_deref(),
+            Some("Office")
+        );
+    }
+    #[test]
     fn obsolete_and_executable_options_are_rejected() {
         for key in [
             "ss://aes-256-cfb:secret@example.com:443",
@@ -300,9 +355,13 @@ mod tests {
             "::1",
             "fd00::1",
             "::ffff:127.0.0.1",
+            // 6to4 for 10.0.0.1, and Teredo.
+            "2002:a00:1::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
         ] {
-            assert!(!is_public(address.parse().unwrap()));
+            assert!(!is_public(address.parse().unwrap()), "{address}");
         }
         assert!(is_public("1.1.1.1".parse().unwrap()));
+        assert!(is_public("2606:4700:4700::1111".parse().unwrap()));
     }
 }

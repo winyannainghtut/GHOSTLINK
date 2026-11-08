@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"ghostlink.local/outline-worker/internal/hostfw"
@@ -35,6 +37,9 @@ type Agent struct {
 	applied   *meshproto.Config
 	endpoints map[string]string
 	problem   string
+	// fwProblem is set while the firewall can't be put back (see keepFirewall).
+	fwProblem string
+	fwChecked time.Time
 	status    string
 }
 
@@ -87,7 +92,16 @@ func (a *Agent) Serve(ctx context.Context) error {
 	backoff := time.Second
 	quietUntil := time.Time{}
 	for ctx.Err() == nil {
-		resp, err := a.client.Sync(ctx, a.Node.Secret, a.report())
+		if _, err := os.Stat(filepath.Join(a.Dir, nodeFile)); errors.Is(err, os.ErrNotExist) {
+			// `ghostlink-mesh leave` ran while the coordinator was unreachable: the node is gone
+			// from this machine, so the agent stops instead of setting it up again.
+			a.Log.Printf("this node left the mesh; stopping")
+			return nil
+		}
+		a.checkDevice()
+		a.keepFirewall(ctx)
+		started, request := time.Now(), a.report()
+		resp, err := a.client.Sync(ctx, a.Node.Secret, request)
 		if ctx.Err() != nil {
 			return nil // stopping: the deferred teardown cleans up
 		}
@@ -136,6 +150,12 @@ func (a *Agent) Serve(ctx context.Context) error {
 			return nil
 		}
 		a.writeStatus()
+		if resp.Status != meshproto.StatusActive && request.Applied == 0 && time.Since(started) < time.Second {
+			// With nothing set up to take down, an answer this quick comes from an older
+			// coordinator, which answers at once while a node waits for approval or is disabled;
+			// asking again right away would turn into a busy loop.
+			sleep(ctx, 10*time.Second)
+		}
 	}
 	return nil
 }
@@ -147,11 +167,22 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
+// problems is what is wrong on this node, as reported to the coordinator.
+func (a *Agent) problems() string {
+	switch {
+	case a.fwProblem == "":
+		return a.problem
+	case a.problem == "":
+		return a.fwProblem
+	}
+	return a.problem + "; " + a.fwProblem
+}
+
 func (a *Agent) report() meshproto.SyncRequest {
 	r := meshproto.SyncRequest{
 		Protocol: meshproto.Version, Version: a.Version, ListenPort: a.Node.ListenPort,
 		Endpoints: LocalEndpoints(a.Node.Endpoint, a.Node.ListenPort, a.Node.Interface), AdvertiseRoutes: a.Node.AdvertiseRoutes,
-		Error: a.problem, Peers: []meshproto.PeerStatus{}, Pings: []meshproto.Ping{},
+		Error: a.problems(), Peers: []meshproto.PeerStatus{}, Pings: []meshproto.Ping{},
 	}
 	if len(r.Error) > 300 {
 		r.Error = r.Error[:300]
@@ -182,11 +213,71 @@ func (a *Agent) report() meshproto.SyncRequest {
 	return r
 }
 
-// apply brings the interface, routes, firewall and hosts block in line with c.
+// checkDevice notices an interface deleted under the running agent (ip link del, a reloaded
+// wireguard module). Forgetting what was applied makes the coordinator answer at once, and the
+// configuration then creates the interface again.
+func (a *Agent) checkDevice() {
+	if a.dev != nil && a.dev.gone() {
+		a.Log.Printf("%s disappeared; creating it again", a.Node.Interface)
+		a.dev.close()
+		a.dev, a.applied = nil, nil
+	}
+}
+
+// rules renders c for this node. Without the node's own consent to forwarding it relays nothing
+// and shares no subnets, even where IPv4 forwarding is already on (Docker hosts, for example).
+func (n *Node) rules(c *meshproto.Config) map[string]string {
+	if !n.Forwarding {
+		local := *c
+		local.Relay, local.Shared, local.Masquerade = false, nil, false
+		c = &local
+	}
+	return Rules(c, n.Interface)
+}
+
+// firewall installs the chains for c, then the jumps to them.
+func (a *Agent) firewall(ctx context.Context, c *meshproto.Config) error {
+	if err := a.FW.Restore(ctx, a.Node.rules(c)); err != nil {
+		return fmt.Errorf("firewall: %w", err)
+	}
+	if err := a.FW.EnsureJumps(ctx, Jumps(a.Node.Interface)); err != nil {
+		return fmt.Errorf("firewall: %w", err)
+	}
+	return nil
+}
+
+// keepFirewall puts the firewall back when something on the host removed it (a firewall reload,
+// netfilter-persistent, iptables -F). While a configuration is applied it checks the jumps every
+// 30 seconds; what removes them removes the chains too, so both are restored.
+func (a *Agent) keepFirewall(ctx context.Context) {
+	if a.applied == nil || time.Since(a.fwChecked) < 30*time.Second {
+		return
+	}
+	a.fwChecked = time.Now()
+	if a.FW.HasJumps(ctx, Jumps(a.Node.Interface)) {
+		a.fwProblem = ""
+		return
+	}
+	a.Log.Printf("the mesh firewall rules were removed from this machine; restoring them")
+	if err := a.firewall(ctx, a.applied); err != nil {
+		a.fwProblem = "could not restore the " + err.Error()
+		a.Log.Printf("%s", a.fwProblem)
+		return
+	}
+	a.fwProblem = ""
+}
+
+// apply brings the firewall, interface, routes and hosts block in line with c.
 func (a *Agent) apply(c *meshproto.Config) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("refused configuration: %w", err)
 	}
+	// The firewall goes in first, so the interface never carries traffic the rules would refuse,
+	// and a firewall error leaves the node off the mesh instead of open to it.
+	if err := a.firewall(context.Background(), c); err != nil {
+		return err
+	}
+	a.fwChecked, a.fwProblem = time.Now(), ""
 	if a.dev == nil {
 		dev, err := openDevice(a.Node.Interface)
 		if err != nil {
@@ -209,32 +300,42 @@ func (a *Agent) apply(c *meshproto.Config) error {
 	if err := a.dev.setAddress(c.Address); err != nil {
 		return fmt.Errorf("set address: %w", err)
 	}
-	if err := a.dev.setRoutes(c.Routes); err != nil {
+	var peerAddresses []netip.Addr
+	for _, p := range c.Peers {
+		if ap, err := netip.ParseAddrPort(p.Endpoint); err == nil {
+			peerAddresses = append(peerAddresses, ap.Addr())
+		}
+	}
+	skipped, err := a.dev.setRoutes(c.Routes, peerAddresses)
+	if err != nil {
 		return err
 	}
-	problem := ""
+	var problems []string
+	if len(skipped) > 0 {
+		problems = append(problems, "not routing "+strings.Join(skipped, ", ")+" into the mesh: this machine is on that network itself, already routes it, or reaches a peer through it")
+	}
 	if c.Relay || len(c.Shared) > 0 {
 		if !a.Node.Forwarding {
-			problem = "the administrator made this node a relay or shared its subnets, but forwarding is not allowed on it; run on the node: sudo ghostlink-mesh allow-forwarding"
-		} else if readForwarding() != "1" {
+			problems = append(problems, "the administrator made this node a relay or shared its subnets, but forwarding is not allowed on it; run on the node: sudo ghostlink-mesh allow-forwarding")
+		} else {
 			if a.Node.ForwardingBefore == "" {
-				a.Node.ForwardingBefore = readForwarding()
-				_ = a.Node.Save(a.Dir)
+				// Kept from the first time this node forwards: after a reboot, ip_forward can read
+				// 0 only because Docker or libvirt have not started yet.
+				if before := readForwarding(); before != "" {
+					a.Node.ForwardingBefore = before
+					_ = a.Node.Save(a.Dir)
+				}
 			}
-			if err := writeForwarding("1"); err != nil {
-				problem = "could not turn on IPv4 forwarding: " + err.Error()
+			if readForwarding() != "1" {
+				if err := writeForwarding("1"); err != nil {
+					problems = append(problems, "could not turn on IPv4 forwarding: "+err.Error())
+				}
 			}
 		}
 	}
-	if err := a.FW.Restore(context.Background(), Rules(c, a.Node.Interface)); err != nil {
-		return fmt.Errorf("firewall: %w", err)
-	}
-	if err := a.FW.EnsureJumps(context.Background(), Jumps(a.Node.Interface)); err != nil {
-		return fmt.Errorf("firewall: %w", err)
-	}
 	if a.Node.Hosts {
 		if err := writeHosts(c.Hosts); err != nil {
-			problem = "could not update " + HostsPath + ": " + err.Error()
+			problems = append(problems, hostsProblem(err))
 		}
 	}
 	var targets []string
@@ -245,8 +346,18 @@ func (a *Agent) apply(c *meshproto.Config) error {
 		}
 	}
 	a.pinger.setTargets(targets)
-	a.applied, a.problem = c, problem
+	a.applied, a.problem = c, strings.Join(problems, "; ")
 	return nil
+}
+
+// hostsProblem explains a failed /etc/hosts update.
+func hostsProblem(err error) string {
+	if errors.Is(err, syscall.EROFS) {
+		// The service sees /etc/hosts through a bind mount of the file, which ends when another
+		// program replaces the file (sed -i, Ansible, an editor saving a new copy).
+		return HostsPath + " was replaced by another program, so the <node>.mesh names are not updated until the agent restarts: sudo systemctl restart ghostlink-mesh"
+	}
+	return "could not update " + HostsPath + ": " + err.Error()
 }
 
 // writeHosts updates the managed block in place (the file may be a bind mount).
@@ -271,23 +382,34 @@ func (a *Agent) teardown() {
 	removeInterface(a.Node.Interface)
 	a.FW.Remove(context.Background(), Jumps(a.Node.Interface), Chains())
 	if a.Node.Hosts {
-		_ = writeHosts(nil)
+		if err := writeHosts(nil); err != nil && a.Log != nil {
+			a.Log.Printf("could not remove the <node>.mesh names from %s: %v", HostsPath, err)
+		}
 	}
-	a.applied = nil
+	a.applied, a.fwProblem = nil, ""
 	if a.pinger != nil {
 		a.pinger.setTargets(nil)
 	}
 }
 
+// restoreForwarding sets IPv4 forwarding back to what it was before this node first forwarded.
+// It stays on when software that may rely on it appeared on the machine since.
 func (a *Agent) restoreForwarding() {
-	if a.Node.ForwardingBefore != "" && a.Node.ForwardingBefore != "1" {
-		_ = writeForwarding(a.Node.ForwardingBefore)
+	if a.Node.ForwardingBefore == "" || a.Node.ForwardingBefore == "1" {
+		return
 	}
+	if users := forwardingUsers(interfaceNames()); len(users) > 0 {
+		if a.Log != nil {
+			a.Log.Printf("IPv4 forwarding stays on: %s on this machine may need it", strings.Join(users, ", "))
+		}
+		return
+	}
+	_ = writeForwarding(a.Node.ForwardingBefore)
 }
 
 func (a *Agent) writeStatus() {
 	s := Status{UpdatedUnix: time.Now().Unix(), State: a.status, Name: a.Node.Name, Address: a.Node.Address,
-		Coordinator: a.Node.URL, Error: a.problem, Peers: []PeerView{}, Pings: a.pinger.snapshot(), Shared: []string{}, Routes: []string{}}
+		Coordinator: a.Node.URL, Error: a.problems(), Peers: []PeerView{}, Pings: a.pinger.snapshot(), Shared: []string{}, Routes: []string{}}
 	if a.applied != nil {
 		s.Relay, s.Shared, s.Routes = a.applied.Relay, a.applied.Shared, a.applied.Routes
 		names := map[string]meshproto.Peer{}
@@ -324,7 +446,7 @@ func Leave(dir string, fw *hostfw.Firewall) error {
 	if errors.Is(remoteErr, ErrRemoved) {
 		remoteErr = nil
 	}
-	a := &Agent{Dir: dir, Node: node, FW: fw}
+	a := &Agent{Dir: dir, Node: node, FW: fw, Log: log.New(os.Stderr, "ghostlink-mesh: ", 0)}
 	a.teardown()
 	a.restoreForwarding()
 	Forget(dir)

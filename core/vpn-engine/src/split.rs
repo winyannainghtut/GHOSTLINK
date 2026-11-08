@@ -149,7 +149,9 @@ pub fn render(policy: &RoutingPolicy, proxy: &'static str) -> Rendered {
     Rendered {
         needs_direct: route_final == "direct"
             || route_rules.iter().any(|r| r["outbound"] == "direct"),
-        find_process: !policy.apps.is_empty(),
+        // Process lookups cost CPU on every connection; full mode keeps its apps list but uses
+        // no app rules.
+        find_process: policy.mode != SplitMode::Full && !policy.apps.is_empty(),
         route_rules,
         dns_rules,
         route_final,
@@ -233,5 +235,12 @@ mod tests {
         assert!(r.route_rules.iter().all(|rule| rule["outbound"] == "proxy"));
         let full = render(&RoutingPolicy::default(), "proxy");
         assert!(full.route_rules.is_empty() && !full.needs_direct && full.route_final == "proxy");
+        // A full policy that still lists apps from an earlier mode looks up no processes.
+        let kept = render(&validate(&policy(SplitMode::Full)).unwrap(), "proxy");
+        assert!(!kept.find_process);
+        assert!(kept
+            .route_rules
+            .iter()
+            .all(|rule| rule.get("process_name").is_none()));
     }
 }

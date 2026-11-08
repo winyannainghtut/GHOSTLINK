@@ -1,9 +1,9 @@
 // Actions on a client's keys, shared by the client cards, the list, the client sheet and the
 // new-client flow. Files go through the transport (a download in the dashboard, the Downloads
 // folder in the desktop app).
-import { Globe, Laptop, Smartphone, UserRound } from 'lucide-react';
+import { Copy, Globe, Laptop, Smartphone, UserRound } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { fileSafe } from '@shared/format';
+import { confName, fileSafe } from '@shared/format';
 import { Button, Sheet, useUI } from '@shared/glass';
 import { APPLE, api, apiText, canUseHere, protocolName, saveFile, svgURL, useHere, type Key, type KeySummary, type User } from './api';
 
@@ -32,7 +32,7 @@ const saved = (where: string | null, what: string) => (where ? `${what} saved to
 
 export async function saveConf(user: User, key: Key): Promise<string> {
   if (!key.config) throw new Error('This key has no .conf file.');
-  const where = await saveFile({ name: `${fileSafe(user.name)}-${key.protocol}-${key.id}`, extension: 'conf', content: key.config, mime: 'text/plain' });
+  const where = await saveFile({ name: confName(user.name, key.protocol, key.id), extension: 'conf', content: key.config, mime: 'text/plain' });
   return saved(where, '.conf') + ' Import it in the WireGuard or AmneziaWG app.';
 }
 
@@ -40,7 +40,7 @@ export async function saveProfile(user: User, key: Key, askPassword = false): Pr
   const content = await apiText(`/users/${user.id}/keys/${key.id}/profile${askPassword ? '?prompt_password=1' : ''}`);
   const where = await saveFile({ name: `${fileSafe(user.name)}-${key.protocol}-${key.id}`, extension: 'mobileconfig', content, mime: 'application/x-apple-aspen-config' });
   return askPassword
-    ? `${saved(where, 'Profile')} It has no password: give ${user.name} this one separately: ${key.certificate_password}`
+    ? `${saved(where, 'Profile')} It has no password inside: the device asks for the certificate's password while installing, so give it to ${user.name} separately.`
     : `${saved(where, 'Profile')} Send it privately (AirDrop, Mail or Files); opening it installs the VPN.`;
 }
 
@@ -65,6 +65,9 @@ const scanHint = (key: Key, content: string) =>
 export function useKeyTools(onChanged?: () => void) {
   const { toast, confirm } = useUI();
   const [qr, setQr] = useState<{ url: string; title: string; note: string } | null>(null);
+  // A profile saved without its password: the password stays on screen until the admin is done,
+  // rather than in a toast that disappears.
+  const [secret, setSecret] = useState<{ title: string; note: string; password: string } | null>(null);
 
   const full = async (user: User, id: string) => {
     const keys = await api<Key[]>('GET', `/users/${user.id}/keys`);
@@ -95,7 +98,13 @@ export function useKeyTools(onChanged?: () => void) {
         await navigator.clipboard.writeText(key.access_key);
         toast('Key copied. Share it only with ' + user.name + '.');
       }),
-    downloadProfile: (user: User, id: string, askPassword = false) => run(async () => toast(await saveProfile(user, await full(user, id), askPassword), askPassword ? 'info' : 'ok')),
+    downloadProfile: (user: User, id: string, askPassword = false) =>
+      run(async () => {
+        const key = await full(user, id);
+        const note = await saveProfile(user, key, askPassword);
+        if (askPassword && key.certificate_password) setSecret({ title: `Password for ${user.name}'s profile`, note, password: key.certificate_password });
+        else toast(note);
+      }),
     downloadKit: (user: User) => run(async () => toast(await saveKit(user))),
     useHere: (user: User, id: string) =>
       run(async () => {
@@ -113,14 +122,38 @@ export function useKeyTools(onChanged?: () => void) {
   };
 
   const sheet: ReactNode = (
-    <Sheet open={qr !== null} onClose={() => setQr(null)} title={qr?.title ?? ''} subtitle="Scan with the phone's VPN app" footer={<Button variant="cta" onClick={() => setQr(null)}>Done</Button>}>
-      {qr && (
-        <div className="grid justify-items-center gap-4">
-          <img src={qr.url} alt="QR code" className="w-full max-w-[300px] rounded-[24px] bg-white p-4" />
-          <p className="text-center text-[13px] text-fg-3">{qr.note}</p>
-        </div>
-      )}
-    </Sheet>
+    <>
+      <Sheet open={qr !== null} onClose={() => setQr(null)} title={qr?.title ?? ''} subtitle="Scan with the phone's VPN app" footer={<Button variant="cta" onClick={() => setQr(null)}>Done</Button>}>
+        {qr && (
+          <div className="grid justify-items-center gap-4">
+            <img src={qr.url} alt="QR code" className="w-full max-w-[300px] rounded-[24px] bg-white p-4" />
+            <p className="text-center text-[13px] text-fg-3">{qr.note}</p>
+          </div>
+        )}
+      </Sheet>
+      <Sheet
+        open={secret !== null}
+        onClose={() => setSecret(null)}
+        title={secret?.title ?? ''}
+        footer={
+          <>
+            <Button icon={<Copy size={14} />} onClick={() => secret && navigator.clipboard.writeText(secret.password).then(() => toast('Password copied.'), () => toast('Could not copy the password.', 'bad'))}>
+              Copy password
+            </Button>
+            <Button variant="cta" onClick={() => setSecret(null)}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        {secret && (
+          <div className="grid gap-3">
+            <p className="text-[13px] text-fg-2">{secret.note}</p>
+            <input className="field mono" readOnly spellCheck={false} aria-label="Certificate password" value={secret.password} onFocus={e => e.currentTarget.select()} />
+          </div>
+        )}
+      </Sheet>
+    </>
   );
   return { ...tools, sheet };
 }

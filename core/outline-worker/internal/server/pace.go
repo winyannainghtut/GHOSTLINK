@@ -20,11 +20,14 @@ import (
 // through and paid for by waiting, and with many connections each waits for the debt of all
 // of them, so the average stays at the rate whatever the number of connections.
 type pacer struct {
-	rate   atomic.Int64 // bytes per second; 0 means unlimited
-	epoch  atomic.Int64 // bumped by every change of rate, which ends waits under the old one
-	mu     sync.Mutex
-	tokens float64
-	last   time.Time
+	rate  atomic.Int64 // bytes per second; 0 means unlimited
+	epoch atomic.Int64 // bumped by every change of rate, which ends waits under the old one
+	// waiting counts connections pausing in Wait; while one does, its debt is paid off by
+	// waiting, so UDP may run into debt too (see allow).
+	waiting atomic.Int64
+	mu      sync.Mutex
+	tokens  float64
+	last    time.Time
 }
 
 const (
@@ -62,6 +65,10 @@ func (p *pacer) Wait(n int64) {
 	}
 	epoch := p.epoch.Load()
 	pause := p.take(n, time.Now())
+	if pause > 0 {
+		p.waiting.Add(1)
+		defer p.waiting.Add(-1)
+	}
 	for pause > 0 && p.epoch.Load() == epoch {
 		step := min(pause, waitStep)
 		time.Sleep(step)
@@ -104,6 +111,11 @@ func (p *pacer) take(n int64, now time.Time) time.Duration {
 	return time.Duration(math.Min(-p.tokens/rate, maxPause.Seconds()) * float64(time.Second))
 }
 
+// allow takes n bytes when the bucket holds them. While a TCP connection of the same client
+// waits off a debt (a saturating upload keeps the bucket near or below zero), a UDP packet may
+// deepen the debt by up to a burst: the TCP connection then waits that much longer, so the two
+// share the rate instead of TCP taking it all and nearly every UDP packet (a call, QUIC) being
+// dropped. With no TCP waiting, UDP needs the tokens, as before.
 func (p *pacer) allow(n int64, now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -112,7 +124,7 @@ func (p *pacer) allow(n int64, now time.Time) bool {
 		return true
 	}
 	p.refill(rate, now)
-	if p.tokens < float64(n) {
+	if p.tokens < float64(n) && (p.waiting.Load() == 0 || p.tokens-float64(n) < -burstFor(int64(rate))) {
 		return false
 	}
 	p.tokens -= float64(n)

@@ -16,8 +16,10 @@ Install or upgrade the Ghostlink VPN server (Docker-based) on this Linux machine
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh | sudo bash
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh | sudo bash -s -- --hostname vpn.example.com
 
-It detects Debian/Ubuntu (.deb) or Fedora/RHEL family (.rpm) on x86_64 or arm64, installs
-Docker from the distribution if needed, downloads the release package, checks it against the
+It detects Debian/Ubuntu (.deb) or Fedora/RHEL family (.rpm) on x86_64 or arm64 and installs
+Docker if needed: the distribution's package on Debian, Ubuntu, Fedora and Amazon Linux; on
+RHEL, CentOS Stream, Rocky, AlmaLinux and Oracle Linux, docker-ce from Docker's own repository
+(download.docker.com), which it adds. It downloads the release package, checks it against the
 release's SHA256SUMS.txt and installs it. Then it prints the management key for the Ghostlink
 app and the ports to open. Running it again upgrades and keeps users, keys and rules.
 
@@ -34,7 +36,7 @@ Options:
                     (a firewall that is off is never turned on)
   --no-docker       do not install Docker; stop if it is missing
   --reinstall       install even if this version is already installed
-  --add-swap        on a server with under 1 GB of memory and swap, add a 1 GB swap file
+  --add-swap        on a server with under 900 MB of memory and swap, add a 1 GB swap file
                     (/swapfile, kept across reboots) so installing is not killed
   --migrate-outline take over the Outline server on this machine: its access keys become
                     Ghostlink clients and their ss:// keys keep working; Outline is stopped
@@ -151,11 +153,13 @@ main() {
         else
             die "this server has only $memory_mb MB of memory and swap, so the kernel may kill the installation (the output then says 'Killed'). Run this again with --add-swap to add a 1 GB swap file, or add swap yourself."
         fi
+    elif [ "$add_swap" = 1 ]; then
+        say "This server has $memory_mb MB of memory and swap, which is enough: no swap file added"
     fi
 
     # --- Docker ---
     if [ "$(command -v docker 2>/dev/null)" = /snap/bin/docker ]; then
-        die "Docker from the Snap store cannot use /var/lib/ghostlink-server. Remove it (snap remove docker) and run this again; the distribution's Docker will be installed"
+        die "Docker from the Snap store cannot use /var/lib/ghostlink-server. Remove it (snap remove docker) and run this again; Docker is then installed as a system package"
     fi
     if ! command -v docker >/dev/null 2>&1; then
         [ "$docker_install" = 1 ] || die "Docker is not installed (and --no-docker was given)"
@@ -178,8 +182,10 @@ main() {
             deb:ghostlink-server_*_"$deb_arch".deb | rpm:ghostlink-server-*."$rpm_arch".rpm) ;;
             *) die "$file is not a ghostlink-server package for this system (expected a .$family for $(uname -m))" ;;
         esac
-        # ghostlink-server_<version>-1_<arch>.deb or ghostlink-server-<version>-1.<arch>.rpm
-        version=$(printf '%s\n' "$file" | sed -E -e 's/^ghostlink-server[_-]//' -e 's/-1(_[a-z0-9]+\.deb|\.[a-z0-9_]+\.rpm)$//')
+        # ghostlink-server_<version>-1_<arch>.deb or ghostlink-server-<version>-1.<arch>.rpm. nfpm's
+        # own names write a pre-release such as 0.9.0-rc.1 as 0.9.0~rc.1 (and an rpm turns - into _
+        # after the ~); a semantic version has neither, so both map back.
+        version=$(printf '%s\n' "$file" | sed -E -e 's/^ghostlink-server[_-]//' -e 's/-1(_[a-z0-9]+\.deb|\.[a-z0-9_]+\.rpm)$//' | tr '~_' '--')
     else
         if [ -z "$version" ]; then
             version=$(newest_release) || true
@@ -204,15 +210,25 @@ main() {
     if [ "$installed" = "$version" ] && [ "$reinstall" = 0 ]; then
         say "Ghostlink server $version is already installed"
     else
-        if [ -n "$installed" ]; then say "Upgrading Ghostlink server $installed to $version"; else say "Installing Ghostlink server $version"; fi
+        # A plain install of the version already installed does nothing (no files, no setup),
+        # so --reinstall asks the package manager for a reinstall.
+        local again="" action=install
+        if [ "$installed" = "$version" ]; then
+            say "Reinstalling Ghostlink server $version"
+            again=--reinstall action=reinstall
+        elif [ -n "$installed" ]; then
+            say "Upgrading Ghostlink server $installed to $version"
+        else
+            say "Installing Ghostlink server $version"
+        fi
         if [ -z "$package" ]; then
             download_verified "$version" "$file"
             package="$work/$file"
         fi
         if [ "$family" = deb ]; then
-            apt-get install -y -o Dpkg::Options::=--force-confold "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
+            apt-get install -y ${again:+"$again"} -o Dpkg::Options::=--force-confold "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
         else
-            pkg_manager install -y "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
+            pkg_manager "$action" -y "$package" || die "installing the package failed. If the output says 'Killed', the server ran out of memory: run this again with --add-swap"
         fi
         command -v ghostlink-server >/dev/null 2>&1 || die "the package did not install ghostlink-server"
     fi
@@ -236,7 +252,17 @@ main() {
             return 0
         fi
         say "Taking over the Outline server"
-        ghostlink-server migrate-outline --outline-dir "$outline_dir" || die "the migration did not go through; what happened to Outline is shown above"
+        local had_clients=1
+        if ghostlink-server --json users 2>/dev/null | jq -e 'length == 0' >/dev/null 2>&1; then had_clients=0; fi
+        if ! ghostlink-server migrate-outline --outline-dir "$outline_dir"; then
+            # The import can be saved and a later step still fail (its answer lost, say). Then
+            # Ghostlink serves Outline's keys, and the key and ports below are still needed.
+            if [ "$had_clients" = 0 ] && ghostlink-server --json users 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
+                warn "the import went through, but a later step failed (see above); Outline stays stopped"
+            else
+                die "the migration did not go through; what happened to Outline is shown above"
+            fi
+        fi
         if [ -n "$hostname" ]; then
             # The import adopts Outline's address; the one asked for here wins.
             ghostlink-server set --hostname "$hostname" >/dev/null

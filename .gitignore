@@ -30,3 +30,5 @@ DerivedData/
 *.token
 *.access-key
 *.log
+# The development journal is the user's local file; it is not part of the repository.
+/devjourney.md

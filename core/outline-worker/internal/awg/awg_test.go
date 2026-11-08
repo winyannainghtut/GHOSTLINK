@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	updevice "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -33,7 +35,9 @@ import (
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/protocol/mixed"
 	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun/gtcpip/header"
 	boxjson "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -131,8 +135,9 @@ func fetch(proxyPort uint16, target string) (string, error) {
 }
 
 // upstreamServer runs an unmodified amneziawg-go device on a userspace netstack, listening on
-// UDP and serving HTTP at 10.77.0.1 inside the tunnel.
-func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscation map[string]string) {
+// UDP and serving HTTP at 10.77.0.1 inside the tunnel. It returns the server's side of the
+// tunnel.
+func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscation map[string]string) *netstack.Net {
 	t.Helper()
 	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.77.0.1")}, nil, 1376)
 	if err != nil {
@@ -161,6 +166,7 @@ func upstreamServer(t *testing.T, server, client keyPair, port uint16, obfuscati
 	go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "hello through amneziawg")
 	}))
+	return tnet
 }
 
 func obfuscationJSON(obfuscation map[string]string) string {
@@ -207,6 +213,32 @@ func TestClientInteroperatesWithUpstreamAmneziaWG(t *testing.T) {
 				t.Fatalf("no traffic through %s: body=%q err=%v", name, body, err)
 			}
 		})
+	}
+}
+
+// A client starts its own flows; one the far side of the tunnel starts must not be routed by the
+// client's rules. These rules send everything but the local proxy direct, as "only" mode does,
+// so a routed flow to the client's tunnel address would reach this device's loopback.
+func TestClientRefusesFlowsFromTheFarSide(t *testing.T) {
+	server, client := newKeyPair(t), newKeyPair(t)
+	serverPort, proxyPort := freePort(t, "udp"), freePort(t, "tcp")
+	far := upstreamServer(t, server, client, serverPort, legacyParameters)
+	startBox(t, fmt.Sprintf(`{
+	  "inbounds":[{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":%d}],
+	  "endpoints":[{"type":"amneziawg","tag":"awg","address":["10.77.0.2/32"],"private_key":%q,
+	    "peers":[{"address":"127.0.0.1","port":%d,"public_key":%q,"allowed_ips":["0.0.0.0/0"],"persistent_keepalive":"15"}]%s}],
+	  "outbounds":[{"type":"direct","tag":"direct"}],
+	  "route":{"rules":[{"inbound":["in"],"outbound":"awg"}],"final":"direct"}
+	}`, proxyPort, client.private, serverPort, server.public, obfuscationJSON(legacyParameters)))
+	if body, err := fetch(proxyPort, "http://10.77.0.1/"); err != nil || body != "hello through amneziawg" {
+		t.Fatalf("no traffic through the tunnel: body=%q err=%v", body, err)
+	}
+	webPort := localWeb(t, "client loopback")
+	intruder := &http.Client{Transport: &http.Transport{DialContext: far.DialContext, DisableKeepAlives: true}, Timeout: 2 * time.Second}
+	if response, err := intruder.Get(fmt.Sprintf("http://10.77.0.2:%d/", webPort)); err == nil {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("the far side of the tunnel reached the client's loopback: %q", body)
 	}
 }
 
@@ -351,6 +383,196 @@ func TestServerRulesMatchPeerUser(t *testing.T) {
 				t.Fatal("alice's traffic passed a rule that blocks alice")
 			}
 		})
+	}
+}
+
+// upstreamClient runs an unmodified, unobfuscated amneziawg-go client with the tunnel address
+// 10.88.0.2 against a server endpoint on serverPort.
+func upstreamClient(t *testing.T, server, client keyPair, serverPort uint16) *netstack.Net {
+	t.Helper()
+	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.88.0.2")}, nil, 1376)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := updevice.NewDevice(tunDevice, upconn.NewStdNetBind(), updevice.NewLogger(updevice.LogLevelSilent, ""))
+	config := fmt.Sprintf("private_key=%s\npublic_key=%s\nendpoint=127.0.0.1:%d\nallowed_ip=0.0.0.0/0\npersistent_keepalive_interval=1",
+		hexKey(t, client.private), hexKey(t, server.public), serverPort)
+	if err := upstream.IpcSet(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstream.Up(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(upstream.Close)
+	return tnet
+}
+
+// udpEcho answers each datagram sent to it on 127.0.0.1 with "echo " and the datagram.
+func udpEcho(t *testing.T) uint16 {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buffer := make([]byte, 2048)
+		for {
+			n, from, err := conn.ReadFrom(buffer)
+			if err != nil {
+				return
+			}
+			conn.WriteTo(append([]byte("echo "), buffer[:n]...), from)
+		}
+	}()
+	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
+}
+
+// udpExchange sends a datagram from socket to the server's tunnel address on port and returns the
+// reply that comes back from there, or false if none arrives within about attempts seconds.
+func udpExchange(socket net.PacketConn, port uint16, attempts int) (string, bool) {
+	target := &net.UDPAddr{IP: net.IPv4(10, 88, 0, 1), Port: int(port)}
+	buffer := make([]byte, 2048)
+	for attempt := 0; attempt < attempts; attempt++ {
+		if _, err := socket.WriteTo([]byte(fmt.Sprint("to ", port)), target); err != nil {
+			return "", false
+		}
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			socket.SetReadDeadline(deadline)
+			n, from, err := socket.ReadFrom(buffer)
+			if err != nil {
+				continue
+			}
+			// Ignore a late reply to an earlier exchange on the same socket.
+			if address, ok := from.(*net.UDPAddr); ok && address.Port == int(port) {
+				return string(buffer[:n]), true
+			}
+		}
+	}
+	return "", false
+}
+
+// The route rules see every UDP destination, not only the first one a socket sends to. Otherwise
+// a client could send one allowed datagram and then reach blocked destinations, the server's
+// internal ranges included, from the same socket.
+func TestServerJudgesEveryUDPDestination(t *testing.T) {
+	server, client := newKeyPair(t), newKeyPair(t)
+	serverPort := freePort(t, "udp")
+	allowed, blocked, other := udpEcho(t), udpEcho(t), udpEcho(t)
+	rules := fmt.Sprintf(`{"port":[%d],"action":"reject"}`, blocked)
+	startBox(t, serverConfig(server, serverPort, rules, []string{peerJSON("alice", client, "10.88.0.2/32")}, nil))
+	tnet := upstreamClient(t, server, client, serverPort)
+	socket, err := tnet.ListenUDPAddrPort(netip.AddrPortFrom(netip.MustParseAddr("10.88.0.2"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	if reply, ok := udpExchange(socket, allowed, 6); reply != fmt.Sprint("echo to ", allowed) {
+		t.Fatalf("no UDP through the server: %q %v", reply, ok)
+	}
+	if reply, ok := udpExchange(socket, blocked, 2); ok {
+		t.Fatalf("a datagram to a blocked port passed after an allowed one from the same socket: %q", reply)
+	}
+	if reply, ok := udpExchange(socket, other, 3); reply != fmt.Sprint("echo to ", other) {
+		t.Fatalf("a second allowed destination from the same socket got no answer: %q %v", reply, ok)
+	}
+}
+
+// validate builds an engine from config without starting it and closes it again, as the server
+// does with each new configuration before it replaces the running engine.
+func validate(t *testing.T, config string) error {
+	t.Helper()
+	ctx := testContext()
+	options, err := boxjson.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		return err
+	}
+	return instance.Close()
+}
+
+// noGoroutinesLeft fails the test if more goroutines run than before (with a little slack),
+// once earlier work has had a moment to wind down.
+func noGoroutinesLeft(t *testing.T, before int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("%s left %d more goroutines running", what, after-before)
+	}
+}
+
+// sing-box closes only what has started, so validating a configuration must leave nothing
+// running.
+func TestUnstartedEndpointLeavesNothingRunning(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := serverConfig(server, freePort(t, "udp"), "", []string{peerJSON("alice", alice, "10.88.0.2/32")}, nil)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 10; i++ {
+		if err := validate(t, config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	noGoroutinesLeft(t, before, "validating a configuration 10 times")
+}
+
+// The server restarts its engine on every change, so an engine that started and closed must
+// leave nothing running either, amneziawg-go's event reader included.
+func TestClosedEngineLeavesNothingRunning(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := serverConfig(server, freePort(t, "udp"), "", []string{peerJSON("alice", alice, "10.88.0.2/32")}, nil)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		startBox(t, config).Close()
+	}
+	noGoroutinesLeft(t, before, "starting and closing an engine 5 times")
+}
+
+// Validation still refuses the one thing the userspace stack would only refuse at start.
+func TestRepeatedAddressFailsValidation(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := fmt.Sprintf(`{"endpoints":[{"type":"amneziawg","tag":"srv","address":["10.88.0.1/24","10.88.0.1/32"],
+	  "private_key":%q,"listen_port":%d,"peers":[%s]}]}`, server.private, freePort(t, "udp"), peerJSON("alice", alice, "10.88.0.2/32"))
+	if validate(t, config) == nil {
+		t.Fatal("a configuration that repeats an address passed validation")
+	}
+}
+
+// preMatchRecorder is a router that only records what pre-match is asked.
+type preMatchRecorder struct {
+	adapter.Router
+	metadata adapter.InboundContext
+}
+
+func (r *preMatchRecorder) PreMatch(metadata adapter.InboundContext, _ []byte) adapter.PreMatchResult {
+	r.metadata = metadata
+	return adapter.PreMatchResult{Action: adapter.PreMatchContinue}
+}
+
+// UDP and ICMP flows are pre-matched before they are routed, so the peer's user must come along
+// for auth_user rules to match there.
+func TestPreMatchCarriesThePeerUser(t *testing.T) {
+	router := &preMatchRecorder{}
+	server := &Endpoint{
+		Adapter:        endpoint.NewAdapter(Type, "srv", []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, nil),
+		router:         router,
+		options:        Options{ListenPort: 51820},
+		localAddresses: []netip.Prefix{netip.MustParsePrefix("10.88.0.1/24")},
+		users:          map[netip.Addr]string{netip.MustParseAddr("10.88.0.2"): "alice"},
+	}
+	for _, network := range []uint8{uint8(header.UDPProtocolNumber), uint8(header.ICMPv4ProtocolNumber)} {
+		router.metadata = adapter.InboundContext{}
+		server.JudgeFlow(network, netip.MustParseAddrPort("10.88.0.2:40000"), netip.MustParseAddrPort("192.0.2.1:53"), []byte{0})
+		if router.metadata.User != "alice" || router.metadata.Inbound != "srv" {
+			t.Fatalf("protocol %d was pre-matched for user %q from inbound %q", network, router.metadata.User, router.metadata.Inbound)
+		}
 	}
 }
 

@@ -73,13 +73,24 @@ func (m *Monitor) Stats(state *State, rangeName, tag string, now time.Time) (Sta
 	result := StatsResult{Range: rangeName, Unit: spec.unit, SiteStats: state.Monitor.SiteStats}
 	result.Retention.HistoryDays = state.Monitor.historyDays()
 	result.Retention.SiteDays = state.Monitor.siteDays()
-	result.Retention.HistoryMaxMB = state.Monitor.historyMaxBytes() >> 20
+	result.Retention.HistoryMaxMB = state.Monitor.historyMaxMB()
 	from := now.Add(-spec.span)
 	include := func(user string) bool { return tag == "" || user == tag }
 	series := map[int64]*Bucket{}
 	types, protocols, sites := map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
 	perUser := map[string]*userTotal{}
+	addUser := func(user string, up, down uint64) {
+		total := perUser[user]
+		if total == nil {
+			total = &userTotal{}
+			perUser[user] = total
+		}
+		total.Up += up
+		total.Down += down
+	}
 	m.readHistory(func(h *History) {
+		// Hour ranges total each user over the hours of the chart; day buckets would add the
+		// whole of the first day, up to twice the range.
 		if spec.unit == "hour" {
 			for user, hours := range h.Hourly {
 				if !include(user) {
@@ -96,6 +107,7 @@ func (m *Monitor) Stats(state *State, rangeName, tag string, now time.Time) (Sta
 					}
 					entry.Up += b.Up
 					entry.Down += b.Down
+					addUser(user, b.Up, b.Down)
 				}
 			}
 		}
@@ -115,6 +127,7 @@ func (m *Monitor) Stats(state *State, rangeName, tag string, now time.Time) (Sta
 					}
 					entry.Up += d.Up
 					entry.Down += d.Down
+					addUser(user, d.Up, d.Down)
 				}
 				for label, n := range d.Types {
 					types[label] += n
@@ -127,13 +140,6 @@ func (m *Monitor) Stats(state *State, rangeName, tag string, now time.Time) (Sta
 						sites[label] += n
 					}
 				}
-				total := perUser[user]
-				if total == nil {
-					total = &userTotal{}
-					perUser[user] = total
-				}
-				total.Up += d.Up
-				total.Down += d.Down
 			}
 		}
 	})

@@ -52,7 +52,8 @@ grep -Eq '^readonly=true drop=\[ALL\] add=\[[A-Z_ ]+\] user=0:[0-9]+ net=host nn
 added=$(sed -n 's/.* add=\[\([^]]*\)\].*/\1/p' "$work/container.txt" | tr ' ' '\n' | sed 's/^CAP_//' | sort | tr '\n' ' ')
 test "$added" = "NET_ADMIN NET_BIND_SERVICE NET_RAW " || fail "unexpected capabilities: $added"
 test "$(stat -c %a "$state/ipsec")" = 770
-test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 && test -f /etc/sysctl.d/90-ghostlink-ipsec.conf
+test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
+test -f /etc/sysctl.d/90-ghostlink-ipsec.conf
 
 key=$(ghostlink-server show-key | grep '^{')
 url=$(echo "$key" | jq -r .apiUrl)
@@ -70,6 +71,12 @@ for spec in ikev2-eap:ikev2:eap ikev2-cert:ikev2:certificate ipsec-cert:ipsec:ce
     curl -sk --fail --max-time 60 -o "$work/$name.mobileconfig" -w '%{content_type}\n' "$url/users/$user/keys/${key_id[$name]}/profile" | grep -qx 'application/x-apple-aspen-config'
 done
 api POST "/users/$user/keys" '{"protocol":"ipsec","auth":"psk"}' | jq -e '.warning | test("weak")' >/dev/null
+# A name that starts with a character no IKE identity can start with must still give a valid
+# identity. The agent refuses a whole settings file for one bad identity.
+odd=$(api POST /users '{"name":"_odd name"}' | jq -r .id)
+api POST "/users/$odd/keys" '{"protocol":"ikev2"}' >/dev/null
+jq -e '.allowed | any(test("^odd-name-[0-9]+@ghostlink$"))' "$state/ipsec/desired.json" >/dev/null ||
+    fail "no valid identity for a user named _odd name: $(jq -c .allowed "$state/ipsec/desired.json")"
 
 step "Client configuration from the profiles"
 python3 "$here/client_config.py" "$work/client" \
@@ -110,6 +117,9 @@ for i in $(seq 1 20); do docker exec glclient swanctl --stats >/dev/null 2>&1 &&
 docker exec glclient swanctl --load-all --noprompt
 
 swan() { docker exec glclient swanctl "$@"; }
+# How many sessions are up. grep -c reads all its input; with "grep -q" the writer can be killed
+# by SIGPIPE and, under pipefail, a session that is still up would look like none.
+established() { swan --list-sas | grep -c ESTABLISHED || true; }
 api_port=$(echo "$url" | sed 's|https://[^:]*:\([0-9]*\)/.*|\1|')
 check_tunnel() { # NAME GATEWAY
     in_client curl -s --max-time 8 http://198.51.100.10:8080/ | grep -q ghostlink-ok || fail "$1: no internet through the tunnel"
@@ -151,8 +161,8 @@ refused ikev2-wrong "wrong password"
 connect ikev2-eap
 api PATCH "/users/$user" '{"enabled":false}' >/dev/null
 wait_applied
-for i in $(seq 1 15); do swan --list-sas | grep -q ESTABLISHED || break; sleep 1; done
-swan --list-sas | grep -q ESTABLISHED && fail "a disabled user's session was not ended"
+for i in $(seq 1 15); do [ "$(established)" != 0 ] || break; sleep 1; done
+[ "$(established)" = 0 ] || fail "a disabled user's session was not ended"
 refused ikev2-cert "certificate of a disabled user (on hold)"
 refused ipsec-psk "disabled user"
 api PATCH "/users/$user" '{"enabled":true}' >/dev/null
@@ -212,15 +222,21 @@ echo "$stats" | jq -e 'any(.protocols[]; .label == "ikev2" and .bytes > 0) and a
     fail "statistics lack IKEv2/IPsec traffic: $stats"
 api PATCH "/users/$user" "{\"data_limit_bytes\":$used}" >/dev/null
 in_client curl -s --max-time 5 -o /dev/null http://198.51.100.10:8080/ || true
-for i in $(seq 1 40); do swan --list-sas | grep -q ESTABLISHED || break; sleep 2; done
-swan --list-sas | grep -q ESTABLISHED && fail "an over-limit user stayed connected"
+for i in $(seq 1 40); do [ "$(established)" != 0 ] || break; sleep 2; done
+[ "$(established)" = 0 ] || fail "an over-limit user stayed connected"
 api GET "/users/$user" | jq -e .over_limit >/dev/null
 
 step "No secrets in logs"
-for name in ikev2-eap ipsec-psk; do
-    secret=$(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); v=[x for x in p["PayloadContent"] if x["PayloadType"]=="com.apple.vpn.managed"][0]; s=v[v["VPNType"]]; print(s.get("AuthPassword") or s.get("XAuthPassword"))' "$work/$name.mobileconfig")
-    if docker logs ghostlink-ipsec 2>&1 | grep -qF "$secret"; then fail "the agent logged a password"; fi
-done
+# The log goes to a file first. With "docker logs | grep -q" under pipefail, grep stops at the
+# first match, docker is then killed by SIGPIPE and the pipeline "fails": a leaked secret that
+# is followed by more log lines would pass. Every secret the profiles carry is checked: EAP and
+# XAuth passwords, the group key and the certificate passwords.
+docker logs ghostlink-ipsec >"$work/agent.log" 2>&1
+secrets=$(python3 "$here/profile_secrets.py" "$work"/*.mobileconfig)
+[ "$(echo "$secrets" | grep -c .)" -ge 7 ] || fail "found too few secrets in the profiles to check the logs for"
+while IFS= read -r secret; do
+    if grep -qF -- "$secret" "$work/agent.log"; then fail "the agent logged a secret"; fi
+done <<<"$secrets"
 
 step "Disable: the host is left clean"
 ghostlink-server ipsec disable

@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
 };
@@ -37,6 +37,49 @@ pub async fn worker_available(executable: &Path) -> bool {
     command.creation_flags(0x08000000);
     matches!(tokio::time::timeout(Duration::from_secs(5), command.output()).await,
         Ok(Ok(output)) if output.status.success() && output.stdout == format!("{WORKER_VERSION}\n").as_bytes())
+}
+
+/// One status line from the worker (`started`, `failed` or `closed`).
+#[derive(Deserialize)]
+struct Event {
+    event: String,
+    #[serde(default)]
+    vpn_ip: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+impl Event {
+    /// A failure after which the worker could not confirm that the engine removed its routes,
+    /// filters and DNS settings.
+    fn cleanup_failed(&self) -> bool {
+        self.event == "failed"
+            && matches!(
+                self.code.as_deref(),
+                Some(
+                    "engine_close_failed" | "engine_close_timeout" | "engine_start_cancel_timeout"
+                )
+            )
+    }
+}
+
+/// Reads the worker's remaining status lines until it closes them (it exits) and reports
+/// whether one was a cleanup failure. `frame` may hold a line the session loop started reading.
+async fn reported_cleanup_failure<R: AsyncBufRead + Unpin>(
+    logs: &mut R,
+    frame: &mut Vec<u8>,
+) -> bool {
+    let mut failed = false;
+    loop {
+        match logs.read_until(b'\n', frame).await {
+            Ok(0) | Err(_) => return failed,
+            Ok(_) => {}
+        }
+        if frame.len() <= 4096 {
+            failed |= serde_json::from_slice::<Event>(frame).is_ok_and(|e| e.cleanup_failed());
+        }
+        frame.clear();
+    }
 }
 
 /// The sing-box outbound (Shadowsocks, VLESS) or endpoint (WireGuard, AmneziaWG) for a credential.
@@ -128,7 +171,7 @@ pub fn config_with_direct(
         let mut tun = json!({"type":"tun","tag":"ghostlink-tun","interface_name":"Ghostlink","address":["172.28.85.1/30","fdfe:85:85::1/126"],"auto_route":true,"strict_route":true,"dns_mode":"hijack","mtu":1500,"stack":"mixed"});
         // A WireGuard profile with limited AllowedIPs routes only those prefixes into the TUN.
         if let Outbound::WireGuard(config) = outbound {
-            if !config.full_tunnel() {
+            if !config.routes_everything() {
                 tun["route_address"] = json!(config.peer.allowed_ips);
             }
         }
@@ -168,13 +211,20 @@ pub fn config_with_direct(
         // Bound to the physical interface by auto_detect_interface, like the tunnel's own sockets.
         outbounds.push(json!({"type":"direct","tag":"direct"}));
     }
-    let mut rules = vec![
+    let mut rules = vec![];
+    if endpoint_json.is_some() {
+        // A WireGuard or AmneziaWG endpoint is an inbound too. A flow its far side starts (the
+        // server, or a peer the server forwards) would otherwise be routed like this device's own
+        // traffic: to its loopback, its LAN in bypass or LAN-direct setups, or out to the internet.
+        rules.push(json!({"inbound":PROXY_TAG,"action":"reject"}));
+    }
+    rules.extend([
         // Learn site names (TLS SNI, HTTP Host, QUIC) and DNS for the rules below.
         json!({"action":"sniff"}),
         // The health probe must always test the tunnel, even when "only" mode sends the
         // rest of the traffic direct; otherwise a dead tunnel could be reported as connected.
         json!({"inbound":"health-proxy","outbound":PROXY_TAG}),
-    ];
+    ]);
     rules.extend(direct_rules);
     rules.extend([
         json!({"inbound":"ghostlink-tun","ip_version":6,"action":"reject"}),
@@ -306,8 +356,6 @@ pub async fn start(
                 _ = &mut deadline, if !connected_once => { reason = Some("outline_server_unreachable_or_key_rejected"); break; }
                 result = logs.read_until(b'\n', &mut frame) => {
                     match result { Ok(0) | Err(_) => { reason = Some("outline_engine_exited_check_service_permissions"); break; }, _ => {} }
-                    #[derive(Deserialize)]
-                    struct Event { event: String, #[serde(default)] vpn_ip: Option<String>, #[serde(default)] code: Option<String> }
                     if frame.len() > 4096 { reason = Some("outline_engine_protocol_error"); break; }
                     let event = serde_json::from_slice::<Event>(&frame); frame.clear();
                     match event {
@@ -318,7 +366,7 @@ pub async fn start(
                             initialized = true;
                         }
                         Ok(event) if event.event == "failed" => {
-                            reason = Some(if matches!(event.code.as_deref(), Some("engine_close_failed" | "engine_close_timeout" | "engine_start_cancel_timeout")) { "network_cleanup_unverified" } else { "outline_engine_start_failed_check_permissions_or_driver" }); break;
+                            reason = Some(if event.cleanup_failed() { "network_cleanup_unverified" } else { "outline_engine_start_failed_check_permissions_or_driver" }); break;
                         }
                         _ => { reason = Some("outline_engine_protocol_error"); break; }
                     }
@@ -372,9 +420,17 @@ pub async fn start(
         let _ = control.write_all(b"{\"command\":\"stop\"}\n").await;
         let _ = control.shutdown().await;
         drop(control);
-        match tokio::time::timeout(Duration::from_secs(12), child.wait()).await {
-            Ok(Ok(status)) if status.success() => {}
-            Ok(_) => {
+        // Keep reading events until the worker exits. A stop, the deadline or the worker's own
+        // exit can end the loop above while it is still starting, and the cleanup failure it
+        // reports on the way out would otherwise go unnoticed.
+        let exit = async {
+            let cleanup_failed = reported_cleanup_failure(&mut logs, &mut frame).await;
+            (cleanup_failed, child.wait().await)
+        };
+        match tokio::time::timeout(Duration::from_secs(12), exit).await {
+            Ok((true, _)) => reason = Some("network_cleanup_unverified"),
+            Ok((false, Ok(status))) if status.success() => {}
+            Ok((false, _)) => {
                 if initialized {
                     reason = Some("network_cleanup_unverified");
                 }
@@ -459,5 +515,84 @@ mod tests {
             .unwrap()
             .iter()
             .any(|o| o["tag"] == "direct"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_failures_reported_while_stopping_are_noticed() {
+        // The session loop may have stopped in the middle of the line.
+        let mut frame = b"{\"event\":\"fai".to_vec();
+        let mut rest: &[u8] = b"led\",\"code\":\"engine_close_failed\"}\n";
+        assert!(reported_cleanup_failure(&mut rest, &mut frame).await);
+        let mut later: &[u8] =
+            b"{\"event\":\"closed\"}\n{\"event\":\"failed\",\"code\":\"engine_start_cancel_timeout\"}\n";
+        assert!(reported_cleanup_failure(&mut later, &mut Vec::new()).await);
+        for lines in [
+            &b"{\"event\":\"closed\"}\n"[..],
+            b"{\"event\":\"failed\",\"code\":\"engine_start_failed_check_permissions\"}\n",
+            b"{\"event\":\"started\",\"code\":\"engine_close_failed\"}\nnot json\n",
+            b"",
+        ] {
+            let mut reader = lines;
+            assert!(!reported_cleanup_failure(&mut reader, &mut Vec::new()).await);
+        }
+    }
+
+    #[test]
+    fn endpoints_refuse_flows_their_far_side_starts() {
+        let wireguard = crate::wireguard::parse("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 10.8.1.2/32\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n").unwrap();
+        let through_endpoint = config(
+            &Outbound::WireGuard(wireguard),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+        );
+        assert_eq!(
+            through_endpoint["route"]["rules"][0],
+            json!({"inbound":PROXY_TAG,"action":"reject"})
+        );
+        // Shadowsocks and VLESS are outbounds only: nothing arrives through them, so no rule.
+        let key = AccessKey::parse("ss://aes-256-gcm:test-only@192.0.2.10:8388").unwrap();
+        let through_outbound = config(
+            &Outbound::Shadowsocks(key),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+        );
+        assert_eq!(
+            through_outbound["route"]["rules"][0],
+            json!({"action":"sniff"})
+        );
+    }
+
+    #[test]
+    fn wireguard_tun_routes_follow_allowed_ips() {
+        let conf = |allowed: &str| {
+            crate::wireguard::parse(&format!("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 10.8.1.2/32\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = 203.0.113.5:51820\nAllowedIPs = {allowed}\n")).unwrap()
+        };
+        let tun = |allowed: &str| {
+            let config = config(
+                &Outbound::WireGuard(conf(allowed)),
+                1,
+                2,
+                "secret",
+                true,
+                &RoutingPolicy::default(),
+            );
+            config["inbounds"][1].clone()
+        };
+        assert!(tun("0.0.0.0/0, ::/0").get("route_address").is_none());
+        // Split into halves it is a full tunnel, but the TUN still takes exactly those routes.
+        assert_eq!(
+            tun("0.0.0.0/1, 128.0.0.0/1")["route_address"],
+            json!(["0.0.0.0/1", "128.0.0.0/1"])
+        );
+        assert_eq!(
+            tun("192.168.1.0/24")["route_address"],
+            json!(["192.168.1.0/24"])
+        );
     }
 }

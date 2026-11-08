@@ -342,8 +342,25 @@ func (m *Monitor) SaveHistory(path string, now time.Time, settings MonitorSettin
 	return len(data), writeFile(path, data)
 }
 
-// Forget removes a deleted user's recorded traffic.
+// Forget removes a deleted user: the counters and connecting addresses not yet flushed (the
+// next Flush would write them back into the history), and the recorded traffic.
 func (m *Monitor) Forget(tag string) {
+	m.mu.Lock()
+	for _, values := range []map[string]int64{m.lastUp, m.lastDown, m.flushedUp, m.flushedDn} {
+		delete(values, tag)
+	}
+	delete(m.users, tag)
+	delete(m.rates, tag)
+	delete(m.clients, tag)
+	delete(m.sites, tag)
+	for key := range m.detail {
+		if key.user == tag {
+			delete(m.detail, key)
+			delete(m.flushedDet, key)
+			delete(m.siteMark, key)
+		}
+	}
+	m.mu.Unlock()
 	m.historyMu.Lock()
 	m.history.forget(tag)
 	m.historyMu.Unlock()
@@ -359,7 +376,7 @@ func (m *Monitor) readHistory(fn func(*History)) {
 // --- low-disk guard ---
 
 const (
-	minFreeBytes   = 500 << 20
+	minFreeBytes   = 500_000_000
 	minFreePercent = 5
 )
 

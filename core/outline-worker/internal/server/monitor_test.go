@@ -130,6 +130,19 @@ func TestMonitoringEndToEnd(t *testing.T) {
 	if seen["Alice"] != "shadowsocks 127.0.0.1" || seen["Bob"] != "wireguard 127.0.0.1" {
 		t.Fatalf("client addresses: %+v", clients.Clients)
 	}
+	// The peer poll reads Bob's receive counter, which shows whether he is still sending.
+	server.service.pollPeers(time.Now())
+	monitor.mu.Lock()
+	var bobRx uint64
+	for id, rx := range monitor.peerRx {
+		if strings.HasPrefix(id, WireGuard+"/") {
+			bobRx = rx
+		}
+	}
+	monitor.mu.Unlock()
+	if bobRx == 0 {
+		t.Fatal("the peer poll did not record Bob's WireGuard receive counter")
+	}
 
 	// Saved history is reloaded by a new monitor.
 	server.service.SaveHistory(time.Now())
@@ -420,5 +433,72 @@ func TestAddressPools(t *testing.T) {
 	}
 	if pools[0].Protocol != AmneziaWG || pools[0].Used != 0 || pools[0].Next != "10.78.0.2" {
 		t.Fatalf("amneziawg pool: %+v", pools[0])
+	}
+}
+
+// Site labels are real DNS names: what a client sends as a TLS SNI or HTTP Host is unchecked
+// and can be tens of kilobytes long, and every label is kept in memory and in the history.
+func TestSiteLabelsAreRealNames(t *testing.T) {
+	long := strings.Repeat("a", 60_000)
+	for domain, want := range map[string]string{
+		"www.youtube.com": "YouTube", "news.example.co.uk": "example.co.uk", "router": "router", "203.0.113.5": "",
+		long: otherSites, long + ".example.com": otherSites, "bad-.example.com": otherSites, "ex ample.com": otherSites,
+	} {
+		if got := labelFor(domain); got != want {
+			t.Errorf("label for %.40q: %.40q, want %q", domain, got, want)
+		}
+	}
+}
+
+// Site counters that count nothing for a whole day are forgotten (the history keeps what they
+// counted); others stay.
+func TestIdleSiteCountersAreForgotten(t *testing.T) {
+	m := NewMonitor()
+	m.SetSiteStats(true)
+	day := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	m.Sample(day)
+	idleKey, busyKey := detailKey{"u1", "site", "idle.example"}, detailKey{"u1", "site", "busy.example"}
+	idle, busy := m.detailCounter(idleKey), m.detailCounter(busyKey)
+	idle.Add(100)
+	busy.Add(100)
+	m.Flush(day)
+	m.Sample(day.Add(24 * time.Hour))
+	busy.Add(50)
+	m.Flush(day.Add(25 * time.Hour))
+	m.Sample(day.Add(48 * time.Hour))
+	m.mu.Lock()
+	_, idleKept := m.detail[idleKey]
+	_, busyKept := m.detail[busyKey]
+	m.mu.Unlock()
+	if idleKept || !busyKept {
+		t.Fatalf("after a day: idle counter kept %v, busy counter kept %v", idleKept, busyKept)
+	}
+	m.readHistory(func(h *History) {
+		if sites := h.Daily["u1"][0].Sites; sites["idle.example"] != 100 {
+			t.Fatalf("the history lost a forgotten counter's total: %v", sites)
+		}
+	})
+}
+
+// The per-client totals of the hour ranges cover the same hours as the chart, not the whole
+// first day as well.
+func TestHourRangeTotalsCoverTheRangeOnly(t *testing.T) {
+	m := NewMonitor()
+	now := time.Date(2026, 11, 6, 23, 0, 0, 0, time.UTC)
+	m.history.addTraffic("u1", now.Add(-30*time.Hour), 1_000_000, 0) // yesterday, before the last 24 hours
+	m.history.addTraffic("u1", now.Add(-time.Hour), 100, 200)
+	state := &State{Users: []*User{{ID: "1", Name: "Alice"}}}
+	for rangeName, want := range map[string]uint64{"24h": 100, "7d": 1_000_100, "30d": 1_000_100} {
+		result, err := m.Stats(state, rangeName, "", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var series uint64
+		for _, b := range result.Series {
+			series += b.Up
+		}
+		if len(result.Users) != 1 || result.Users[0].Up != want || series != want {
+			t.Errorf("%s: client total %+v, chart %d, want %d", rangeName, result.Users, series, want)
+		}
 	}
 }

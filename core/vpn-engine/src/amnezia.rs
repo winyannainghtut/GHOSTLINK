@@ -141,7 +141,7 @@ pub fn decode(value: &str) -> Result<AmneziaKey> {
             && document.get("api_config").is_none(),
         "Amnezia subscription (API) keys are not supported"
     );
-    let label = Some(text(&document["description"])).filter(|l| crate::outline::valid_label(l));
+    let label = crate::outline::key_label(&text(&document["description"]));
     let containers = document["containers"]
         .as_array()
         .context("vpn:// key lists no servers")?;

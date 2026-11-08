@@ -53,6 +53,12 @@ func (l *Live) config(n *Network, node *Node, now time.Time) (*meshproto.Config,
 		c.Routes = append(c.Routes, other.ApprovedRoutes...)
 		if relay != nil && other != relay && node != relay && l.relayed(node, other) {
 			relayed = append(relayed, allowed)
+			// A probe: the other node as a peer without addresses. Its traffic stays on the relay,
+			// while a handshake on the probe shows that the two can connect directly again.
+			if endpoint := l.endpoint(node, other); endpoint != "" || l.endpoint(other, node) != "" {
+				c.Peers = append(c.Peers, meshproto.Peer{Name: other.Name, PublicKey: other.PublicKey, Endpoint: endpoint,
+					AllowedIPs: []string{}, Keepalive: keepalive})
+			}
 			continue
 		}
 		c.Peers = append(c.Peers, meshproto.Peer{

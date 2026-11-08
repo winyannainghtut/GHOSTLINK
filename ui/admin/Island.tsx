@@ -2,15 +2,14 @@
 // protocol with its own switch: the server's equivalent of pausing or resuming the tunnel.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { megabytes } from '@shared/format';
-import { Switch, cx, useUI } from '@shared/glass';
+import { LiveRates, Switch, cx, useUI } from '@shared/glass';
 import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, type ProtocolId, type Server } from './api';
 import { useStore } from './store';
 
 const ORDER: ProtocolId[] = ['amneziawg', 'wireguard', 'vless', 'shadowsocks', 'ikev2', 'ipsec'];
 
 export function Island() {
-  const { server, live, setServer } = useStore();
+  const { server, live, stale, setServer } = useStore();
   const { toast, confirm } = useUI();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -76,16 +75,20 @@ export function Island() {
         onClick={() => setOpen(!open)}
         className="flex h-10 items-center gap-2.5 rounded-full bg-black px-4 text-[12.5px] text-white shadow-[0_10px_30px_-12px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.12)] transition-all duration-500 hover:px-5"
       >
-        <span className={cx('relative inline-flex size-2', active ? 'text-[#30d158]' : 'text-white/40')}>
-          {active && <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-50 motion-reduce:animate-none" />}
+        <span className={cx('relative inline-flex size-2', stale ? 'text-[#ff6961]' : active ? 'text-[#30d158]' : 'text-white/40')}>
+          {active && !stale && <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-50 motion-reduce:animate-none" />}
           <span className="relative size-2 rounded-full bg-current" />
         </span>
-        <span className="font-medium">{active ? 'Live' : 'Paused'}</span>
-        <span className="text-white/45">·</span>
-        <span className="num text-white/80">{live ? `${live.online_users} online` : '—'}</span>
-        <span className="num hidden text-white/55 sm:inline">
-          ↓ {megabytes(live?.down_bps ?? 0)} ↑ {megabytes(live?.up_bps ?? 0)} MB/s
-        </span>
+        {stale ? (
+          <span className="font-medium">Server not answering</span>
+        ) : (
+          <>
+            <span className="font-medium">{active ? 'Live' : 'Paused'}</span>
+            <span className="text-white/45">·</span>
+            <span className="num text-white/80">{live ? `${live.online_users} online` : '—'}</span>
+            <LiveRates down={live?.down_bps ?? 0} up={live?.up_bps ?? 0} className="hidden text-white/55 sm:inline-flex" />
+          </>
+        )}
       </button>
       {open && anchor && createPortal(
         <div ref={panel} style={{ top: anchor.top, left: anchor.left }} className="glass-strong fixed z-40 w-[340px] -translate-x-1/2 rounded-[28px] p-3 animate-[sheet-in_0.25s_cubic-bezier(0.2,0.9,0.25,1)]">
@@ -94,13 +97,15 @@ export function Island() {
             {ORDER.map(p => {
               const info = server.protocols[p];
               const apple = APPLE.includes(p);
-              const unavailable = apple && !server.ipsec_component.running && !info?.enabled;
+              const unavailable = apple && !server.ipsec_component?.running && !info?.enabled;
+              // Keys imported from Outline can keep their own Shadowsocks ports.
+              const ports = [info?.port, ...(p === 'shadowsocks' ? (server.shadowsocks_extra_ports ?? []) : [])].join(', ');
               return (
                 <li key={p} className="flex items-center gap-3 rounded-[20px] px-3 py-2 hover:bg-glass">
                   <div className="min-w-0 flex-1">
                     <div className="text-[13.5px] text-fg">{PROTOCOLS[p]}</div>
                     <div className="truncate text-[11.5px] text-fg-3">
-                      {apple ? (unavailable ? 'Needs the IPsec component' : 'UDP 500 and 4500') : <span className="mono">{p === 'vless' ? 'TCP' : p === 'shadowsocks' ? 'TCP+UDP' : 'UDP'} {info?.port}</span>}
+                      {apple ? (unavailable ? 'Needs the IPsec component' : 'UDP 500 and 4500') : <span className="mono">{p === 'vless' ? 'TCP' : p === 'shadowsocks' ? 'TCP+UDP' : 'UDP'} {ports}</span>}
                       {!apple && ` · ${PROTOCOL_HINTS[p]}`}
                     </div>
                   </div>

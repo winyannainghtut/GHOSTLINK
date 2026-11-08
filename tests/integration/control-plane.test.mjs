@@ -27,14 +27,17 @@ let daemon;
 let daemonErrors = '';
 let profile;
 
-function cli(args, expected = 0) {
+// `killAfter` (ms) stops a CLI that would otherwise hang the suite.
+function cli(args, expected = 0, { killAfter } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(path.join(bin, `ghostlink${suffix}`), ['--endpoint', endpoint, '--json', ...args], { windowsHide: true });
+    const guard = killAfter && setTimeout(() => child.kill(), killAfter);
     let stdout = '', stderr = '';
     child.stdout.on('data', data => stdout += data);
     child.stderr.on('data', data => stderr += data);
     child.on('error', reject);
     child.on('close', code => {
+      clearTimeout(guard);
       try {
         assert.equal(code, expected, `exit mismatch: ${stdout} ${stderr}`);
         const response = JSON.parse(stdout);
@@ -55,9 +58,9 @@ function rpc(request) {
     socket.on('error', reject);
   });
 }
-async function start({ openvpn = engine } = {}) {
+async function start({ openvpn = engine, timeout = 3 } = {}) {
   daemonErrors = '';
-  daemon = spawn(path.join(bin, `ghostlinkd${suffix}`), ['--endpoint', endpoint, '--data-dir', state, '--openvpn', openvpn, '--outline-engine', outlineEngine, '--connection-timeout-seconds', '3'], { windowsHide: true });
+  daemon = spawn(path.join(bin, `ghostlinkd${suffix}`), ['--endpoint', endpoint, '--data-dir', state, '--openvpn', openvpn, '--outline-engine', outlineEngine, '--connection-timeout-seconds', String(timeout)], { windowsHide: true });
   daemon.stderr.on('data', data => daemonErrors += data);
   daemon.on('error', () => {});
   for (let i = 0; i < 80; i++) {
@@ -90,7 +93,8 @@ test('actual named-pipe / Unix IPC reports disconnected with a valid JSON schema
   assert.equal(r.data.status, 'disconnected'); assert.equal(r.data.vpn_ip, null);
 });
 test('import, list and default are persistent and contain no certificate secrets', async () => {
-  assert.equal((await cli(['profile', 'import', path.join(temp, 'singapore.ovpn')])).data.name, 'singapore');
+  const imported = (await cli(['profile', 'import', path.join(temp, 'singapore.ovpn')])).data;
+  assert.equal(imported.name, 'singapore'); assert.equal(imported.is_default, true, 'the first import became the default');
   const r = await cli(['profile', 'list']); assert.equal(r.data.profiles.length, 1); assert.equal(r.data.profiles[0].is_default, true);
   await cli(['profile', 'default', 'singapore']);
   const persisted = await fs.readFile(path.join(state, 'state.json'), 'utf8'); assert.ok(!persisted.includes('BEGIN PRIVATE KEY'));
@@ -110,7 +114,14 @@ test('profile path traversal and malformed certificate are rejected', async () =
   assert.equal((await rpc({schema_version: 1, action: {type: 'profile_import', name: 'badcert', content: profile.replace('BEGIN CERTIFICATE', 'BEGIN OTHER')}})).error.code, 'invalid_profile');
 });
 test('expired certificates are rejected at import', async () => {
-  execFileSync(openssl, ['x509', '-in', path.join(temp, 'client.crt'), '-signkey', path.join(temp, 'client.key'), '-days', '-1', '-out', path.join(temp, 'expired.crt')], { windowsHide: true, stdio: 'pipe' });
+  const resign = dates => execFileSync(openssl, ['x509', '-in', path.join(temp, 'client.crt'), '-signkey', path.join(temp, 'client.key'), ...dates, '-out', path.join(temp, 'expired.crt')], { windowsHide: true, stdio: 'pipe' });
+  try {
+    resign(['-days', '-1']);
+  } catch {
+    // OpenSSL 3.4 and later refuse negative days ("end date before start date") but can set the
+    // dates themselves; earlier versions have no such options.
+    resign(['-not_before', '20200101000000Z', '-not_after', '20200102000000Z']);
+  }
   const expired = await fs.readFile(path.join(temp, 'expired.crt'), 'utf8');
   const r = await rpc({schema_version: 1, action: {type: 'profile_import', name: 'expired', content: profile.replace(/<cert>[\s\S]*?<\/cert>/, `<cert>\n${expired}</cert>`)}});
   assert.equal(r.error.code, 'invalid_profile'); assert.match(r.error.message, /expired/);
@@ -122,6 +133,10 @@ test('32 concurrent status commands return valid real state', async () => {
 test('unknown schema and arbitrary command requests fail closed', async () => {
   assert.equal((await rpc({schema_version: 99, action: {type: 'status'}})).error.code, 'invalid_request');
   assert.equal((await rpc({schema_version: 1, action: {type: 'shell', command: 'whoami'}})).error.code, 'invalid_request');
+  // Actions and server operations without fields refuse extra keys as well.
+  for (const action of [{type: 'status', profile: 'x'}, {type: 'disconnect', force: true}, {type: 'server_call', server: 'home', op: {op: 'info', path: '/etc'}}]) {
+    assert.equal((await rpc({schema_version: 1, action})).error.code, 'invalid_request', JSON.stringify(action));
+  }
 });
 test('read-only agent token is explicit, scoped, audited and revocable', async () => {
   const tokenPath = path.join(temp, 'readonly.token');
@@ -132,6 +147,13 @@ test('read-only agent token is explicit, scoped, audited and revocable', async (
   assert.equal((await rpc({schema_version: 1, agent_token: token, action: {type: 'connect', profile: 'singapore'}})).error.code, 'permission_denied');
   assert.equal((await rpc({schema_version: 1, agent_token: token, action: {type: 'agent_grant', name: 'evil', control: true}})).error.code, 'permission_denied');
   const logs = await cli(['logs']); assert.ok(logs.data.entries.some(e => e.actor === 'agent:assistant')); assert.ok(!JSON.stringify(logs).includes(token));
+  // Granting again into the same file is refused before the grant is replaced, so the saved
+  // token keeps working.
+  assert.equal((await cli(['agent', 'grant', '--name', 'assistant', '--control', '--token-file', tokenPath], 2)).error.code, 'invalid_request');
+  assert.equal((await fs.readFile(tokenPath, 'utf8')).trim(), token);
+  // Names are exact: revoking one that has no grant is an error, and the real grant stays.
+  assert.equal((await cli(['agent', 'revoke', '--name', 'Assistant'], 2)).error.code, 'not_found');
+  assert.equal((await rpc({schema_version: 1, agent_token: token, action: {type: 'status'}})).success, true);
   await cli(['agent', 'revoke', '--name', 'assistant']);
   assert.equal((await rpc({schema_version: 1, agent_token: token, action: {type: 'status'}})).error.code, 'permission_denied');
 });
@@ -150,10 +172,23 @@ test('MCP advertises restricted tools and routes actual tool calls through the s
 });
 test('actual OpenVPN engine cannot manufacture success for an unavailable server', async t => {
   try { await fs.access(engine); } catch { t.skip('Standalone OpenVPN not installed'); return; }
-  const r = await cli(['connect', '--profile', 'singapore', '--timeout', '35'], 1);
-  assert.equal(r.error.code, 'connection_failed');
-  const state = (await cli(['status'])).data; assert.equal(state.status, 'failed'); assert.ok(state.last_error); assert.equal(state.vpn_ip, null);
-  await cli(['disconnect']); assert.equal((await cli(['status'])).data.status, 'disconnected');
+  // OpenVPN restarts after its server poll timeout (1 s) and then gives up (connect-retry-max 1).
+  // With a deadline far beyond that, the attempt must end with OpenVPN's own failure: a restart
+  // that waited in a management hold would only end at the deadline.
+  await stop(); await start({ timeout: 20 });
+  try {
+    const seen = new Set(); let done = false;
+    const watch = (async () => {
+      while (!done) { seen.add((await rpc({schema_version: 1, action: {type: 'status'}})).data.status); await new Promise(resolve => setTimeout(resolve, 100)); }
+    })();
+    const r = await cli(['connect', '--profile', 'singapore', '--timeout', '35'], 1);
+    done = true; await watch;
+    assert.equal(r.error.code, 'connection_failed');
+    const state = (await cli(['status'])).data; assert.equal(state.status, 'failed'); assert.ok(state.last_error); assert.equal(state.vpn_ip, null);
+    assert.notEqual(state.last_error, 'connection_timeout', 'OpenVPN waited for a hold release after its restart');
+    assert.ok(!seen.has('reconnecting'), `a first attempt is never reconnecting (seen: ${[...seen]})`);
+    await cli(['disconnect']); assert.equal((await cli(['status'])).data.status, 'disconnected');
+  } finally { await stop(); await start(); }
 });
 test('state survives a daemon restart without pretending a tunnel survived', async () => {
   await stop(); await start();
@@ -172,9 +207,15 @@ test('a failed autoconnect at startup keeps the service reachable and reports th
     await start({ openvpn: process.execPath });
     const status = (await cli(['status'])).data;
     assert.equal(status.status, 'failed'); assert.equal(status.last_error, 'autoconnect_failed'); assert.equal(status.vpn_ip, null);
+    // A refused attempt (here no OpenVPN at the configured path; at boot often a dynamic key
+    // whose host is not reachable yet) is reported the same way, and the audit names why.
+    await stop(); await start({ openvpn: path.join(temp, 'missing-openvpn.exe') });
+    const refused = (await cli(['status'])).data;
+    assert.equal(refused.status, 'failed'); assert.equal(refused.last_error, 'autoconnect_failed');
     assert.equal((await cli(['autoconnect', 'disable'])).data.autoconnect, false);
     const logs = (await cli(['logs'])).data.entries;
     assert.ok(logs.some(e => e.operation === 'autoconnect' && e.outcome === 'error'));
+    assert.ok(logs.some(e => e.operation === 'autoconnect' && e.outcome === 'engine_unavailable'));
   } finally {
     await stop(); await fs.rm(run, { force: true }); await start();
   }
@@ -215,15 +256,25 @@ test('Outline access keys import privately, rename, select default and remove th
   assert.equal((await cli(['profile','import',path.join(temp,'singapore.ovpn')], 2)).error.code, 'invalid_request');
   const renamed = await rpc({schema_version:1,action:{type:'profile_rename',name:'outline-singapore',display_name:'My Singapore'}}); assert.equal(renamed.data.display_name,'My Singapore');
   await cli(['profile','default','outline-singapore']);
-  await cli(['autoconnect','enable']); assert.equal((await cli(['info'])).data.autoconnect,true);
+  await cli(['autoconnect','enable']);
+  const info = (await cli(['info'])).data; assert.equal(info.autoconnect,true);
+  for (const kind of ['outline-compatible-shadowsocks','vless','wireguard','amneziawg','openvpn2-management']) assert.ok(info.engines.includes(kind), kind);
   await cli(['autoconnect','disable']);
   const metadata = await cli(['profile','list']); assert.ok(!JSON.stringify(metadata).includes(secret));
+  // A pipe that never closes cannot hold the CLI past --timeout (the suite never closes stdin).
+  assert.equal((await cli(['key','add','--name','never-closed','--stdin','--timeout','2'],5,{ killAfter: 20000 })).error.code,'timeout');
   if (process.env.GHOSTLINK_TEST_EXPECT_UNPRIVILEGED === '1') {
-    const failure = await cli(['connect','--profile','outline-singapore','--timeout','25'],1);
-    assert.equal(failure.error.code,'connection_failed');
-    const status = (await cli(['status'])).data;
-    assert.equal(status.status,'failed'); assert.equal(status.vpn_ip,null);
-    await cli(['disconnect']);
+    if (windows) {
+      const failure = await cli(['connect','--profile','outline-singapore','--timeout','25'],1);
+      assert.equal(failure.error.code,'connection_failed');
+      const status = (await cli(['status'])).data;
+      assert.equal(status.status,'failed'); assert.equal(status.vpn_ip,null);
+      await cli(['disconnect']);
+    } else {
+      // Linux refuses a full tunnel before any engine starts unless the administrator allowed it.
+      assert.equal((await cli(['connect','--profile','outline-singapore','--timeout','25'],3)).error.code,'permission_denied');
+      assert.equal((await cli(['status'])).data.status,'disconnected');
+    }
     await assert.rejects(fs.access(path.join(state,'run','outline.json')));
   }
   const logs = await cli(['logs']); assert.ok(!JSON.stringify(logs).includes(secret));
@@ -261,7 +312,15 @@ test('WireGuard, AmneziaWG, VLESS and Amnezia vpn:// keys import with strict val
   assert.match(fullAccess.error.message, /full-access/); assert.ok(!JSON.stringify(fullAccess).includes('ssh-secret-never-shown'));
   const listed = JSON.stringify(await cli(['profile', 'list']));
   assert.ok(!listed.includes(privateKey) && !listed.includes('8f3d2c1b-1a2b'));
-  if (windows) { assert.ok(!(await fs.readFile(path.join(state, 'state.json'), 'utf8')).includes(privateKey)); }
+  if (windows) {
+    const persisted = await fs.readFile(path.join(state, 'state.json'), 'utf8');
+    assert.ok(!persisted.includes(privateKey));
+    // Sealed content is stored as a list of numbers: decode it, or the check above cannot fail.
+    const profiles = JSON.parse(persisted).profiles;
+    for (const [name, secret] of [['wg-home', privateKey], ['awg-home', privateKey], ['vless-tokyo', '8f3d2c1b-1a2b']]) {
+      assert.ok(!Buffer.from(profiles[name].sealed_content).toString().includes(secret), `${name} is not sealed`);
+    }
+  }
   for (const name of ['wg-home', 'awg-home', 'vless-tokyo', 'amnezia-test']) await cli(['profile', 'remove', name]);
 });
 test('split tunneling policies validate, persist per scope and stay owner-only', async () => {
@@ -324,11 +383,19 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   const listed = await cli(['server', 'list']);
   assert.equal(listed.data.servers[0].name, 'home');
   assert.ok(!JSON.stringify(listed).includes(secret) && !JSON.stringify(listed).includes(management.certSha256));
-  if (windows) assert.ok(!(await fs.readFile(path.join(state, 'state.json'), 'utf8')).includes(secret));
+  if (windows) {
+    const persisted = await fs.readFile(path.join(state, 'state.json'), 'utf8');
+    assert.ok(!persisted.includes(secret));
+    // The sealed key is stored as a list of numbers: decode it, or the check above cannot fail.
+    assert.ok(!Buffer.from(JSON.parse(persisted).managed_servers.home.sealed_key).toString().includes(secret), 'the management key is not sealed');
+  }
 
   const alice = await cli(['server', 'users', 'add', '--server', 'home', '--name', 'Alice', '--data-limit-gb', '5']);
   assert.equal(alice.data.data_limit_bytes, 5e9);
   const user = alice.data.id;
+  // A delete is answered with no data, which is a success.
+  const temporary = await cli(['server', 'users', 'add', '--server', 'home', '--name', 'Temporary']);
+  assert.equal((await cli(['server', 'users', 'remove', '--server', 'home', '--user', temporary.data.id])).data, null);
   const imported = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'amneziawg', '--import', 'alice-awg']);
   assert.equal(imported.data.imported.kind, 'amneziawg'); assert.equal(imported.data.access_key, undefined);
   const vlessFile = path.join(temp, 'alice-vless.txt');
@@ -338,6 +405,10 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   const wgFile = path.join(temp, 'alice-wg.txt');
   await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'wireguard', '--output', wgFile]);
   assert.ok((await fs.readFile(`${wgFile}.conf`, 'utf8')).startsWith('[Interface]'));
+  // FILE.conf is checked before the server creates a key (the key count below stays 4).
+  const taken = path.join(temp, 'alice-awg.txt'); await fs.writeFile(`${taken}.conf`, 'kept');
+  assert.equal((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'amneziawg', '--output', taken], 2)).error.code, 'invalid_request');
+  await assert.rejects(fs.access(taken)); assert.equal(await fs.readFile(`${taken}.conf`, 'utf8'), 'kept');
   assert.equal((await cli(['profile', 'import', `${wgFile}.conf`, '--name', 'alice-wg'])).data.kind, 'wireguard');
   const printed = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'shadowsocks']);
   assert.ok(printed.data.access_key.startsWith('ss://') && printed.data.access_key.includes('outline=1'));
@@ -373,9 +444,6 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   assert.ok(kit.includes('<!doctype html>') && kit.includes('vless://') && kit.includes('<svg'));
   assert.equal((await cli(['server', 'set', '--server', 'home', '--site-stats', 'on', '--history-days', '60'])).data.site_stats, true);
   assert.equal((await cli(['server', 'info', '--server', 'home'])).data.history_days, 60);
-  for (const op of [{ op: 'live' }, { op: 'kit', user }, { op: 'key_profile', user, key: '1' }]) {
-    assert.equal((await rpc({ schema_version: 1, agent_token: 'x'.repeat(64), action: { type: 'server_call', server: 'home', op } })).error.code, 'permission_denied');
-  }
 
   // IKEv2/IPsec (built-in VPN of iPhone, iPad and Mac) need the IPsec component; their keys are
   // saved as Apple profiles. A fresh status file stands in for the component here.
@@ -407,8 +475,11 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   }
   const tokenPath = path.join(temp, 'server.token'); await cli(['agent', 'grant', '--name', 'server-agent', '--control', '--token-file', tokenPath]);
   const token = (await fs.readFile(tokenPath, 'utf8')).trim();
-  for (const action of [{ type: 'managed_server_list' }, { type: 'server_call', server: 'home', op: { op: 'info' } }, { type: 'managed_server_add', name: 'x', management_key: key }]) {
-    assert.equal((await rpc({ schema_version: 1, agent_token: token, action })).error.code, 'permission_denied', action.type);
+  // A valid control token, so it is the operation's scope that refuses these.
+  const ops = [{ op: 'info' }, { op: 'live' }, { op: 'kit', user }, { op: 'key_profile', user, key: '1' }];
+  for (const action of [{ type: 'managed_server_list' }, ...ops.map(op => ({ type: 'server_call', server: 'home', op })), { type: 'managed_server_add', name: 'x', management_key: key }]) {
+    const refused = (await rpc({ schema_version: 1, agent_token: token, action })).error;
+    assert.equal(refused.code, 'permission_denied', JSON.stringify(action)); assert.match(refused.message, /capability/);
   }
   await cli(['agent', 'revoke', '--name', 'server-agent']);
   assert.ok(!JSON.stringify(await cli(['logs', '--tail', '1000'])).includes(secret), 'audit log contains the management secret');

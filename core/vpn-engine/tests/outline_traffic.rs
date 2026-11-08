@@ -118,6 +118,12 @@ async fn failed_engine_validation_removes_plaintext_configuration() {
         std::env::var_os("GHOSTLINK_TEST_OUTLINE_WORKER")
             .expect("Set GHOSTLINK_TEST_OUTLINE_WORKER"),
     );
+    // A missing or stale worker is refused before any configuration is written, which would
+    // make the checks below pass without testing the cleanup.
+    assert!(
+        worker_session::worker_available(&engine).await,
+        "GHOSTLINK_TEST_OUTLINE_WORKER is not the current worker at an absolute path"
+    );
     let dir = tempfile::tempdir().unwrap();
     let mut key = AccessKey::parse("ss://aes-256-gcm:test-only-secret@127.0.0.1:1").unwrap();
     key.method = "invalid-test-cipher".into();
@@ -137,7 +143,11 @@ async fn failed_engine_validation_removes_plaintext_configuration() {
         Duration::from_secs(3),
     )
     .await;
-    assert!(result.is_err());
+    let error = result.err().expect("an invalid cipher was accepted");
+    assert_eq!(
+        error.to_string(),
+        "Managed tunnel engine rejected configuration"
+    );
     assert!(
         !dir.path().join("outline.json").exists(),
         "Plaintext config remained after startup validation failed"
@@ -278,7 +288,25 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
     )
     .unwrap();
     let mut wrong_client = spawn(&engine, &wrong_path);
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // The refusal below only proves something if this client is running and owns the proxy
+    // port; otherwise the request fails for an unrelated reason.
+    let pid = wrong_client.id().unwrap();
+    let mut listening = false;
+    for _ in 0..50 {
+        assert!(
+            wrong_client.try_wait().unwrap().is_none(),
+            "Wrong-password client failed to start"
+        );
+        if ghostlink_engine::process::verify_listeners(pid, &[proxy_port]).is_ok() {
+            listening = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        listening,
+        "Wrong-password client never listened on its port"
+    );
     let forbidden_target = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let forbidden_port = forbidden_target.local_addr().unwrap().port();
     let rejected = http
@@ -295,6 +323,10 @@ async fn outline_key_transports_real_http_and_rejects_wrong_password() {
             .await
             .is_err(),
         "Incorrect key reached the destination"
+    );
+    assert!(
+        wrong_client.try_wait().unwrap().is_none(),
+        "Wrong-password client exited during the request"
     );
     wrong_client.kill().await.unwrap();
     let _ = wrong_client.wait().await;

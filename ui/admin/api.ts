@@ -84,7 +84,8 @@ export type Server = {
   history_max_mb: number;
   dashboard_port: number;
   dashboard_public: boolean;
-  ipsec_component: { running: boolean; error?: string; connections: number; ports: string };
+  // Missing on servers before 0.5.0, which the desktop app can still manage.
+  ipsec_component?: { running: boolean; error?: string; connections: number; ports: string };
   address_pools?: AddressPool[];
 };
 export type Rate = { t: number; up: number; down: number };

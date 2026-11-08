@@ -5,9 +5,8 @@ import { useRef, useState } from 'react';
 import { Popover } from '@shared/Popover';
 import { WaveBackground } from '@shared/WaveBackground';
 import { FinishPicker, Mark, MotionButton, useAppearance } from '@shared/appearance';
-import { Button, IconButton, Segmented, StatusDot, UIProvider, cx } from '@shared/glass';
+import { Button, IconButton, LiveRates, Segmented, StatusDot, UIProvider, cx } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
-import { megabytes } from '@shared/format';
 import { useFullscreen } from './fullscreen';
 import { KINDS, isActive, stateLabel, type Profile } from './ipc';
 import { ServiceProvider, useService } from './service';
@@ -87,8 +86,8 @@ function Shell() {
         </nav>
       </header>
       <main className="mx-auto max-w-[2400px] px-3 pt-5 pb-24 sm:px-5 2xl:px-8">
-        {view === 'servers' && <MyServers addKeySignal={addKey} />}
-        {view === 'manage' && <ServersIRun addServerSignal={addServer} />}
+        {view === 'servers' && <MyServers addKeySignal={addKey} onAddKeyShown={() => setAddKey(0)} />}
+        {view === 'manage' && <ServersIRun addServerSignal={addServer} onAddServerShown={() => setAddServer(0)} />}
         {view === 'settings' && <Settings appearance={appearance} />}
       </main>
     </>
@@ -130,10 +129,8 @@ function ConnectionIsland() {
         {c?.status === 'connected' && (
           <>
             <span className="max-w-[140px] truncate text-white/70">{current?.display_name || current?.name}</span>
-            <span className="mono text-white/80">{clock(c.connected_duration_seconds)}</span>
-            <span className="num hidden text-white/55 sm:inline">
-              ↓ {megabytes(c.receive_bytes_per_second)} ↑ {megabytes(c.send_bytes_per_second)} MB/s
-            </span>
+            <span className="num text-white/80">{clock(c.connected_duration_seconds)}</span>
+            <LiveRates down={c.receive_bytes_per_second} up={c.send_bytes_per_second} className="hidden text-white/55 sm:inline-flex" />
           </>
         )}
       </button>

@@ -188,6 +188,27 @@ fn fingerprint(salt: &str, source: &str) -> String {
     )
 }
 
+/// A stored summary as it is answered: `is_default` follows the store's default profile, so it
+/// is never saved with the summary itself.
+fn answered(mut summary: ProfileSummary, store: &Store) -> ProfileSummary {
+    summary.is_default = store.default_profile.as_deref() == Some(&summary.name);
+    summary
+}
+
+/// The largest state.json the service loads at startup. Writes are held to the same limit, so a
+/// save can never leave a state the next start would refuse.
+const MAX_STATE: usize = 64 * 1024 * 1024;
+
+/// A change refused because the saved state would exceed [`MAX_STATE`].
+#[derive(Debug)]
+struct StateTooLarge;
+impl std::fmt::Display for StateTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("State would exceed the supported size")
+    }
+}
+impl std::error::Error for StateTooLarge {}
+
 /// Files that exist only while a request or tunnel is in flight. Startup holds the exclusive
 /// daemon lock, so any that remain were left by a crash: an uncommitted transaction (the
 /// committed state.json is intact) or a plaintext engine configuration. Removing a link
@@ -223,10 +244,11 @@ struct Daemon {
 }
 impl Daemon {
     fn commit(&mut self, next: Store) -> Result<()> {
-        storage::atomic_write(
-            &self.args.data_dir.join("state.json"),
-            &serde_json::to_vec(&next)?,
-        )?;
+        let bytes = serde_json::to_vec(&next)?;
+        if bytes.len() > MAX_STATE {
+            return Err(StateTooLarge.into());
+        }
+        storage::atomic_write(&self.args.data_dir.join("state.json"), &bytes)?;
         self.store = next;
         Ok(())
     }
@@ -283,6 +305,10 @@ impl Daemon {
         }
         let response = match self.dispatch(request.action).await {
             Ok(response) => response,
+            Err(error) if error.is::<StateTooLarge>() => Response::err(
+                "invalid_request",
+                "Saved servers and profiles would exceed the service's 64 MiB limit; remove some first",
+            ),
             Err(_) => Response::err("internal", "Service storage or engine operation failed; run doctor and inspect the service installation"),
         };
         let outcome = response
@@ -320,6 +346,15 @@ impl Daemon {
             Some(p) => p,
             None => return Ok(Response::err("not_found", "VPN profile does not exist")),
         };
+        // Connecting to the server that is already running only reports its state. Nothing is
+        // checked or fetched again: a dynamic key's host may be unreachable while the tunnel is
+        // up, and other requests wait while this one holds the service.
+        if !switching && self.session.as_ref().is_some_and(|s| !s.finished()) {
+            let status = self.state.read().await.status();
+            if status.profile.as_deref() == Some(&name) {
+                return Ok(Response::ok(status));
+            }
+        }
         let clear = storage::unseal(&stored.sealed_content)?;
         let content = String::from_utf8(clear)?;
         // Every kind except OpenVPN runs in the managed tunnel worker.
@@ -343,19 +378,11 @@ impl Daemon {
             if outbound.full_tunnel() && !self.args.allow_full_tunnel {
                 return Ok(Response::err("permission_denied", "Full tunnel requires the administrator to authorize route changes with --allow-full-tunnel after protecting SSH access"));
             }
-            if let Some(session) = &self.session {
-                if !session.finished() {
-                    let status = self.state.read().await.status();
-                    if status.profile.as_deref() == Some(&name) && !switching {
-                        return Ok(Response::ok(status));
-                    }
-                    if !switching {
-                        return Ok(Response::err(
-                            "busy",
-                            "Another server is active; use switch",
-                        ));
-                    }
-                }
+            if self.session.as_ref().is_some_and(|s| !s.finished()) && !switching {
+                return Ok(Response::err(
+                    "busy",
+                    "Another server is active; use switch",
+                ));
             }
             self.disconnect().await;
             if let Some(error) = self.cleanup_failure().await {
@@ -398,19 +425,11 @@ impl Daemon {
         if !self.args.openvpn.is_absolute() || !self.args.openvpn.is_file() {
             return Ok(Response::err("engine_unavailable", "Install OpenVPN Community and configure the service with its absolute executable path"));
         }
-        if let Some(session) = &self.session {
-            if !session.finished() {
-                let status = self.state.read().await.status();
-                if status.profile.as_deref() == Some(&name) && !switching {
-                    return Ok(Response::ok(status));
-                }
-                if !switching {
-                    return Ok(Response::err(
-                        "busy",
-                        "Another profile is active; use switch",
-                    ));
-                }
-            }
+        if self.session.as_ref().is_some_and(|s| !s.finished()) && !switching {
+            return Ok(Response::err(
+                "busy",
+                "Another profile is active; use switch",
+            ));
         }
         self.disconnect().await;
         if let Some(error) = self.cleanup_failure().await {
@@ -493,8 +512,9 @@ impl Daemon {
             },
         );
         if next.default_profile.is_none() {
-            next.default_profile = Some(name);
+            next.default_profile = Some(name.clone());
         }
+        let summary = answered(summary, &next);
         self.commit(next)?;
         Ok(Response::ok(summary))
     }
@@ -518,7 +538,7 @@ impl Daemon {
                     None => return Ok(Response::err("not_found", "Server does not exist")),
                 };
                 stored.summary.display_name = display_name.trim().into();
-                let summary = stored.summary.clone();
+                let summary = answered(stored.summary.clone(), &next);
                 self.commit(next)?;
                 Ok(Response::ok(summary))
             }
@@ -574,20 +594,16 @@ impl Daemon {
                 if next.default_profile.is_none() {
                     next.default_profile = Some(name);
                 }
+                let summary = answered(summary, &next);
                 self.commit(next)?;
                 Ok(Response::ok(summary))
             }
-            Action::ProfileList | Action::ServersList => {
+            Action::ProfileList {} | Action::ServersList {} => {
                 let profiles: Vec<_> = self
                     .store
                     .profiles
                     .values()
-                    .map(|p| {
-                        let mut summary = p.summary.clone();
-                        summary.is_default =
-                            self.store.default_profile.as_deref() == Some(&summary.name);
-                        summary
-                    })
+                    .map(|p| answered(p.summary.clone(), &self.store))
                     .collect();
                 Ok(Response::ok(json!({"profiles": profiles})))
             }
@@ -622,7 +638,7 @@ impl Daemon {
             }
             Action::Connect { profile } => self.connect(profile, false).await,
             Action::Switch { profile } => self.connect(Some(profile), true).await,
-            Action::Disconnect => {
+            Action::Disconnect {} => {
                 self.disconnect().await;
                 if let Some(error) = self.cleanup_failure().await {
                     return Ok(error);
@@ -634,9 +650,9 @@ impl Daemon {
                 }
                 Ok(Response::ok(self.state.read().await.status()))
             }
-            Action::Status => Ok(Response::ok(self.state.read().await.status())),
-            Action::Info => Ok(Response::ok(
-                json!({"connection": self.state.read().await.status(), "autoconnect": self.store.autoconnect, "default_profile": self.store.default_profile, "engines": ["outline-compatible-shadowsocks", "openvpn2-management"], "version": env!("CARGO_PKG_VERSION")}),
+            Action::Status {} => Ok(Response::ok(self.state.read().await.status())),
+            Action::Info {} => Ok(Response::ok(
+                json!({"connection": self.state.read().await.status(), "autoconnect": self.store.autoconnect, "default_profile": self.store.default_profile, "engines": ["outline-compatible-shadowsocks", "vless", "wireguard", "amneziawg", "openvpn2-management"], "version": env!("CARGO_PKG_VERSION")}),
             )),
             Action::Autoconnect { enabled } => {
                 if enabled && self.store.default_profile.is_none() {
@@ -671,7 +687,7 @@ impl Daemon {
                     json!({"entries": lines.into_iter().rev().collect::<Vec<_>>()}),
                 ))
             }
-            Action::Doctor => {
+            Action::Doctor {} => {
                 let outline_available = worker_session::worker_available(&self.args.sing_box).await;
                 let engine_available =
                     self.args.openvpn.is_absolute() && self.args.openvpn.is_file();
@@ -726,7 +742,11 @@ impl Daemon {
             }
             Action::AgentRevoke { name } => {
                 let mut next = self.store.clone();
-                next.agents.remove(&name);
+                // Names are exact: reporting success for a mistyped one would leave the real
+                // grant and its token working while the user believes access was withdrawn.
+                if next.agents.remove(&name).is_none() {
+                    return Ok(Response::err("not_found", "No agent grant has this name"));
+                }
                 self.commit(next)?;
                 Ok(Response::ok(json!({"revoked": name})))
             }
@@ -767,7 +787,7 @@ impl Daemon {
                     "applies": "next_connection",
                 })))
             }
-            Action::ManagedServerList => {
+            Action::ManagedServerList {} => {
                 let servers: Vec<_> = self
                     .store
                     .managed_servers
@@ -846,7 +866,7 @@ async fn run(
     let state_path = args.data_dir.join("state.json");
     let store = if state_path.exists() {
         anyhow::ensure!(
-            fs::metadata(&state_path)?.len() <= 64 * 1024 * 1024,
+            fs::metadata(&state_path)?.len() <= MAX_STATE as u64,
             "State exceeds supported size"
         );
         serde_json::from_slice(&fs::read(state_path)?)
@@ -879,22 +899,28 @@ async fn run(
         ready()?;
         if daemon.store.autoconnect {
             // Never let a failed automatic connection take the service down: the user needs
-            // the service running to see the failure and to disable autoconnect.
+            // the service running to see the failure and to disable autoconnect. A refused
+            // attempt (for example a dynamic key that cannot be fetched before the network is
+            // up) is reported like an internal failure, and the audit entry names the reason.
             let outcome = match daemon.connect(None, false).await {
-                Ok(response) if response.success => "accepted",
-                Ok(_) => "failed",
-                Err(_) => {
-                    let mut snapshot = daemon.state.write().await;
-                    snapshot.status.status = ConnectionState::Failed;
-                    snapshot.status.last_error = Some("autoconnect_failed".into());
-                    "error"
-                }
+                Ok(response) if response.success => "accepted".to_string(),
+                Ok(response) => response
+                    .error
+                    .map(|error| error.code)
+                    .unwrap_or_else(|| "failed".into()),
+                Err(_) => "error".into(),
             };
-            let _ = daemon.audit("service", "autoconnect", outcome);
+            if outcome != "accepted" {
+                let mut snapshot = daemon.state.write().await;
+                snapshot.status.status = ConnectionState::Failed;
+                snapshot.status.last_error = Some("autoconnect_failed".into());
+            }
+            let _ = daemon.audit("service", "autoconnect", &outcome);
         }
     }
     let permits = Arc::new(tokio::sync::Semaphore::new(32));
     let mut clients = tokio::task::JoinSet::new();
+    let mut accept_failing = false;
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -904,7 +930,18 @@ async fn run(
             Some(event) = event_rx.recv() => { let _ = audit_log.record("engine", "event", event); }
             Some(_) = clients.join_next(), if !clients.is_empty() => {}
             accepted = listener.accept() => {
-                let stream = accepted?;
+                // One failed connection (a client that went away before it was accepted, a full
+                // descriptor table) must not stop the service and its tunnel. The pause keeps a
+                // lasting error from spinning; only the first failure in a row is audited.
+                let stream = match accepted {
+                    Ok(stream) => { accept_failing = false; stream }
+                    Err(_) => {
+                        if !accept_failing { let _ = audit_log.record("service", "ipc_accept", "failed"); }
+                        accept_failing = true;
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
                 let permit = match permits.clone().try_acquire_owned() { Ok(p) => p, Err(_) => { drop(stream); continue; } };
                 let daemon = daemon.clone();
                 clients.spawn(async move {
@@ -935,4 +972,84 @@ async fn run(
     daemon.audit("service", "shutdown", "success")?;
     drop(lock);
     Ok(())
+}
+
+/// A service with an empty store in its own private temporary directory, without a listener.
+#[cfg(test)]
+pub(crate) fn test_daemon(name: &str) -> Daemon {
+    let dir = std::env::temp_dir().join(format!("ghostlinkd-test-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    storage::private_dir(&dir).unwrap();
+    let (events, _) = mpsc::channel(8);
+    Daemon {
+        args: Args::parse_from(["ghostlinkd", "--data-dir", dir.to_str().unwrap()]),
+        store: Store::default(),
+        state: Arc::new(tokio::sync::RwLock::new(management::Snapshot::default())),
+        session: None,
+        events,
+        audit_log: Arc::new(AuditLog {
+            dir,
+            lock: std::sync::Mutex::new(()),
+        }),
+        admin_clients: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(action: Action) -> Request {
+        Request {
+            schema_version: SCHEMA_VERSION,
+            agent_token: None,
+            action,
+        }
+    }
+
+    #[tokio::test]
+    async fn revoking_a_grant_that_does_not_exist_is_not_found() {
+        let mut daemon = test_daemon("revoke");
+        daemon.store.agents.insert(
+            "assistant".into(),
+            Agent {
+                hash: "00".repeat(32),
+                control: true,
+            },
+        );
+        let revoke = |name: &str| request(Action::AgentRevoke { name: name.into() });
+        let typo = daemon.handle(revoke("Assistant")).await;
+        assert_eq!(typo.error.unwrap().code, "not_found");
+        assert!(daemon.store.agents.contains_key("assistant"));
+        assert!(daemon.handle(revoke("assistant")).await.success);
+        assert!(daemon.store.agents.is_empty());
+        let _ = fs::remove_dir_all(&daemon.args.data_dir);
+    }
+
+    #[tokio::test]
+    async fn a_save_the_next_start_would_refuse_is_not_written() {
+        let mut daemon = test_daemon("state-limit");
+        // JSON writes each sealed byte as a number: 17 MiB of 255s is about 68 MiB.
+        let big = StoredProfile {
+            summary: ProfileSummary {
+                name: "big".into(),
+                kind: "openvpn".into(),
+                display_name: "big".into(),
+                remotes: vec![],
+                tunnel_mode: "split".into(),
+                certificate_expires_unix: None,
+                sha256: String::new(),
+                is_default: false,
+            },
+            sealed_content: vec![255; 17 * 1024 * 1024],
+            routing_override: None,
+        };
+        daemon.store.profiles.insert("big".into(), big);
+        let refused = daemon
+            .handle(request(Action::Autoconnect { enabled: false }))
+            .await;
+        assert_eq!(refused.error.unwrap().code, "invalid_request");
+        assert!(!daemon.args.data_dir.join("state.json").exists());
+        let _ = fs::remove_dir_all(&daemon.args.data_dir);
+    }
 }

@@ -6,14 +6,39 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ComponentProps,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
+import { speed } from './format';
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
+}
+
+// Live download and upload for a compact readout such as the Island, each in bytes per second
+// with its own unit. Each value has room for its usual widest form, so the capsule keeps its
+// width as the numbers change. className must set the display (`inline-flex`, or for example
+// `hidden sm:inline-flex`): a display class here would win over the caller's.
+export function LiveRates({ down, up, className }: { down: number; up: number; className: string }) {
+  // The arrow stays with its number; the pair is right-aligned in its slot, so spare room falls
+  // between the two rates rather than inside one.
+  const rate = (arrow: string, label: string, value: number) => (
+    <span className="inline-flex min-w-[9ch] items-baseline justify-end gap-1 whitespace-nowrap">
+      <span aria-hidden="true">{arrow}</span>
+      <span className="sr-only">{label}</span>
+      <span>{speed(value)}</span>
+    </span>
+  );
+  return (
+    <span className={cx('num items-baseline gap-1.5', className)}>
+      {rate('↓', 'Download', down)}
+      {rate('↑', 'Upload', up)}
+    </span>
+  );
 }
 
 export function Card({ className, children, as: Tag = 'section' }: { className?: string; children: ReactNode; as?: 'section' | 'div' | 'article' }) {
@@ -126,7 +151,7 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
       }}
       className={cx(
         'relative inline-flex h-[26px] w-[44px] shrink-0 items-center rounded-full border border-line transition-colors duration-300',
-        checked ? 'bg-ok' : 'bg-field',
+        checked ? 'bg-ok' : 'bg-switch-off',
       )}
     >
       <span
@@ -220,7 +245,13 @@ export function Empty({ icon, title, children }: { icon?: ReactNode; title: stri
   );
 }
 
-// A modal sheet built on <dialog> (focus, Escape and the top layer come from the browser).
+// Sheets report when they open and close, so toasts can be shown inside the topmost one: a modal
+// dialog puts the rest of the page under its blurred backdrop and makes it inert.
+const LayerContext = createContext<(dialog: HTMLDialogElement, open: boolean) => void>(() => {});
+
+// A modal sheet built on <dialog> (focus, Escape and the top layer come from the browser). The
+// field to focus first is marked data-autofocus: React's autoFocus runs while the dialog is still
+// closed, after which the browser would focus the Close button instead.
 export function Sheet({ open, onClose, title, subtitle, size = 'normal', children, footer }: {
   open: boolean;
   onClose: () => void;
@@ -231,18 +262,32 @@ export function Sheet({ open, onClose, title, subtitle, size = 'normal', childre
   footer?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const layer = useContext(LayerContext);
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    }
     if (!open && dialog.open) dialog.close();
-  }, [open]);
+    if (!open) return;
+    layer(dialog, true);
+    return () => layer(dialog, false);
+  }, [open, layer]);
   return (
     <dialog
       ref={ref}
+      aria-labelledby={titleId}
       className={cx('sheet m-auto', size === 'wide' && 'sheet-wide', size === 'medium' && 'sheet-medium')}
-      onClose={onClose}
+      // React hands a nested sheet's close and cancel events to the sheets around it as well:
+      // only this dialog's own events may close it.
+      onClose={event => {
+        if (event.target === event.currentTarget) onClose();
+      }}
       onCancel={event => {
+        if (event.target !== event.currentTarget) return;
         event.preventDefault();
         onClose();
       }}
@@ -254,7 +299,9 @@ export function Sheet({ open, onClose, title, subtitle, size = 'normal', childre
         <div className="glass-strong flex max-h-[calc(100vh-48px)] flex-col overflow-hidden rounded-[28px]">
           <header className="flex items-start justify-between gap-4 px-6 pt-6 pb-3">
             <div className="min-w-0">
-              <h2 className="text-[19px]">{title}</h2>
+              <h2 id={titleId} className="text-[19px]">
+                {title}
+              </h2>
               {subtitle && <p className="mt-1 text-[13px] text-fg-3">{subtitle}</p>}
             </div>
             <IconButton label="Close" onClick={onClose}>
@@ -287,6 +334,7 @@ export function useUI(): UI {
 export function UIProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [ask, setAsk] = useState<(Ask & { resolve: (yes: boolean) => void }) | null>(null);
+  const [layers, setLayers] = useState<HTMLDialogElement[]>([]);
   const next = useRef(1);
   const toast = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
     const id = next.current++;
@@ -294,44 +342,51 @@ export function UIProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), tone === 'bad' ? 6000 : 3200);
   }, []);
   const confirm = useCallback((question: Ask) => new Promise<boolean>(resolve => setAsk({ ...question, resolve })), []);
+  const layer = useCallback((dialog: HTMLDialogElement, open: boolean) => setLayers(list => [...list.filter(d => d !== dialog), ...(open ? [dialog] : [])]), []);
   const answer = (yes: boolean) => {
     ask?.resolve(yes);
     setAsk(null);
   };
+  // In the topmost open sheet the toasts stay above its backdrop and readable by screen readers.
+  const stack = (
+    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2 px-4" aria-live="polite">
+      {toasts.map(t => (
+        <div
+          key={t.id}
+          className={cx(
+            'glass-strong pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-2.5 rounded-[22px] px-4.5 py-2.5 text-[13px] text-fg',
+            'animate-[sheet-in_0.3s_cubic-bezier(0.2,0.9,0.25,1)]',
+          )}
+        >
+          <span className={cx('size-2 shrink-0 rounded-full', t.tone === 'ok' ? 'bg-ok' : t.tone === 'bad' ? 'bg-bad' : 'bg-down')} />
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
   return (
     <UIContext.Provider value={{ toast, confirm }}>
-      {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2 px-4" aria-live="polite">
-        {toasts.map(t => (
-          <div
-            key={t.id}
-            className={cx(
-              'glass-strong pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-2.5 rounded-[22px] px-4.5 py-2.5 text-[13px] text-fg',
-              'animate-[sheet-in_0.3s_cubic-bezier(0.2,0.9,0.25,1)]',
-            )}
-          >
-            <span className={cx('size-2 shrink-0 rounded-full', t.tone === 'ok' ? 'bg-ok' : t.tone === 'bad' ? 'bg-bad' : 'bg-down')} />
-            {t.message}
-          </div>
-        ))}
-      </div>
-      <Sheet
-        open={ask !== null}
-        onClose={() => answer(false)}
-        title={ask?.title ?? ''}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => answer(false)}>
-              Cancel
-            </Button>
-            <Button variant={ask?.danger ? 'danger' : 'cta'} onClick={() => answer(true)}>
-              {ask?.action}
-            </Button>
-          </>
-        }
-      >
-        <p className="text-[13.5px] text-fg-2">{ask?.text}</p>
-      </Sheet>
+      <LayerContext.Provider value={layer}>
+        {children}
+        {createPortal(stack, layers[layers.length - 1] ?? document.body)}
+        <Sheet
+          open={ask !== null}
+          onClose={() => answer(false)}
+          title={ask?.title ?? ''}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => answer(false)}>
+                Cancel
+              </Button>
+              <Button variant={ask?.danger ? 'danger' : 'cta'} onClick={() => answer(true)}>
+                {ask?.action}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-[13.5px] text-fg-2">{ask?.text}</p>
+        </Sheet>
+      </LayerContext.Provider>
     </UIContext.Provider>
   );
 }

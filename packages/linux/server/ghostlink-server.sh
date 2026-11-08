@@ -91,6 +91,22 @@ need_docker() {
     docker info >/dev/null 2>&1 || die "Docker is not running (try: sudo systemctl enable --now docker)"
 }
 
+# The state belongs to the container account, and the server container can rename and replace
+# anything in it. A compromised server could therefore put a symlink to any host directory where
+# a directory of the state belongs, so root must never follow one there. in_state_dir runs a
+# command inside such a directory only after checking, from inside it, that it is that directory
+# of the state. The command then acts on ".", which a swap after the check cannot redirect.
+in_state_dir() { # NAME COMMAND...
+    target=$1
+    shift
+    (
+        expected=$(cd -P "$STATE" && pwd -P)/$target &&
+            cd -P "$STATE/$target" 2>/dev/null &&
+            [ "$(pwd -P)" = "$expected" ] &&
+            "$@"
+    )
+}
+
 # The container runs as a dedicated unprivileged host account that owns only the state.
 ensure_account() {
     if ! id -u "$ACCOUNT" >/dev/null 2>&1; then
@@ -120,10 +136,14 @@ tool() {
 
 load_image() {
     docker load --input "$LIB/image.tar.gz" >/dev/null || die "could not load the bundled image"
-    # Drop images from earlier versions of this package.
-    docker image ls --format '{{.Repository}}:{{.Tag}}' ghostlink-server 2>/dev/null |
+}
+
+# prune_images drops the images of other versions of a repository. Call it after the container
+# was recreated: Docker keeps an image that a container still uses.
+prune_images() { # REPOSITORY IMAGE-TO-KEEP
+    docker image ls --format '{{.Repository}}:{{.Tag}}' "$1" 2>/dev/null |
         while read -r old; do
-            [ "$old" = "$IMAGE" ] || docker image rm "$old" >/dev/null 2>&1 || true
+            [ "$old" = "$2" ] || docker image rm "$old" >/dev/null 2>&1 || true
         done
 }
 
@@ -149,13 +169,54 @@ show_key() {
     cat <<EOF
 
 Ghostlink server is running. Paste this management key into the Ghostlink app
-(Servers I manage > Add server), or run: ghostlink server add --name NAME --key-file FILE
+(Servers I run > Add server), or run: ghostlink server add --name NAME --key-file FILE
 
 $(cat "$STATE/management-key.json")
 
 Keep it private: it gives full control of this server. Show it again with:
   sudo ghostlink-server show-key
 EOF
+}
+
+# state_summary prints the address in keys and each service's port from the state file, which
+# the server writes with two spaces of indentation per level. Ports inside "users" belong to
+# keys imported from Outline that kept their own.
+state_summary() { # STATE-FILE
+    awk '
+        BEGIN {
+            title["api"] = "management API: TCP"
+            title["shadowsocks"] = "Shadowsocks: TCP and UDP"
+            title["vless"] = "VLESS-REALITY: TCP"
+            title["wireguard"] = "WireGuard: UDP"
+            title["amneziawg"] = "AmneziaWG: UDP"
+            title["mesh"] = "mesh coordinator: TCP"
+            title["dashboard"] = "web dashboard: TCP"
+        }
+        /^  "hostname": "/ { host = $2; gsub(/[",]/, "", host) }
+        /^  "users": [[]$/ { users = 1; next }
+        users && /^  ]/ { users = 0; next }
+        users && /^ +"port": [0-9]+,?$/ {
+            p = $2; sub(/,$/, "", p)
+            if (!(p in extra)) { extra[p] = 1; extras = extras (extras == "" ? "" : ", ") p }
+            next
+        }
+        /^  "[a-z_]+": [{]$/ { section = $1; gsub(/[":]/, "", section); next }
+        section != "" && /^    "enabled": / { state[section] = ($2 ~ /^true/) ? "on" : "off" }
+        section != "" && /^    "public": / { state[section] = ($2 ~ /^true/) ? "public" : "127.0.0.1 only" }
+        section != "" && /^    "port": / { p = $2; sub(/,$/, "", p); port[section] = p; order[++n] = section }
+        /^  [}]/ { section = "" }
+        END {
+            if (host != "") print "  address in keys: " host
+            for (i = 1; i <= n; i++) {
+                s = order[i]
+                if (!(s in title)) continue
+                line = "  " title[s] " " port[s]
+                if (s == "shadowsocks" && extras != "") line = line " (and " extras " for keys from Outline)"
+                if (s in state) line = line ", " state[s]
+                print line
+            }
+        }
+    ' "$1"
 }
 
 setup() {
@@ -171,18 +232,33 @@ setup() {
     need_docker
     ensure_account
     load_image
-    if [ -n "$hostname" ]; then
-        tool init --hostname "$hostname" >/dev/null
-    else
-        tool init >/dev/null
+    # Stop the running server before init. A stop lets it save its usage and history, and it
+    # must not save its old state over what init writes next (it saves every 30 seconds).
+    was_running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+    if [ "$was_running" = true ]; then
+        docker stop "$CONTAINER" >/dev/null 2>&1 || true
     fi
-    tool check >/dev/null
+    if [ -n "$hostname" ]; then
+        tool init --hostname "$hostname" >/dev/null || setup_failed
+    else
+        tool init >/dev/null || setup_failed
+    fi
+    tool check >/dev/null || setup_failed
     start_container
+    prune_images ghostlink-server "$IMAGE"
     # After an upgrade, the IPsec component (if enabled) moves to the new image too.
     if docker inspect "$IPSEC_CONTAINER" >/dev/null 2>&1; then
         ipsec_start
     fi
     show_key
+}
+
+# setup_failed starts the server that setup stopped, with its old image, and stops.
+setup_failed() {
+    if [ "$was_running" = true ] && docker start "$CONTAINER" >/dev/null 2>&1; then
+        die "setup did not finish (see above); the server runs as before"
+    fi
+    die "setup did not finish (see above)"
 }
 
 # --- IPsec component ---
@@ -216,25 +292,34 @@ ipsec_stop_container() {
     fi
 }
 
+# ipsec_dir makes $STATE/ipsec, the only directory the IPsec container gets, a directory of the
+# server account with mode 0770, or stops if something else is in its place (see in_state_dir).
+ipsec_dir() {
+    mkdir -m 0770 "$STATE/ipsec" 2>/dev/null || true
+    in_state_dir ipsec ipsec_dir_owner || ipsec_dir_refused
+}
+
+ipsec_dir_owner() { chown "$uid:$gid" . && chmod 0770 .; }
+
+ipsec_dir_refused() {
+    die "$STATE/ipsec is not a plain directory (Ghostlink never makes it a symlink or a file); check it, move it away and run this again"
+}
+
 # ipsec_start (re)creates the component: root in the server account's group (to share only the
 # ipsec directory), no capabilities but the three IPsec needs, read-only, no privilege escalation.
 ipsec_start() {
+    ipsec_dir
     docker load --input "$LIB/ipsec-image.tar.gz" >/dev/null || die "could not load the bundled IPsec image"
-    docker image ls --format '{{.Repository}}:{{.Tag}}' ghostlink-ipsec 2>/dev/null |
-        while read -r old; do
-            [ "$old" = "$IPSEC_IMAGE" ] || docker image rm "$old" >/dev/null 2>&1 || true
-        done
-    install -d -m 0770 -o "$uid" -g "$gid" "$STATE/ipsec"
-    chown "$uid:$gid" "$STATE/ipsec"
-    chmod 0770 "$STATE/ipsec"
     ipsec_stop_container
-    rm -f "$STATE/ipsec/status.json"
+    # Checked again right before Docker mounts it.
+    in_state_dir ipsec rm -f status.json || ipsec_dir_refused
     docker run --detach --name "$IPSEC_CONTAINER" --restart unless-stopped \
         --log-opt max-size=10m --log-opt max-file=3 \
         --network host --user "0:$gid" --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
         --cap-add NET_BIND_SERVICE --security-opt no-new-privileges --read-only --tmpfs /run \
         --volume "$STATE/ipsec:$STATE/ipsec" \
         "$IPSEC_IMAGE" serve --dir "$STATE/ipsec" --iptables "$(ipsec_backend)" >/dev/null
+    prune_images ghostlink-ipsec "$IPSEC_IMAGE"
     tries=0
     while [ $tries -lt 40 ]; do
         grep -q '"running": true' "$STATE/ipsec/status.json" 2>/dev/null && return 0
@@ -255,6 +340,7 @@ ipsec_command() {
         enable)
             ensure_account
             ipsec_check_kernel
+            ipsec_dir # a refusal leaves the host as it was
             printf '# Written by "ghostlink-server ipsec enable"; removed by "ipsec disable".\nnet.ipv4.ip_forward = 1\n' > "$SYSCTL_FILE"
             sysctl -q -w net.ipv4.ip_forward=1 || die "could not turn on IPv4 forwarding"
             ipsec_start
@@ -269,7 +355,8 @@ EOF
             ;;
         disable)
             ipsec_stop_container
-            rm -f "$SYSCTL_FILE" "$STATE/ipsec/status.json"
+            rm -f "$SYSCTL_FILE"
+            in_state_dir ipsec rm -f status.json || true
             echo "The IPsec component is stopped; its firewall rules and interface are removed."
             echo "IKEv2/IPsec keys stop working until you run: sudo ghostlink-server ipsec enable"
             ;;
@@ -307,13 +394,27 @@ mesh_command() {
         *[!0-9.]*) address=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 { print $1 }') ;;
         *) address=$host ;;
     esac
+    # The endpoint names the port the agent listens on: its --port, if one is passed on.
+    port=51820
+    take=""
+    for argument in "$@"; do
+        if [ -n "$take" ]; then
+            port=$argument
+            take=""
+            continue
+        fi
+        case "$argument" in
+            --port | -port) take=1 ;;
+            --port=* | -port=*) port=${argument#*=} ;;
+        esac
+    done
     if [ -n "$address" ]; then
-        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join --relay --endpoint "$address:51820" "$@"
+        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join --relay --endpoint "$address:$port" "$@"
     else
         GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join --relay "$@"
     fi
     systemctl enable --now ghostlink-mesh.service >/dev/null
-    echo "This server is now a mesh node and the relay. Allow UDP 51820 in its firewall and cloud security group."
+    echo "This server is now a mesh node and the relay. Allow UDP $port in its firewall and cloud security group."
 }
 
 # admin runs a management command inside the running container, against its local API.
@@ -329,14 +430,18 @@ admin() {
     fi
 }
 
-# save_private runs an admin command into a new file only root can read.
+# save_private runs an admin command into a new file only root can read. With set -C the shell
+# creates the file exclusively, so it never writes through a symlink left in its place. The
+# command runs in a subshell, so that a failed check (die exits) still removes the file below.
 save_private() {
     output=$1
     shift
-    [ ! -e "$output" ] || die "$output already exists; choose a new file name"
+    if [ -e "$output" ] || [ -L "$output" ]; then
+        die "$output already exists; choose a new file name"
+    fi
     previous=$(umask)
     umask 077
-    if admin "$@" > "$output"; then
+    if (set -C; admin "$@" > "$output"); then
         umask "$previous"
     else
         umask "$previous"
@@ -409,6 +514,33 @@ outline_restore() {
     return $restored
 }
 
+# outline_entry turns what docker inspect says about a container (POLICY/RETRIES/RUNNING) into
+# a NAME=POLICY=RUNNING entry for outline_restore. The fields are split on "/" so that an empty
+# policy name, which older Docker reports for a container created without one, stays a field.
+outline_entry() { # NAME POLICY/RETRIES/RUNNING
+    policy=${2%%/*}
+    rest=${2#*/}
+    retries=${rest%%/*}
+    up=${rest#*/}
+    policy=${policy:-no}
+    if [ "$policy" = on-failure ] && [ "${retries:-0}" -gt 0 ] 2>/dev/null; then
+        policy="on-failure:$retries"
+    fi
+    echo "$1=$policy=${up:-false}"
+}
+
+# copy_outline_files runs inside the new work directory (see migrate_outline). The directory is
+# still root's while the copies are made, so nothing else can swap them, and goes to the server
+# account last, so that the server can read them.
+copy_outline_files() {
+    for file in shadowbox_config.json shadowbox_server_config.json; do
+        if [ -f "$persisted/$file" ]; then
+            install -m 0600 -o "$uid" -g "$gid" "$persisted/$file" "$file" || return 1
+        fi
+    done
+    chown "$uid:$gid" .
+}
+
 # outline_imported is true when Ghostlink already has clients: the import went through even
 # if a later step failed. Called from the exit trap, so it must not exit itself.
 outline_imported() {
@@ -458,6 +590,8 @@ migrate_outline() {
     [ "$running" = "true" ] || die "the Ghostlink server is not running (set it up first: sudo ghostlink-server setup)"
 
     # Private copies inside the state, which the server reads; Outline's files stay as they are.
+    # Root makes the directory anew and fills it from inside (see in_state_dir and
+    # copy_outline_files), so the copies cannot be sent anywhere else on the host.
     uid=$(id -u "$ACCOUNT")
     gid=$(id -g "$ACCOUNT")
     work=$STATE/outline-import
@@ -465,14 +599,10 @@ migrate_outline() {
     import_done=0
     outline_state=""
     rm -rf "$work"
-    install -d -m 0700 -o "$uid" -g "$gid" "$work"
     trap migrate_exit EXIT
     trap 'exit 130' INT TERM HUP
-    for file in shadowbox_config.json shadowbox_server_config.json; do
-        if [ -f "$persisted/$file" ]; then
-            install -m 0600 -o "$uid" -g "$gid" "$persisted/$file" "$work/$file"
-        fi
-    done
+    mkdir -m 0700 "$work" || die "could not create $work"
+    in_state_dir outline-import copy_outline_files || die "could not copy Outline's files into $work"
 
     if [ -n "$check" ]; then
         admin import-outline --dir "$work" --check
@@ -486,11 +616,8 @@ migrate_outline() {
     # Stop Outline so its ports are free, and keep it from starting again on boot. What each
     # container was like is kept first, so the exit trap can put it back.
     for name in shadowbox watchtower; do
-        found=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}} {{.HostConfig.RestartPolicy.MaximumRetryCount}} {{.State.Running}}' "$name" 2>/dev/null) || continue
-        set -- $found
-        policy=${1:-no}
-        [ "$policy" = on-failure ] && [ "${2:-0}" -gt 0 ] && policy="on-failure:$2"
-        outline_state="$outline_state $name=$policy=${3:-false}"
+        found=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}/{{.HostConfig.RestartPolicy.MaximumRetryCount}}/{{.State.Running}}' "$name" 2>/dev/null) || continue
+        outline_state="$outline_state $(outline_entry "$name" "$found")"
     done
     if [ -n "$outline_state" ]; then
         echo "Stopping Outline (its files in $outline_dir are kept)"
@@ -549,7 +676,7 @@ case "$command" in
         need_root status
         need_docker
         docker ps --all --filter "name=^${CONTAINER}\$" --format 'container: {{.Status}}'
-        [ -f "$STATE/state.json" ] && sed -n 's/^ *"\(port\|hostname\|enabled\)": *\(.*\),\{0,1\}$/  \1: \2/p' "$STATE/state.json" | head -n 20
+        [ ! -f "$STATE/state.json" ] || state_summary "$STATE/state.json" || true
         if docker inspect "$IPSEC_CONTAINER" >/dev/null 2>&1; then
             docker ps --all --filter "name=^${IPSEC_CONTAINER}\$" --format 'IPsec component: {{.Status}} (UDP 500, 4500)'
         fi
@@ -561,6 +688,8 @@ case "$command" in
         need_root remove
         if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
             ipsec_stop_container
+            # A stop lets the server save its usage and history first.
+            docker stop "$CONTAINER" >/dev/null 2>&1 || true
             docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
             for repository in ghostlink-server ghostlink-ipsec; do
                 docker image ls --format '{{.Repository}}:{{.Tag}}' "$repository" 2>/dev/null |

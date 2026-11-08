@@ -13,13 +13,17 @@ export function RulesEditor({ rules, onSave, saveLabel = 'Save rules' }: { rules
   const [smtp, setSmtp] = useState(rules.block_smtp);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Follow the saved rules only when they change: a client's rules arrive as a new object with
+  // every 15 s poll, which must not throw away what is being typed.
+  const saved = JSON.stringify(rules);
   useEffect(() => {
     setSites(rules.blocked_domains.join('\n'));
     setIps(rules.blocked_ips.join('\n'));
     setPorts(rules.blocked_ports.join('\n'));
     setTorrent(rules.block_bittorrent);
     setSmtp(rules.block_smtp);
-  }, [rules]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved]);
   return (
     <form
       className="grid gap-4"

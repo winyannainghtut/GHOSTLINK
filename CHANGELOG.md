@@ -4,7 +4,19 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+Fixes on top of 0.8.0: what was reported on a running server, and what two reviews of the whole code base found. Not released yet; see *Changed* for what behaves differently after an upgrade.
+
 ### Fixed
+
+Reported on a server running 0.8.0:
+
+- **Online and idle:** a client that had disconnected could show as online for many minutes, for example after switching WireGuard or AmneziaWG off. Its connections stay open on the server for a while, and remote services keep writing to them, which counted as activity.
+  - **Now:** a client is online while it sends something at least once a minute, and shows as idle within about a minute of disconnecting.
+  - **What counts:** a new connection, an upload, a substantial download, a WireGuard/AmneziaWG keepalive (the keys the server issues send one every 25 s, so idle but connected clients stay online) or an IKEv2/IPsec session that is up. The server now checks WireGuard and AmneziaWG peers every 5 s instead of every 30 s.
+  - **Clients view:** the "Last handshake" column and card field are now "Last seen", which is what they show.
+- **Off switches in the Daylight finish:** an off switch was almost invisible, white on white, and more so when disabled (IKEv2 and IPsec without the IPsec component). Off switches now have a visible track in every finish.
+- **Live speed in the Island:** the dashboard's and the app's capsules showed both rates in MB/s with two decimals, so anything under 5 KB/s read 0.00. Each rate now has its own unit (B/s, KB/s, MB/s or GB/s), with room for it, so the capsule keeps its width.
+- **Tests on Windows:** the server could pick a port that Windows reserves for IPv4 only, and its end-to-end test then failed to start Shadowsocks. The port check now also tries the IPv4 wildcard, and in tests it checks only the loopback address they listen on, so Windows Defender Firewall no longer asks about every test run.
 
 Found by a review of 0.8.0 after its release:
 
@@ -32,6 +44,131 @@ Found by a review of 0.8.0 after its release:
 - **Tests and CI:**
   - The Outline smoke test also checks a failed import that must put Outline back, and fails on the installer's exit status.
   - The engine's real-traffic test picks its Shadowsocks peer's port free on both TCP and UDP.
+
+Found by a second, full review of the code:
+
+- **Server: what VPN users can reach.**
+  - **UDP after the first packet:** the server checked a UDP session only by its first packet. A key holder could send the rest of a Shadowsocks, VLESS, WireGuard or AmneziaWG session to the server's loopback, its private network, the server itself, or an address or port the rules block. Every later packet to another address is now checked against the same address and port rules. WireGuard and AmneziaWG also give each UDP destination its own session.
+  - **The server's own addresses:** VPN users could reach every service on the host through its public IPv6 address or its other addresses, or through its public address when the hostname is a DNS name, past host firewall allowlists. Every public address on the host is now blocked, and the dashboard port is blocked on every address, like the API port.
+  - **Exempt clients on WireGuard and AmneziaWG:** the global rules could still block an exempt client's UDP, and ping skipped a client's own blocks and was not counted in its usage.
+- **Server: running.**
+  - **A busy port at start:** if another program held one of the VPN ports, the server restarted over and over and no server command could fix it. The management API, the dashboard and the server commands now start anyway; the VPN engine is tried again every 30 s, and `GET /live` reports `health.engine_error`.
+  - **Port changes:** a port below 1024, or one another program uses, is refused when it is set, also for a protocol without keys and for the dashboard, instead of failing later.
+  - **Memory:** with WireGuard or AmneziaWG on, each change that restarted the engine (adding, removing or disabling clients or keys, rule edits, a lifted data limit) left one or two network stacks and their threads in memory until the server restarted.
+  - **Container log:** the VPN engine logged the names users looked up (blocked sites too) and the addresses they could not reach. The engine's own log is now off; the log holds only the server's own warnings and errors.
+  - **Hostname change:** a saved change now reports success even if the management key file cannot be rewritten; the error is logged with the command to run.
+- **Server: speed limits, usage and statistics.**
+  - **TCP and UDP:** while a capped client's TCP upload filled its cap, almost all of its UDP (calls, QUIC) was dropped. TCP and UDP now share the cap.
+  - **Usage:** traffic that could not be saved, for example on a full disk, is now kept and saved later instead of being lost.
+  - **Statistics:** the per-client totals for the last 24 hours and 7 days also included the whole first day. They now cover the range, like the chart.
+  - **Site statistics:** names that are not valid DNS names (a client can send tens of kilobytes) count as "Other sites", and sites with no traffic for a day are dropped from memory.
+  - **History settings:** `set --history-days` below 30 no longer needs `--site-days` as well. The history size limit and the low-disk threshold are in MB of 1,000,000 bytes, as the server shows them.
+  - **Deleted clients:** their last addresses and traffic no longer come back into the history.
+  - **Connection kit:** no empty QR code for IKEv2/IPsec keys.
+  - **Outline import:** the report and the guide say that Outline's data limits count the last 30 days, while Ghostlink counts usage from the move on and never resets it by itself. The port of a mesh that is turned off is kept free for it.
+- **IKEv2/IPsec.**
+  - **User names:** a user whose name starts with a character other than a letter or digit (`_bob`, `.x`, "📱 Phone"), or has no Latin letters or digits in it (a name in Burmese, Cyrillic or Chinese), got an identity the IPsec component refuses. The server then wrote no settings at all, for anybody: new keys, disabled and removed users, data limits and speed limits no longer reached the component, and sessions stayed connected. The default identity now always starts with a letter or digit (`user-ID@ghostlink` when nothing in the name is usable), and a key the component would refuse is left out instead of blocking everyone.
+  - **Renaming a user:** a key now keeps the identity it was created with. Before, a rename locked the user out of every IKEv2/IPsec device, and a certificate key could not be repaired. Existing keys keep the identity they have now; a certificate key whose identity the component had refused gets a new certificate, so send its profile again.
+  - **Usage:** after a restart or an upgrade of the server, every connected session's whole total so far was added to the user's usage a second time, and could trip a data limit. A session that was ended because the user was disabled, over the limit or had the key removed was also counted twice about half the time.
+  - **Online state:** a client that had left stayed online for up to two minutes, because its closed session was reported again every 5 s.
+  - **Settings:** the server rewrote the component's settings after every saved change, including the usage accounting every 30 s, and the component reloaded strongSwan and its firewall each time. It now writes only when something changed for the component, one write at a time.
+  - **Server certificate:** it is checked when the server starts, and `setup --hostname` (and the installer's `--hostname`) reissue it for the new address. A server restarted more often than once a day never renewed it.
+  - **Profiles:** the profile identifier names the server by its CA instead of its name, so two servers with the same name no longer replace each other's profile on a device.
+  - **IPsec component:** it checks the firewall settings also when IKEv2 and IPsec are both off, refuses address pools outside private space, ends the sessions of removed or disabled users before it touches the firewall, and shows a failure to apply speed limits in `ipsec status`.
+- **Server commands, setup and the installer.**
+  - **The state and root:** `sudo ghostlink-server` no longer follows a symlink in `/var/lib/ghostlink-server`, which the server's own account controls. A compromised server could have made `setup` (run on every upgrade) or `ipsec enable` give any host directory to that account and mount it into the IPsec component, or made `migrate-outline` copy Outline's keys elsewhere.
+  - **Upgrades and `setup`:** the running server is stopped before setup changes its state, instead of being killed afterwards, so it saves its last usage and history and cannot write its old address over a new `setup --hostname`. If setup fails before the new container starts, the old server starts again. `remove` stops it the same way, and the previous version's images are removed in the same run.
+  - **Words a command does not take** are refused instead of ignored. `user add Alice --exempt false --limit 5GB` turned `--exempt` on and dropped the limit.
+  - **Speed units:** `10Mb/s`, `10Mb` and `10 mb` (bits, with a lower-case b) are refused like `10Mbps`; `2MBps` is accepted.
+  - **`key qr`** with an unknown key or a bad `--content` fails instead of exiting 0.
+  - **`--json`:** `set` and `site-stats` print the settings after the change, and `dashboard` its port, mode, login token and address.
+  - **`kit` and `profile`:** with the server or Docker down, they left an empty file that blocked the next try. The file is created anew, never through a symlink.
+  - **`status`** labels the address and each service's port, including the ports of keys from Outline.
+  - **`mesh join-here --port N`** tells the other nodes port N, not 51820.
+  - **`migrate-outline`** puts back a container whose restart policy has no name (older Docker).
+  - **Installer:** `--reinstall` reinstalls the version already installed; server packages of pre-release versions are named so the installer finds them; `--add-swap` says when no swap file is needed; if the migration fails after the import was saved, the installer still prints the management key and the ports.
+- **Mesh.**
+  - **Container ports:** ports a node publishes for Docker or Podman containers, and Kubernetes NodePorts, could not be reached over the mesh. They now follow the node's access rules.
+  - **Relayed pairs:** two nodes that need the relay lost their connection for about 90 seconds every 16 minutes, when the coordinator tried the direct path blindly. They now test the direct path in the background and switch to it only once it works.
+  - **A node coming back** after a few minutes away could have all its links sent through the relay for 15 minutes.
+  - **Firewall:** the agent sets up its firewall before the interface, so a firewall error leaves the node off the mesh instead of open to it; it puts its rules back within about 30 seconds after a firewall reload removed them; and it uses the iptables backend the host uses, also at boot (on hosts with the legacy backend, relayed and subnet traffic stopped after a reboot).
+  - **Forwarding consent:** a node made a relay from the app forwarded traffic without its operator's consent on hosts where IPv4 forwarding was already on (Docker hosts). A relay invite's command now includes `--relay`.
+  - **LAN routes:** a node on the same LAN as a shared subnet lost its route to its own LAN, and the route did not come back when the mesh was removed.
+  - **A subnet router's own address** in the subnet it shares (often the gateway or DNS) was unreachable from the mesh.
+  - **Turning it off:** `mesh disable` closed the port before nodes heard about it, so most kept their links.
+  - **Waiting nodes:** a node waiting for approval, or disabled, asked the coordinator again at once, over and over.
+  - **Map traffic:** each direct link's traffic was counted twice.
+  - **firewalld:** on Fedora, RHEL, Rocky and Alma, firewalld refused all mesh traffic but ping and SSH. `install-mesh.sh --open-firewall` puts the mesh interface in firewalld's trusted zone, and the installer says what to run otherwise.
+  - **Installer:** without `--join` it installs or upgrades the agent only, as the guide says; running the join command again upgrades the agent; it works on bash before 4.4 (Amazon Linux 2); and the invite can come from `GHOSTLINK_MESH_INVITE`, which keeps it out of the process list.
+  - **Packages and agent:** an rpm upgrade left the agent stopped; an interface deleted under the agent is created again; `leave` keeps IPv4 forwarding on when Docker or similar software may need it; an `/etc/hosts` replaced by another program is reported with how to recover.
+  - **API:** `PATCH /mesh` with a new network turned a mesh that was off back on.
+- **App and dashboard.**
+  - **Deletes in Servers I run:** revoking a key, removing a client and rejecting or removing a mesh node showed "Incompatible service response" although the server had done it; the matching `ghostlink server …` commands exited with an error.
+  - **Client sheet:** closing a QR code (Done, Escape or a click beside it) also closed the client, and lost what was typed under New key.
+  - **Edits being reset:** a client's Rules tab, and a mesh node's tags and shared subnets, went back to the saved values on every refresh.
+  - **Mesh access rules:** a list of ports such as "5432, 8000-8100" can be typed; the comma or space disappeared as it was typed.
+  - **Messages over sheets:** messages shown while a sheet was open were blurred under it and could not be read.
+  - **Certificate password:** "Without password" showed the profile's password only in a message that disappeared after 3 seconds. It now stays in a sheet with a Copy password button.
+  - **Server not answering:** the last live readings stayed on screen as if they were current. The Island now says "Server not answering", and clients are no longer shown online.
+  - **Overview:** the 24 h chart and the day and week cards refresh every minute; they were fetched only when the view opened.
+  - **Older servers:** opening Network or the Island's protocol list for a server older than 0.5.0 left the window blank.
+  - **Ports of imported Outline keys** are listed in Network and the Island, so you can open them in the firewall.
+  - **Client settings:** a speed limit below 0.001 MB/s, set with the server's commands, blocked saving the client's other settings; half-typed numbers such as "2e" silently removed a data limit or the default speed limit; Reset usage asks first and changes nothing else.
+  - **Usage chart:** west of UTC, every daily bar was labelled a day early.
+  - **WireGuard on Windows:** some downloaded .conf files had names longer than WireGuard for Windows and AmneziaWG accept, and copies were saved as "name (1).conf", whose space they refuse.
+  - **Dashboard sign-in:** opening the login link again in the same tab did nothing, and a failed sign-in left "Connecting to the server…" on screen.
+  - **The app:** a failed connection explains why in words instead of an internal code; Servers I run shows each server's current name and version; a second server named in another script (Burmese, Thai, Chinese…) is no longer refused; "Use on this device" works for long client names; an action taken while a connection was starting or stopping says to try again; Add key and Add server no longer reopen their sheet; errors while saving a file are no longer empty; the tray's Open Ghostlink restores a minimized window.
+  - **Keyboard and screen readers:** a client opens from the keyboard in the list; sheets are announced by their title; the first field of each sheet gets the focus.
+  - **Smaller fixes:** Enter in New client follows the Create button's rules; Turn on mesh no longer reports success after a failure; the map keeps dragged positions when a node joins; numbers no longer read "1000 KB/s"; the app asks the local service for its saved servers every 5 s instead of every second, and both apps stop polling while hidden.
+- **Connections on this device.**
+  - **PCs with Hyper-V, WSL or Docker:** when a Hyper-V or WSL switch, a Docker network or the LAN covered 172.28.85.0/30, every Shadowsocks, VLESS, WireGuard and AmneziaWG connection failed with a permissions or driver error. Only an address inside the tunnel's own range stops a connection now.
+  - **Connections into the device:** with WireGuard or AmneziaWG, the server, or another client of a server that forwards between clients, could open connections into the device through the tunnel; in "only" mode or with the LAN kept direct they reached the device's own services and network. They are now refused.
+  - **OpenVPN reconnects:** after a dropped connection (Wi-Fi lost for longer than the server's ping timeout, sleep, a server restart), an OpenVPN connection stayed "reconnecting" until you disconnected by hand, while traffic left outside the VPN. It now reconnects by itself, and a first attempt can move on to the profile's next `remote`.
+  - **OpenVPN profiles:** `proto tcp` (also `tcp4` and `tcp6`) is accepted as the TCP client it means; `auth SHA384`/`SHA512` and the `redirect-gateway` flags `ipv6`, `bypass-dhcp` and `block-local` are kept instead of being replaced; a private key that starts with an `EC PARAMETERS` block is accepted.
+  - **OpenVPN start failures** left the plaintext profile, with its private key, and the management password in the service's private folder until a later connection or a restart. They are removed at once.
+  - **Network cleanup:** if the tunnel worker could not confirm its cleanup while a connection attempt was being stopped, the next connection went ahead anyway. It is now blocked with `cleanup_unverified`, like other cleanup failures.
+  - **Repeated connect:** `ghostlink connect` or the agent tool `vpn_connect` for the server already in use fetched dynamic keys and checked the profile again, and could report an error while the tunnel stayed up.
+  - **Autoconnect at startup:** a refused attempt (for example a dynamic key whose server could not be reached before the network was up) showed a plain "Disconnected". It now shows `autoconnect_failed`, and the service log names the reason.
+  - **Linux full tunnel:** a WireGuard or AmneziaWG profile whose AllowedIPs cover every public IPv4 address in pieces (`0.0.0.0/1, 128.0.0.0/1`, or an "exclude private IPs" list) counted as split and passed the `--allow-full-tunnel` safeguard for SSH access.
+  - **Keys:** a Ghostlink `ss://` key whose name was longer than 80 characters could not be added; names are now cut to 80 characters, for every key format. A dynamic key ending in a bare `#` is accepted, and 6to4 and Teredo addresses are refused as key servers.
+  - **Split tunneling:** full mode no longer turns on process lookups for apps kept from an earlier mode.
+- **CLI and the local service.**
+  - **Agent tokens:** `ghostlink agent revoke` with a name that has no grant (for example in different capitals) reported success and left the real grant working. `agent grant` into an existing token file used to replace the grant and leave the saved token invalid.
+  - **CLI:** `server keys create --output FILE` checks `FILE.conf` before the key is created; `--stdin` and `--key-stdin` respect `--timeout`; commands that save a file refuse an answer without the expected content; `ghostlink key --help` lists every key format.
+  - **Service:** a failed IPC connection no longer stops the service and its tunnel; a change that would make the saved state too large to load at the next start is refused; two servers added at the same time cannot pass the 32-server limit; `ghostlink info` lists every engine; import answers say whether the server became the default; a re-keyed managed server is reported as `server_identity_mismatch` also while other calls run.
+  - **Local API:** requests that add fields to actions without fields (for example `{"type":"status","x":1}`) are refused, as documented.
+- **Packages and releases.**
+  - **Windows owner:** installing a newer version with `GHOSTLINK_OWNER_SID` now changes who may control the Ghostlink service; the installer kept the previous owner whatever was given.
+  - **Linux service after an upgrade:** upgrading the `ghostlink` package no longer turns `ghostlinkd` back on after you disabled it.
+  - **RPM upgrades** of the client or the mesh agent no longer leave `ghostlinkd` or the agent stopped until the next reboot.
+  - **Owner on Linux:** an owner written as `GHOSTLINK_OWNER_UID="1000"`, with spaces around `=` or with a Windows line ending, is kept; it was replaced by the user who ran sudo.
+  - **Release checksums:** `SHA256SUMS.txt` lists every file of a release, also after the workflow runs again, and a published release is never changed by the workflow. A draft is made only after every check of the commit passed.
+  - **Builds:** license notices of dependency versions no longer used are gone; the Windows tunnel worker is built with `CGO_ENABLED=0`, as the corresponding-source instructions say; files in the Linux `.tar.gz` no longer keep group-write permission.
+- **Earlier server paths (the offline Outline-compatible proxy, OpenVPN PKI and playbooks).**
+  - **Offline proxy, destinations:** a key could reach the server's loopback services, its private network and the cloud metadata endpoint through the proxy. The generated configuration blocks the same destinations as the Ghostlink server. Run `provision.py render` and deploy the new `config.json`.
+  - **Offline proxy, IPv6 and errors:** new setups listen on IPv4 and IPv6; a failed `add` no longer leaves a key file that blocks the name; errors say what went wrong; on Windows, a folder other accounts can open is refused.
+  - **OpenVPN CRL:** every CRL expired after 30 days, and the OpenVPN server then refused every client. CRLs now last 10 years; on a server set up earlier, run `pki.py crl`, make a new bundle and deploy it once.
+  - **OpenVPN PKI:** a mistyped passphrase or a missing OpenVPN during `server` left files that blocked every retry; renewing the server certificate keeps the tls-crypt key; on Windows the PKI folder, profiles and bundles are private to your account.
+  - **Playbooks:** the Outline playbook extracts sing-box as root-owned files; both restart a service when only its unit file changed; the OpenVPN playbook's rules drop client-to-client traffic and traffic to private ranges and cloud metadata.
+  - **Terraform draft:** the instance metadata hop limit is pinned to 1.
+- **Documentation and tests.**
+  - **Secrets on the server:** the IPsec settings file `desired.json` holds XAuth passwords, the group key and the server's private key, so it is a secret. Profiles install the server's CA as a root certificate without name constraints; protect `state.json` accordingly.
+  - **Known limit:** WireGuard and AmneziaWG profiles that route only some ranges, such as a home LAN, cannot pass the connection health check and fail after the connection timeout. Keys the Ghostlink server issues route everything and are not affected.
+  - **CI:** on Windows, the process tests' step checked only its last command, so failures were hidden; it now checks every command. A test that made an expired certificate failed with OpenSSL 3.4 and later. Many smoke checks written as `a && b`, which could not fail, now can. The offline proxy is tested against sing-box.
+
+### Changed
+
+What behaves differently after an upgrade:
+
+- **WireGuard and AmneziaWG NAT:** each UDP destination now gets its own session on the server, so calls and games see a stricter (symmetric) NAT on these two protocols, and a later UDP packet to another DNS server or to a blocked address is dropped.
+- **Mesh forwarding needs consent:** a node made a relay without `--relay`, `--advertise-routes` or `allow-forwarding` stops forwarding after the upgrade until its operator runs `sudo ghostlink-mesh allow-forwarding && sudo systemctl restart ghostlink-mesh`.
+- **Stricter commands:** server commands refuse words they do not take; `ghostlink agent revoke` of an unknown name exits with an error; `ghostlink agent grant` refuses an existing token file.
+- **Linux full tunnel:** WireGuard and AmneziaWG profiles that cover every public IPv4 address in pieces need `--allow-full-tunnel`, like other full-tunnel profiles.
+- **OpenVPN:** `auth SHA384`/`SHA512` and `redirect-gateway ipv6|bypass-dhcp|block-local` are now honoured, so a profile that only worked because SHA256 was forced may now fail against its server.
+- **IKEv2/IPsec profiles:** the identifier of a profile changes once, so a device that installs a refreshed profile keeps the old one too; remove it once.
+- **Upgrades:** `setup` stops the server cleanly before it changes the state, so an upgrade takes a few seconds longer.
+- **Logs and history:** the VPN engine's log is off (`serve --log-level` turns it on); the history size limit is 20,000,000 bytes by default, so a file between that and 20 MiB is trimmed at its next save.
+- **Clients view:** "Last handshake" is now "Last seen".
 
 ## [0.8.0] - 2026-11-08
 

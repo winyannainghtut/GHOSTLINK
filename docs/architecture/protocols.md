@@ -13,10 +13,11 @@ Every protocol except the optional OpenVPN backend runs in the managed worker (`
 | WireGuard | sing-box native `wireguard` endpoint | `proxy` |
 | AmneziaWG | Ghostlink `amneziawg` endpoint (below) | `proxy` |
 
-- **Routing target:** `route.final` is always set to `proxy` explicitly, because sing-box only falls back to endpoints when `final` names one.
-- **DNS:** WireGuard profiles with a `DNS =` resolver use it over UDP through the tunnel. Every other profile uses DNS-over-HTTPS to 1.1.1.1 through the tunnel.
-- **Partial `AllowedIPs`:** a WireGuard profile that doesn't route everything becomes the TUN's `route_address` list, so only those prefixes enter the tunnel.
-- **Build tags:** `with_gvisor` for the userspace stacks, `with_utls` for REALITY, `with_wireguard` for the endpoint.
+- **Routing target:** `route.final` is always set explicitly: to `proxy` in full and bypass modes, because sing-box only falls back to endpoints when `final` names one, and to `direct` in "only" mode.
+- **DNS:** WireGuard profiles with a `DNS =` line use its first address over UDP through the tunnel; later addresses are ignored, so there is no fallback. Amnezia `vpn://` keys whose configuration has no DNS line get the key's `dns1`/`dns2` added at import. Every other profile uses DNS-over-HTTPS to 1.1.1.1 through the tunnel.
+- **Partial `AllowedIPs`:** without `0.0.0.0/0`, a WireGuard profile's `AllowedIPs` become the TUN's `route_address` list, so only those prefixes enter the tunnel. A list that still covers every public IPv4 address (`0.0.0.0/1, 128.0.0.0/1`, or the "exclude private IPs" list of the WireGuard apps) counts as a full tunnel, also for the Linux `--allow-full-tunnel` gate.
+- **Known limit of split WireGuard and AmneziaWG:** the health probe (`https://www.gstatic.com/generate_204`) and the default DNS-over-HTTPS resolver go through the tunnel, and WireGuard drops anything addressed outside `AllowedIPs`. A profile that routes only some ranges, such as a home LAN, therefore never passes the probe. It fails at the connection deadline with `outline_server_unreachable_or_key_rejected`. On Windows, name lookups also fail while it tries, unless its `DNS =` server lies inside `AllowedIPs`.
+- **Build tags:** `with_gvisor` for the userspace stacks (the TUN and the WireGuard and AmneziaWG endpoints), `with_utls` for REALITY. `with_wireguard` is passed too but has no effect, because the worker registers the WireGuard endpoint directly.
 
 `core/vpn-engine/src/access.rs` is the single entry point that turns a credential into an `Outbound`. It is used both when importing (to validate) and when connecting (to re-validate the sealed original).
 
@@ -26,7 +27,9 @@ sing-box has no AmneziaWG support. Rather than fork it, `core/outline-worker/int
 
 - **Network stack:** sing-box's exported gVisor stack device (`transport/wireguard.NewDevice`). Its `tun.Device` method set matches amneziawg-go's exactly, except for the `Event` type, which a small adapter converts.
 - **Client sockets:** a bind adapted from sing-box's `ClientBind`. It sends through sing-box's dialer, so UDP binds to the physical interface and never loops back into the TUN. **It must not rewrite packet bytes.** sing-box's original overwrites bytes 1–3 for Cloudflare WARP's "reserved" field, which is exactly where AmneziaWG's magic headers sit.
-- **Server sockets:** amneziawg-go's standard bind on `listen_port`. Incoming flows go to sing-box's router, with each peer's `user` attached, so `auth_user` rules apply to WireGuard/AmneziaWG users the same way as to Shadowsocks and VLESS users.
+- **Server sockets:** amneziawg-go's standard bind on `listen_port`. Incoming flows go to sing-box's router with each peer's `user` attached, also when UDP and ICMP flows are pre-matched, so `auth_user` rules apply to WireGuard/AmneziaWG users the same way as to Shadowsocks and VLESS users.
+- **Server UDP:** one NAT session per destination address and port. Rules are judged when a session opens, so with one session per client socket (sing-tun's default) a client could send one allowed datagram and then reach any other destination from the same socket. Only the session's destination can answer it.
+- **Client flows:** a client endpoint drops every flow the far side of the tunnel starts. Its own flows use their own sockets, so only such flows reach the stack's forwarder; routed by the client's rules, they could reach the device's loopback and LAN in "only" mode or with LAN kept direct. Plain WireGuard profiles use sing-box's native endpoint, so the worker's configuration starts with a route rule that rejects every flow arriving from the `proxy` endpoint (`worker_session.rs`); it covers both endpoints.
 - **Configuration safety:** obfuscation values are written through amneziawg-go's UAPI from an allowlist of parameter names. Values containing `=`, CR/LF or NUL are refused, so a config cannot inject other UAPI settings.
 - **Plain WireGuard:** the same endpoint with zero obfuscation parameters interoperates with a stock WireGuard client. The client side still uses sing-box's native endpoint for plain WireGuard.
 
@@ -34,17 +37,23 @@ Interop tests in `internal/awg` run against the real upstream peer:
 - upstream amneziawg-go with legacy, 2.0 and zero parameters;
 - an upstream AWG 2.0 client against our server;
 - a stock WireGuard client against our server;
-- per-user rules;
+- per-user rules, and the peer's user in pre-match;
+- one UDP socket that sends to an allowed port and then to a blocked one, which must not answer;
+- the far side of the tunnel dialing the client's tunnel address, which must not get through;
 - a mismatched header, which must fail.
+
+Other tests check that an engine that was only validated, or started and closed, leaves no goroutines behind.
 
 ## Import formats
 
 | Format | Parser | Notes |
 |---|---|---|
 | `ss://`, `ssconf://` | `outline.rs` | Modern AEAD only; dynamic keys over verified HTTPS to public hosts, pinned DNS, no redirects, 64 KiB cap |
-| `vless://`, Xray JSON | `vless.rs` | `security` must be `reality` or `tls`; flow empty or `xtls-rprx-vision`; transport TCP/raw only; uTLS fingerprints map `hellochrome_*` to `chrome` |
+| `vless://` | `vless.rs` | `security` must be `reality` or `tls`; flow empty or `xtls-rprx-vision`; transport TCP/raw only; uTLS fingerprints map `hellochrome_*` to `chrome`. Xray client JSON is read only as the `last_config` of an `amnezia-xray` container in a `vpn://` key, not on its own |
 | `.conf` | `wireguard.rs` | One `[Peer]`; AmneziaWG keys map to UAPI names; `HeaderProtectionKey` base64 → hex and requires S1–S4 ≥ 12; `RandomTrailers`/`DisableCookies` → `true`/`false`; legacy `J1`–`J3`/`Itime` ignored |
 | `vpn://` | `amnezia.rs` | `vpn://` + base64url(4-byte big-endian length + zlib(JSON)). Containers `amnezia-awg2`, `amnezia-awg`, `amnezia-wireguard` and `amnezia-xray` are supported. `last_config` is a JSON *string*; its `config` text goes through `wireguard.rs` |
+
+A server name carried by a key (an `ss://` or `vless://` `#fragment`, an Amnezia `description`) is cut to 80 characters, and dropped if it contains control characters; it never makes the key itself invalid. Ghostlink servers name keys "user @ server", which can be longer.
 
 Always rejected:
 - `.conf`: `PreUp`/`PostUp`/`PreDown`/`PostDown`, `Table`, `FwMark`, `SaveConfig`, unknown keys and malformed keys.
@@ -62,9 +71,10 @@ It is owner-only and validated by `core/vpn-engine/src/split.rs`. The generated 
 
 1. `sniff`, so protocol (DNS) and site names (TLS SNI, HTTP Host, QUIC) are known;
 2. the health proxy is pinned to `proxy`, because otherwise "only" mode would let the health check succeed without the tunnel;
-3. IPv6 from the TUN is rejected;
-4. DNS is hijacked;
-5. the policy rules: bypass sends matches to `direct`, "only" sends them to `proxy`. App rules use `process_name`/`process_path` with `find_process`.
+3. while this device administers Ghostlink servers, each server's API `host:port` goes `direct` (by IP, or by domain plus a local DNS rule; see below);
+4. IPv6 from the TUN is rejected;
+5. DNS is hijacked;
+6. the policy rules: bypass sends matches to `direct`, "only" sends them to `proxy`. App rules use `process_name`/`process_path`, and `find_process` is on only when such rules exist (never in full mode). In full and bypass modes, "Keep LAN direct" adds an `ip_is_private` rule last.
 
 `final` is `proxy`, or `direct` in "only" mode. Bypassed sites resolve through the local resolver; in "only" mode, listed sites resolve through the tunnel.
 
@@ -91,14 +101,17 @@ Limits: OpenVPN profiles ignore the policy, and site rules cannot see names that
   2. hijack DNS (protocol DNS or port 53);
   3. `resolve`;
   4. always-on internal blocks;
-  5. API port and own-IP blocks;
+  5. the API, dashboard and (with the mesh on) mesh ports on any address, and the server itself: the hostname's IP and every public address on the host's interfaces;
   6. per-user blocks (`auth_user`);
   7. exempt users routed `direct`;
   8. global blocks;
   9. `final: direct`.
+- **UDP after the first packet:** sing-box judges a UDP session by its first packet. `guard.go` (`udpGuard`, applied in `policedPacketConn`) checks every later packet the client sends to another destination against the address and port parts of the same rules in the same order: DNS, the always-on blocks and the server's own addresses, the client's own blocks, exemption, the global blocks. Site-name blocks need the session's sniffed name and apply only to its first packet. WireGuard and AmneziaWG endpoints also open one NAT session per destination (see *AmneziaWG endpoint*).
 - **DNS rules:** per-user, then exempt, then global block rules answer `NXDOMAIN`.
-- **Usage:** `usage.go` is a router `ConnectionTracker`. It counts each user's bytes for connections, packet connections and pre-matched flows, and outlives engine reloads.
-- **Changes:** `service.go` applies each change to a copy of the state. It restarts the engine only if the rendered configuration differs, and saves only after the engine started. `engine.go` validates a new configuration fully before closing the running instance, because the ports must be free; if the new one fails, it restarts the last good one.
+- **Usage:** `Monitor` in `monitor.go` is the router `ConnectionTracker` (see *Monitoring*). It counts each user's bytes for connections, packet connections and pre-matched flows, and outlives engine reloads.
+- **Changes:** `service.go` applies each change to a copy of the state. It restarts the engine only if the rendered configuration differs, and saves only after the engine started. `engine.go` validates a new configuration fully before closing the running instance, because the ports must be free; if the new one fails, it restarts the last good one. A protocol's new port, and a new dashboard port, are tried before they are saved.
+- **Engine that cannot start:** `Start` reports it and carries on, so the management API, the dashboard and the server commands come up and can fix it (usually a port another program holds). `ensureEngine` tries again every 30 s, and also restarts the engine when the host's addresses change; `GET /live` reports `health.engine_error` meanwhile.
+- **Engine log:** off by default (`serve --log-level`), because sing-box logs the names users look up and the addresses they reach. The container log holds the server's own warnings and errors.
 - **Keys:** `keys.go` renders them. `ss://` uses SIP002 userinfo plus `outline=1`. `vless://` carries `pbk`, `sid`, `sni` and `fp=chrome`. `vpn://` uses Amnezia's qCompress layout, with no SSH fields.
 
 The client service manages servers through `core/vpn-engine/src/server_admin.rs`:
@@ -114,14 +127,17 @@ The client service manages servers through `core/vpn-engine/src/server_admin.rs`
 - `Protocol`, the sniffed traffic type;
 - `Domain` or the FQDN destination, only when site stats are on. Domains map through a small service table or else `publicsuffix`, and are capped at 500 labels per user per day.
 
-Open connections are counted by wrappers that embed sing's counter conns, so upstream and zero-copy interfaces are kept, and they decrement once on `Close`/`CloseFlow`.
+Open connections are counted by wrappers that embed sing's counter conns and decrement once on `Close`/`CloseFlow`. For TCP they keep the upstream and zero-copy interfaces. For UDP, `policedPacketConn` is deliberately not `ReaderReplaceable` and has no read waiter or batch path, so every packet the client sends goes through its `ReadPacket` (policing and `udpGuard`). It does expose `Upstream`, which sing follows to find the WireGuard stack's handshake reports and NAT timeout, and `UpstreamWriter`, from which sing sizes the header room of the buffers it writes to the client; without it the first Shadowsocks UDP reply overflowed its buffer and crashed the server (an unreleased build only).
 
 Periodic work in `service.go`:
 - **Every second:** a sampler turns totals into per-user rates and a 120-sample server series.
-- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, a WireGuard/AmneziaWG peer poll, and a disk check.
+- **Every 5 s:** a WireGuard/AmneziaWG peer poll, and the IPsec component's session report.
+- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, another peer poll, a disk check, and `ensureEngine` (start the engine again if it is down, or if the host's addresses changed).
 - **Every 5 min:** a save with rotation.
 
-The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=` and `last_handshake_time_*`) supplies real client addresses and online state for WireGuard-family users, whose routed source is only a tunnel address.
+The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=`, `last_handshake_time_*` and `rx_bytes`) supplies real client addresses for WireGuard-family users, whose routed source is only a tunnel address, and shows whether each peer is still sending.
+
+**Online state** (`isOnline` in `monitor.go`) means the client was seen in the last 60 s. Each user has one "last seen" time that only the client's own activity moves: a new connection or flow, an upload in a one-second sample, a download of at least 16 KB in one second (a client that has gone stops acknowledging, so a bulk transfer to it stalls within seconds), a WireGuard/AmneziaWG peer whose receive counter grew between polls (issued keys send a keepalive every 25 s) or that completed a handshake, and every IKEv2/IPsec report while a session is up. Open connections are counted but don't make a client online. A client that leaves without closing them, for example WireGuard switched off or a phone out of range, can leave them open on the server for many minutes, and remote services keep writing small amounts to them.
 
 The dashboard (`dashboard.go` with embedded static files) serves the same API mux under `/api/` after its own session checks, and the server commands (`admin.go`) call the API over loopback. All three front ends share one implementation.
 
@@ -142,9 +158,10 @@ flowchart LR
 
 - **Connections:** four of them (`gl-ikev2-cert`, `gl-ikev2-eap`, `gl-ikev1-cert` and `gl-ikev1-psk` in Aggressive Mode) use fixed proposals. All are UDP-encapsulated (`encap = yes`) and draw from the pools `10.79.0.0/20` and `10.80.0.0/20`.
 - **Identities:** the IKEv2 server identity is `%any`, so the identifier the device requests is answered when the server certificate carries it. Every key's remote identifier is added to that certificate.
-- **Users:** identified by EAP or XAuth name, else by the certificate's identity.
+- **Users:** identified by EAP or XAuth name, else by the certificate's identity. A key stores its identity when it is created (`name-ID@ghostlink` unless given), so renaming the user cannot orphan the key or its certificate. The agent refuses a whole settings file for one bad identity, so the default always starts with a letter or digit, and the server leaves out a key whose identity the agent would refuse instead of writing nothing.
 - **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to a sing-box `direct` inbound (high port, allowed only from the pools), whose `hijack-dns` applies the DNS rules for everyone.
-- **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted.
+- **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted. The counters are totals since each session began, and the agent and its sessions outlive the server, so the first report after the server starts only sets the baseline. A child's counters are then remembered for 3 minutes after it last appears: a session that enforcement ended is in no report for a moment and comes back as a closed child, and its final counters must be counted against what was counted already. A closed child that is reported again with no new bytes does not count as the client being seen.
+- **Settings file:** every writer of `desired.json` goes through one lock. Saved changes write only when the agent would be told something new (the CRL's dates and the generation are not changes), because each new generation makes the agent reload strongSwan and its firewall; the daily check and the start of the server always write, which refreshes the CRL.
 
 ## Mesh of Linux servers (v0.6.0)
 
@@ -161,6 +178,7 @@ flowchart LR
 - **Join:** the agent generates its WireGuard key and posts the invite token, its name, public key, listen port, reported endpoints and offered subnets. It gets back a node ID, a node secret and its address (the next free one in the mesh network).
 - **Sync:** every call reports per-peer handshake, rx/tx and endpoint, ping RTTs, the applied generation and any error.
   - The coordinator answers at once when the node's configuration differs from the applied one, otherwise after up to 10 s, or as soon as anything changes (a join, an admin change, a path change, a node coming online or moving address).
+  - A node that is not active (waiting for approval, disabled) waits the same way, unless it still has a configuration to take down. When the mesh is turned off, the port shuts down gracefully, so the waiting syncs answer `disabled` first.
   - The generation is a 53-bit hash of the configuration's content, so identical configurations never cause re-applies.
 - **Per-node configuration** (`meshproto.Config`):
   - the address with the mesh prefix and the listen port;
@@ -175,20 +193,22 @@ flowchart LR
   3. the address the coordinator sees the target connect from, with the target's listen port;
   4. a private address, when neither is public (a LAN-only mesh).
   5. Otherwise none: the target connects out.
-- **Paths:** a pair starts direct.
-  - It is relayed when neither side has an endpoint for the other, or when no handshake is younger than 3 minutes 90 s after the pair started. It stays relayed for 15 minutes, then tries direct again.
-  - Relaying moves the far node's `AllowedIPs` into the relay peer on both sides. The relay has IP forwarding on, and its FWD chain allows mesh-to-mesh traffic between relayed peers.
+- **Paths:** a pair starts direct. Tick decides every 5 s.
+  - It is relayed when neither side has an endpoint for the other, or when no handshake is younger than 3 minutes once 90 s have passed. The 90 s count from when both nodes are online and have applied a configuration.
+  - Relaying moves the far node's `AllowedIPs` into the relay peer on both sides. Each side keeps the far node as a probe: a peer with its endpoint and keepalive but no `AllowedIPs`. A handshake on the probe since the pair was relayed makes it direct again. There is no timed retry, so traffic never leaves the relay for a direct path that does not work.
+  - The relay has IP forwarding on, and its FWD chain allows mesh-to-mesh traffic between relayed peers, but only with the node's local consent.
 - **Firewall on each node:**
-  - `GHOSTLINK-MESH-IN` (INPUT from `glmesh0`): established traffic, ping when allowed, then the compiled rules for the node's address (or everything when the mesh has no rules), then drop.
-  - `GHOSTLINK-MESH-FWD` (FORWARD from `glmesh0`): established traffic; on a relay, traffic back out of `glmesh0` to the relayed peer. Mesh traffic to the node's shared subnets passes under the same rules; anything else is dropped.
+  - `GHOSTLINK-MESH-IN` (INPUT from `glmesh0`): established traffic, ping when allowed, then the compiled rules for the node's address and its own addresses in its shared subnets (or everything when the mesh has no rules), then drop.
+  - `GHOSTLINK-MESH-FWD` (FORWARD from `glmesh0`): established traffic; connections DNATed from the node's mesh address (published container ports), under the node's rules matched by the original destination and port; on a relay, traffic back out of `glmesh0` to the relayed peer. Mesh traffic to the node's shared subnets passes under the same rules; anything else is dropped.
   - `GHOSTLINK-MESH-OUT` (FORWARD into `glmesh0`): replies going back into the mesh.
   - `GHOSTLINK-MESH-POST`: masquerade from the mesh into shared subnets. `GHOSTLINK-MESH-MSS`: MSS clamping on `glmesh0`.
-  - They are written with `iptables-<nft|legacy>-restore --noflush` through `internal/hostfw`, as the IPsec agent does.
-- **Map data:** `GET /mesh/topology` returns node views (status, online within 30 s, in sync, endpoint, seen-from, routes, version, error, rates) and link views (path, via, RTT from pings, handshake age, rates). All of it is live in memory and none is stored.
+  - They are written with `iptables-<nft|legacy>-restore --noflush` through `internal/hostfw`, as the IPsec agent does, before the interface is configured. The backend is the one the host's `iptables` command uses. Every 30 s the agent checks its jumps and, if one is missing, restores the chains and jumps.
+- **Map data:** `GET /mesh/topology` returns node views (status, online within 30 s, in sync, endpoint, seen-from, routes, version, error, rates) and link views (path, via, RTT from pings, handshake age, and rates: what node A receives from and sends to node B). All of it is live in memory and none is stored.
 
 ## Process notes
 
 - **Close race in the TUN adapter:** the adapter (`internal/awg/tun.go`) makes `Close` wait for writes in flight and refuses later writes. amneziawg-go closes the TUN before stopping peers, and sing-box's stack dereferences a detached dispatcher on a late write. This crashed an AmneziaWG client on Linux CI and would have crashed the server on reloads.
+- **Nothing left after a reload:** the endpoint creates its gVisor stack when it starts, not when it is built. sing-box closes only what has started, and the server validates each new configuration without starting it, so a stack built earlier leaked on every change. The adapter also closes its events channel when it closes; amneziawg-go's event reader stops only then.
 
 - The worker ignores `SIGPIPE` on Unix (`sigpipe_unix.go`). A broken status pipe returns an error instead of killing the worker before its graceful engine shutdown.
-- Status events are fixed JSON codes; upstream logs stay disabled so no credential or address reaches the daemon.
+- Status events are fixed JSON objects: `started` with `vpn_ip` (the IPv4 the worker saw on the TUN, which the daemon configured), `failed` with a fixed code, and `closed`. Upstream logs stay disabled, so no credential, server address or traffic destination reaches the daemon.

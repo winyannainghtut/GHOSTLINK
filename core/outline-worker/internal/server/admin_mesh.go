@@ -22,7 +22,8 @@ const meshUsage = `Mesh: a private network between your Linux servers (run with 
 
   mesh                                 status, nodes and links
   mesh enable [--cidr 100.96.0.0/16]   turn the mesh on (this server coordinates it)
-  mesh disable                         turn it off (nodes disconnect, nothing is deleted)
+  mesh disable                         turn it off (connected nodes take their links down;
+                                       nothing is deleted)
   mesh invite [--tags web,db] [--uses 1] [--hours 24] [--relay] [--approval]
                                        print the one-line command that joins a server
   mesh invites | mesh revoke ID        open invites
@@ -162,7 +163,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 	case "enable":
 		flags := flag.NewFlagSet("mesh enable", flag.ContinueOnError)
 		cidr := flags.String("cidr", "", "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		patch := map[string]any{"enabled": true}
@@ -181,7 +182,8 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 		if err := c.Do(http.MethodPatch, "/mesh", map[string]any{"enabled": false}, nil); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "The mesh is off; nodes disconnect within seconds. Turn it on again with: sudo ghostlink-server mesh enable")
+		fmt.Fprintln(out, "The mesh is off; connected nodes take their links down within seconds. Turn it on again with:")
+		fmt.Fprintln(out, "sudo ghostlink-server mesh enable")
 		return nil
 	case "invite":
 		flags := flag.NewFlagSet("mesh invite", flag.ContinueOnError)
@@ -192,7 +194,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 		approval := flags.Bool("approval", false, "")
 		local := flags.Bool("local", false, "")
 		note := flags.String("note", "", "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		request := map[string]any{"tags": splitList(*tags), "uses": *uses, "expires_hours": *hours, "relay": *relay,
@@ -205,7 +207,11 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 			fmt.Fprintf(out, "Run this on the server to add (works %d time(s), until %s):\n\n  %s\n\n", created.UsesLeft,
 				time.Unix(created.ExpiresUnix, 0).UTC().Format("2 Jan 15:04 UTC"), created.Command)
 			fmt.Fprintln(out, "Options after --join: --name NAME, --advertise-routes 10.0.0.0/24 (share a subnet; approve it here),")
-			fmt.Fprintln(out, "--port N (WireGuard UDP port, default 51820). Keep the command private until it is used.")
+			fmt.Fprintln(out, "--port N (WireGuard UDP port, default 51820). Keep the command private until it is used: while it")
+			fmt.Fprintln(out, "runs, other users of that server can see it in the process list, and sudo logs it.")
+			if created.UsesLeft > 1 {
+				fmt.Fprintf(out, "Revoke the invite when your servers have joined: sudo ghostlink-server mesh revoke %s\n", created.ID)
+			}
 		})
 	case "invites":
 		var invites []inviteView
@@ -248,7 +254,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 		routes := flags.String("routes", "", "")
 		disable := flags.Bool("disable", false, "")
 		enable := flags.Bool("enable", false, "")
-		if err := flags.Parse(rest[1:]); err != nil {
+		if err := parseFlags(flags, rest[1:]); err != nil {
 			return err
 		}
 		change := map[string]any{}
@@ -385,7 +391,7 @@ func (c *AdminClient) meshRules(args []string, out io.Writer, print func(any, fu
 		to := flags.String("to", "*", "")
 		proto := flags.String("proto", "any", "")
 		ports := flags.String("ports", "", "")
-		if err := flags.Parse(args[1:]); err != nil {
+		if err := parseFlags(flags, args[1:]); err != nil {
 			return err
 		}
 		rule := mesh.Rule{From: *from, To: *to, Protocol: *proto, Ports: splitList(*ports)}

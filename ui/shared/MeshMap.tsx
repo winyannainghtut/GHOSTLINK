@@ -80,17 +80,22 @@ export function MeshMap({ topology, selected, onSelect, resetToken = 0, classNam
   const drag = useRef<{ id: string; start: { x: number; y: number }; origin: Position; moved: boolean } | null>(null);
   const latest = useRef(positions);
   latest.current = positions;
+  const handledReset = useRef(resetToken);
 
   // Lay out again only when nodes come or go (or on "Rearrange"); dragged nodes keep their place.
+  // Only a new "Rearrange" forgets the saved layout: the token stays set after it, and nodes
+  // dragged since then must survive the next node that joins or leaves.
   useEffect(() => {
-    if (resetToken) {
+    const reset = resetToken !== handledReset.current;
+    handledReset.current = resetToken;
+    if (reset) {
       try {
         localStorage.removeItem(storageKey(topology.id));
       } catch {
         /* storage off */
       }
     }
-    setPositions(ring(topology.nodes, resetToken ? {} : loadSaved(topology.id)));
+    setPositions(ring(topology.nodes, reset ? {} : loadSaved(topology.id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ids, topology.id, resetToken]);
 
