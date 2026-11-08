@@ -114,7 +114,14 @@ test('profile path traversal and malformed certificate are rejected', async () =
   assert.equal((await rpc({schema_version: 1, action: {type: 'profile_import', name: 'badcert', content: profile.replace('BEGIN CERTIFICATE', 'BEGIN OTHER')}})).error.code, 'invalid_profile');
 });
 test('expired certificates are rejected at import', async () => {
-  execFileSync(openssl, ['x509', '-in', path.join(temp, 'client.crt'), '-signkey', path.join(temp, 'client.key'), '-days', '-1', '-out', path.join(temp, 'expired.crt')], { windowsHide: true, stdio: 'pipe' });
+  const resign = dates => execFileSync(openssl, ['x509', '-in', path.join(temp, 'client.crt'), '-signkey', path.join(temp, 'client.key'), ...dates, '-out', path.join(temp, 'expired.crt')], { windowsHide: true, stdio: 'pipe' });
+  try {
+    resign(['-days', '-1']);
+  } catch {
+    // OpenSSL 3.4 and later refuse negative days ("end date before start date") but can set the
+    // dates themselves; earlier versions have no such options.
+    resign(['-not_before', '20200101000000Z', '-not_after', '20200102000000Z']);
+  }
   const expired = await fs.readFile(path.join(temp, 'expired.crt'), 'utf8');
   const r = await rpc({schema_version: 1, action: {type: 'profile_import', name: 'expired', content: profile.replace(/<cert>[\s\S]*?<\/cert>/, `<cert>\n${expired}</cert>`)}});
   assert.equal(r.error.code, 'invalid_profile'); assert.match(r.error.message, /expired/);
