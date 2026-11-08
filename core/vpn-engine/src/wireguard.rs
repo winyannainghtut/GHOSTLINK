@@ -30,8 +30,46 @@ impl WgConfig {
     pub fn is_amnezia(&self) -> bool {
         !self.obfuscation.is_empty()
     }
-    pub fn full_tunnel(&self) -> bool {
+    /// AllowedIPs lists 0.0.0.0/0, so the TUN can take the default routes. Any other list becomes
+    /// the TUN's exact route list.
+    pub fn routes_everything(&self) -> bool {
         self.peer.allowed_ips.iter().any(|p| p == "0.0.0.0/0")
+    }
+    /// AllowedIPs send every public IPv4 address through the tunnel, also when they are split
+    /// into pieces (`0.0.0.0/1, 128.0.0.0/1`) or leave only private ranges out (the "exclude
+    /// private IPs" lists of WireGuard apps). Such a profile carries the internet, and replies
+    /// to remote SSH sessions, just like 0.0.0.0/0.
+    pub fn full_tunnel(&self) -> bool {
+        // Ranges that no remote internet host uses: this network, private, shared (CGNAT),
+        // loopback, link-local, multicast and reserved.
+        const NOT_PUBLIC: [&str; 8] = [
+            "0.0.0.0/8",
+            "10.0.0.0/8",
+            "100.64.0.0/10",
+            "127.0.0.0/8",
+            "169.254.0.0/16",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "224.0.0.0/3",
+        ];
+        let mut ranges: Vec<(u32, u32)> = self
+            .peer
+            .allowed_ips
+            .iter()
+            .map(String::as_str)
+            .chain(NOT_PUBLIC)
+            .filter_map(ipv4_range)
+            .collect();
+        ranges.sort_unstable();
+        // Walk the sorted ranges and look for the first address none of them contains.
+        let mut next = 0u64;
+        for (start, end) in ranges {
+            if u64::from(start) > next {
+                return false;
+            }
+            next = next.max(u64::from(end) + 1);
+        }
+        next > u64::from(u32::MAX)
     }
     pub fn kind(&self) -> &'static str {
         if self.is_amnezia() {
@@ -65,6 +103,16 @@ pub fn prefix(value: &str) -> Result<String> {
             .context("Invalid prefix length")?
     };
     Ok(format!("{address}/{bits}"))
+}
+
+/// The first and last address of an IPv4 prefix in `a.b.c.d/n` form; `None` for IPv6.
+fn ipv4_range(prefix: &str) -> Option<(u32, u32)> {
+    let (address, bits) = prefix.split_once('/')?;
+    let address: std::net::Ipv4Addr = address.parse().ok()?;
+    let bits: u32 = bits.parse().ok().filter(|b| *b <= 32)?;
+    let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+    let start = u32::from(address) & mask;
+    Some((start, start | !mask))
 }
 
 fn number(name: &str, value: &str, max: u64) -> Result<u64> {
@@ -403,7 +451,7 @@ mod tests {
     fn plain_wireguard_parses() {
         let c = parse(&config("MTU = 1420", "PersistentKeepalive = 25")).unwrap();
         assert_eq!(c.kind(), "wireguard");
-        assert!(c.full_tunnel());
+        assert!(c.full_tunnel() && c.routes_everything());
         assert_eq!(c.peer.host, "vpn.example.com");
         assert_eq!(c.peer.port, 51820);
         assert_eq!(c.dns.len(), 2);
@@ -442,12 +490,42 @@ mod tests {
                 "",
             ),
             config("", "AdvancedSecurity = on"),
-            config("DNS = corp.example", ""),
             config("Unknown = 1", ""),
             config("", "[Peer]\nPublicKey = x"),
             config("", "").replace(PUBLIC, "not-a-key"),
         ] {
             assert!(parse(&bad).is_err(), "accepted: {bad}");
+        }
+        // The only DNS line names a search domain (the helper already has a DNS line).
+        let search = config("", "").replace("DNS = 1.1.1.1, 1.0.0.1", "DNS = corp.example");
+        let error = parse(&search).err().expect("search domain accepted");
+        assert!(error.to_string().contains("search domains"), "{error}");
+    }
+
+    #[test]
+    fn tunnels_that_cover_every_public_address_are_full() {
+        let allowed = |ips: &str| {
+            parse(&config("", "").replace(
+                "AllowedIPs = 0.0.0.0/0, ::/0",
+                &format!("AllowedIPs = {ips}"),
+            ))
+            .unwrap()
+        };
+        // The "exclude private IPs" list of the WireGuard apps.
+        let public = "0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4";
+        for full in ["0.0.0.0/0", "0.0.0.0/1, 128.0.0.0/1, ::/0", public] {
+            let c = allowed(full);
+            assert!(c.full_tunnel(), "{full} is a full tunnel");
+        }
+        assert!(!allowed("0.0.0.0/1, 128.0.0.0/1").routes_everything());
+        let gap = public.replace("8.0.0.0/7, ", "");
+        for split in [
+            "192.168.1.0/24, 10.6.0.0/24",
+            "0.0.0.0/1",
+            "::/0",
+            gap.as_str(),
+        ] {
+            assert!(!allowed(split).full_tunnel(), "{split} is split");
         }
     }
 }
