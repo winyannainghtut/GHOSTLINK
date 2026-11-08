@@ -15,13 +15,20 @@ if (Test-Path -LiteralPath $sourceDirectory) {
     Remove-Item -LiteralPath $sourceDirectory -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $sourceDirectory | Out-Null
+# Only files under version control go into the public archive: a local checkout can also hold
+# ignored files (keys, .env files, local builds) that must never be published.
+$tracked = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($path in (& git -C $repository ls-files core/outline-worker ui)) { [void]$tracked.Add($path) }
+if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw 'git ls-files listed no source files; build the source bundle from a Git checkout' }
+$repositoryRoot = [IO.Path]::GetFullPath($repository).TrimEnd('\', '/')
+function Test-Tracked($File) { $tracked.Contains($File.FullName.Substring($repositoryRoot.Length + 1).Replace('\', '/')) }
 # The whole Go module: the worker, the server command, every internal package (with tests) and
 # embedded files such as the dashboard's web pages. Only vendored copies and built binaries
 # are left out; the build check below proves nothing needed is missing.
 $moduleRoot = [IO.Path]::GetFullPath((Join-Path $repository 'core\outline-worker'))
 $moduleFiles = Get-ChildItem -LiteralPath $moduleRoot -Recurse -File | Where-Object {
     $relative = $_.FullName.Substring($moduleRoot.Length + 1)
-    -not $relative.StartsWith('vendor' + [IO.Path]::DirectorySeparatorChar) -and
+    (Test-Tracked $_) -and -not $relative.StartsWith('vendor' + [IO.Path]::DirectorySeparatorChar) -and
         ($_.Extension -notin '.exe', '.dll', '.so', '.test', '.out')
 }
 foreach ($file in $moduleFiles) {
@@ -34,7 +41,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory 'internal\awg\endpo
 # The source of the embedded dashboard (internal/server/dashboard is its build): the web UI in
 # React/TypeScript, without installed packages (package-lock.json pins them).
 $uiRoot = [IO.Path]::GetFullPath((Join-Path $repository 'ui'))
-$uiFiles = Get-ChildItem -LiteralPath $uiRoot -Recurse -File | Where-Object { $_.FullName.Substring($uiRoot.Length + 1) -notmatch '^node_modules[\\/]' }
+$uiFiles = Get-ChildItem -LiteralPath $uiRoot -Recurse -File | Where-Object { (Test-Tracked $_) -and $_.FullName.Substring($uiRoot.Length + 1) -notmatch '^node_modules[\\/]' }
 foreach ($file in $uiFiles) {
     $target = Join-Path (Join-Path $sourceDirectory 'web-ui') $file.FullName.Substring($uiRoot.Length + 1)
     New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
