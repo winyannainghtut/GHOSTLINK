@@ -1,19 +1,28 @@
 // The desktop app talks only to the local Ghostlink service, through the Tauri shell's
 // vpn_request command (private IPC). Keys pass through once and are never kept here.
+// (globalThis is the window in the app; tests import this file in Node, where there is none.)
 type Invoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
-const invoke = (window as unknown as { __TAURI__?: { core?: { invoke?: Invoke } } }).__TAURI__?.core?.invoke;
+const invoke = (globalThis as unknown as { __TAURI__?: { core?: { invoke?: Invoke } } }).__TAURI__?.core?.invoke;
 
 export class ServiceUnavailable extends Error {}
 
 type Response<T> = { success: boolean; data: T; error?: { code: string; message: string } };
+
+// vpn_request answers every service error itself, so a rejected call means the shell refused the
+// request before sending it: usually a value the request's fields cannot hold, such as 1.5 where
+// a whole number belongs or a negative size (Tauri reports "invalid args …").
+export function rejectionError(reason: unknown): Error {
+  if (typeof reason === 'string' && reason.startsWith('invalid args')) return new Error('One of the values is not accepted here: use whole numbers, and none below zero.');
+  return new ServiceUnavailable('The desktop app could not reach the local VPN service.');
+}
 
 export async function request<T>(action: Record<string, unknown>): Promise<T> {
   if (!invoke) throw new ServiceUnavailable('Open the installed Ghostlink desktop app to use the local VPN service.');
   let response: Response<T>;
   try {
     response = (await invoke('vpn_request', { action })) as Response<T>;
-  } catch {
-    throw new ServiceUnavailable('The desktop app could not reach the local VPN service.');
+  } catch (reason) {
+    throw rejectionError(reason);
   }
   if (!response.success) throw new Error(response.error?.message || 'The VPN service could not complete this request.');
   return response.data;
@@ -22,7 +31,12 @@ export async function request<T>(action: Record<string, unknown>): Promise<T> {
 // Saves a file in Downloads (WebView2 cannot download blob: links from the app's scheme).
 export async function saveDownload(name: string, content: string, extension: 'html' | 'mobileconfig' | 'conf'): Promise<string> {
   if (!invoke) throw new Error('Saving files needs the desktop app.');
-  return (await invoke('save_download', { name, content, extension })) as string;
+  try {
+    return (await invoke('save_download', { name, content, extension })) as string;
+  } catch (reason) {
+    // The shell's errors arrive as plain text, not Error objects.
+    throw new Error(typeof reason === 'string' && reason ? reason : 'The file could not be saved in Downloads.');
+  }
 }
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'disconnecting' | 'failed';
@@ -77,4 +91,12 @@ export function slug(text: string): string {
 }
 export function uniqueName(base: string, taken: string[]): string {
   return taken.includes(base) ? `${base}-${Date.now().toString(36)}` : base;
+}
+
+// The local ID for a key from a managed server ("Use on this device"). The client's name is
+// shortened first, so a long one cannot cut off the protocol and key ID, and an ID already on
+// this device (the same key, or the same user, protocol and key ID on another server) gets a
+// suffix: the service refuses to reuse one.
+export function localKeyId(user: string, protocol: string, id: string, taken: string[]): string {
+  return uniqueName(slug(`${slug(slug(user).slice(0, 24))}-${protocol}-${id}`), taken);
 }

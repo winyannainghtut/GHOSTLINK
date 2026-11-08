@@ -27,14 +27,17 @@ export function MeshCard() {
     await loadInfo();
     setTopology(await api<Topology>('GET', '/mesh/topology'));
   };
+  // Reports whether the server took the change; a failure is shown as a toast.
   const change = async (method: string, path: string, body: unknown, message?: string) => {
     try {
       await api(method, path, body);
-      if (message) toast(message);
-      await refresh();
     } catch (error) {
       toast((error as Error).message, 'bad');
+      return false;
     }
+    if (message) toast(message);
+    await refresh().catch(error => toast((error as Error).message, 'bad'));
+    return true;
   };
 
   if (!info) return null;
@@ -50,9 +53,13 @@ export function MeshCard() {
           <Button
             variant="cta"
             onClick={async () => {
-              await change('PATCH', '/mesh', { enabled: true });
-              const next = await api<MeshInfo>('GET', '/mesh');
-              toast(`Mesh on. Allow TCP ${next.port} in this server's firewall so other servers can join.`);
+              if (!(await change('PATCH', '/mesh', { enabled: true }))) return;
+              try {
+                const next = await api<MeshInfo>('GET', '/mesh');
+                toast(`Mesh on. Allow TCP ${next.port} in this server's firewall so other servers can join.`);
+              } catch (error) {
+                toast((error as Error).message, 'bad');
+              }
             }}
           >
             Turn on mesh
@@ -72,8 +79,11 @@ export function MeshCard() {
         title="Mesh"
         detail={
           <>
-            <span className="mono">{info.cidr}</span> · agents connect to TCP <span className="mono">{info.port}</span> · {plural(nodes.length, 'node')}, {online} online
-            {relayed ? ` · ${relayed} through the relay` : ''} · {info.rules ? plural(info.rules, 'access rule') : 'open (no rules)'}
+            <span className="mono">{info.cidr}</span> · agents connect to TCP <span className="mono">{info.port}</span> ·{' '}
+            <span className="num">
+              {plural(nodes.length, 'node')}, {online} online{relayed ? ` · ${relayed} through the relay` : ''}
+            </span>{' '}
+            · {info.rules ? plural(info.rules, 'access rule') : 'open (no rules)'}
           </>
         }
         action={
@@ -104,7 +114,7 @@ export function MeshCard() {
           {node ? <NodePanel node={node} topology={topology!} onClose={() => setSelected(null)} change={change} /> : <Overview nodes={nodes} info={info} onSelect={setSelected} change={change} />}
         </aside>
       </div>
-      <InviteSheet open={invite} info={info} onClose={() => (setInvite(false), loadInfo())} />
+      <InviteSheet open={invite} info={info} onClose={() => (setInvite(false), loadInfo().catch(() => {}))} />
       <RulesSheet open={rules} onClose={() => setRules(false)} onSaved={refresh} />
     </Card>
   );
@@ -119,7 +129,9 @@ function LegendLine({ className, label }: { className: string; label: string }) 
   );
 }
 
-type Change = (method: string, path: string, body: unknown, message?: string) => Promise<void>;
+type Change = (method: string, path: string, body: unknown, message?: string) => Promise<boolean>;
+
+const STATE_LABELS: Record<string, string> = { online: 'Online', offline: 'Offline', pending: 'Waiting for approval', disabled: 'Disabled' };
 
 function Overview({ nodes, info, onSelect, change }: { nodes: MeshNode[]; info: MeshInfo; onSelect: (id: string) => void; change: Change }) {
   const { confirm } = useUI();
@@ -184,13 +196,18 @@ function NodePanel({ node, topology, onClose, change }: { node: MeshNode; topolo
   const { confirm } = useUI();
   const [tags, setTags] = useState((node.tags ?? []).join(', '));
   const [routes, setRoutes] = useState<string[]>(node.approved_routes ?? []);
+  // The topology poll brings new arrays every 5 s: follow the saved values only when they change,
+  // so tags being typed and subnet switches not yet saved stay as they are.
+  const savedTags = (node.tags ?? []).join(', ');
+  const savedRoutes = (node.approved_routes ?? []).join('\n');
   useEffect(() => {
-    setTags((node.tags ?? []).join(', '));
-    setRoutes(node.approved_routes ?? []);
-  }, [node.id, node.tags, node.approved_routes]);
+    setTags(savedTags);
+    setRoutes(savedRoutes ? savedRoutes.split('\n') : []);
+  }, [node.id, savedTags, savedRoutes]);
   const name = (id: string) => topology.nodes.find(n => n.id === id)?.name ?? id;
   const links = topology.links.filter(l => l.a === node.id || l.b === node.id);
   const state = node.status !== 'active' ? node.status : node.online ? 'online' : 'offline';
+  const stateLabel = STATE_LABELS[state] ?? state;
   return (
     <div className="grid gap-4">
       <div className="flex items-center justify-between">
@@ -203,10 +220,10 @@ function NodePanel({ node, topology, onClose, change }: { node: MeshNode; topolo
         rows={[
           ['Address', <span className="mono">{node.address}</span>],
           ['Name', <span className="mono">{node.name}.mesh</span>],
-          ['State', `${state}${node.relay_in_use ? ', relay' : node.relay ? ', standby relay' : ''}${node.online && !node.in_sync ? ', applying changes' : ''}`],
+          ['State', `${stateLabel}${node.relay_in_use ? ', relay' : node.relay ? ', standby relay' : ''}${node.online && !node.in_sync ? ', applying changes' : ''}`],
           ['Reached at', node.endpoint ? <span className="mono">{node.endpoint}</span> : 'Behind NAT (connects out)'],
           ['Seen from', node.seen_from ? <span className="mono">{node.seen_from}</span> : '—'],
-          ['Last seen', node.last_seen_unix ? ago(node.last_seen_unix) : 'Never'],
+          ['Last seen', <span className="num">{node.last_seen_unix ? ago(node.last_seen_unix) : 'Never'}</span>],
           ['Agent', node.version ? `${node.version} (${node.os})` : '—'],
           ...(node.error ? [['Problem', <span className="text-bad">{node.error}</span>] as [string, ReactNode]] : []),
         ]}
@@ -252,7 +269,7 @@ function NodePanel({ node, topology, onClose, change }: { node: MeshNode; topolo
             {links.map(l => (
               <li key={l.a + l.b} className="inset-glass flex items-center justify-between gap-2 rounded-[16px] px-3 py-2 text-[12.5px]">
                 <span>{name(l.a === node.id ? l.b : l.a)}</span>
-                <span className={l.path === 'direct' ? 'text-ok' : l.path === 'relay' ? 'text-relay' : 'text-bad'}>{l.path === 'relay' ? `via ${name(l.via ?? '')}` : l.path}</span>
+                <span className={l.path === 'direct' ? 'text-ok' : l.path === 'relay' ? 'text-relay' : 'text-bad'}>{l.path === 'relay' ? `Via ${name(l.via ?? '')}` : l.path === 'direct' ? 'Direct' : 'Down'}</span>
                 <span className="num text-fg-2">{l.rtt_ms > 0 ? `${l.rtt_ms.toFixed(1)} ms` : '—'}</span>
               </li>
             ))}
@@ -302,8 +319,14 @@ function InviteSheet({ open, info, onClose }: { open: boolean; info: MeshInfo; o
     }
   }, [open]);
   const create = async () => {
+    const count = Number(uses) || 1, valid = Number(hours) || 24;
+    // Whole numbers only: the desktop app's service refuses a fraction before the server sees it.
+    if (![count, valid].every(Number.isInteger) || count < 1 || valid < 1) {
+      setError('An invite works 1-1000 times for 1 hour to 90 days, in whole numbers.');
+      return;
+    }
     try {
-      setResult(await api('POST', '/mesh/invites', { tags: words(tags.toLowerCase()), uses: Number(uses) || 1, expires_hours: Number(hours) || 24, relay, approval }));
+      setResult(await api('POST', '/mesh/invites', { tags: words(tags.toLowerCase()), uses: count, expires_hours: valid, relay, approval }));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -372,17 +395,24 @@ function InviteSheet({ open, info, onClose }: { open: boolean; info: MeshInfo; o
   );
 }
 
+// A rule being edited keeps its ports as typed ("5432, 8000-8100"); they are split on save, so a
+// comma or space can be typed between them.
+type DraftRule = Omit<MeshRule, 'ports'> & { ports: string };
+const PROTOCOL_LABELS: Record<MeshRule['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', any: 'Any' };
+
 function RulesSheet({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useUI();
-  const [rules, setRules] = useState<MeshRule[]>([]);
+  const [rules, setRules] = useState<DraftRule[]>([]);
   const [error, setError] = useState('');
   useEffect(() => {
     if (open) {
       setError('');
-      api<{ rules: MeshRule[] }>('GET', '/mesh/rules').then(r => setRules(r.rules)).catch(e => setError(e.message));
+      api<{ rules: MeshRule[] }>('GET', '/mesh/rules')
+        .then(r => setRules((r.rules ?? []).map(rule => ({ ...rule, ports: (rule.ports ?? []).join(', ') }))))
+        .catch(e => setError(e.message));
     }
   }, [open]);
-  const update = (i: number, next: Partial<MeshRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...next } : r)));
+  const update = (i: number, next: Partial<DraftRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...next } : r)));
   return (
     <Sheet
       open={open}
@@ -392,14 +422,14 @@ function RulesSheet({ open, onClose, onSaved }: { open: boolean; onClose: () => 
       subtitle="With no rules every node reaches every node. Once you add one, only matching traffic passes; replies always do."
       footer={
         <>
-          <Button variant="ghost" icon={<Plus size={14} />} onClick={() => setRules([...rules, { from: 'tag:', to: 'tag:', protocol: 'tcp', ports: [] }])}>
+          <Button variant="ghost" icon={<Plus size={14} />} onClick={() => setRules([...rules, { from: 'tag:', to: 'tag:', protocol: 'tcp', ports: '' }])}>
             Add a rule
           </Button>
           <Button
             variant="cta"
             onClick={async () => {
               try {
-                const clean = rules.map(r => ({ from: r.from.trim() || '*', to: r.to.trim() || '*', protocol: r.protocol, ports: r.protocol === 'tcp' || r.protocol === 'udp' ? r.ports : [] }));
+                const clean: MeshRule[] = rules.map(r => ({ from: r.from.trim() || '*', to: r.to.trim() || '*', protocol: r.protocol, ports: r.protocol === 'tcp' || r.protocol === 'udp' ? words(r.ports) : [] }));
                 await api('PUT', '/mesh/rules', { rules: clean });
                 toast(clean.length ? `Saved ${plural(clean.length, 'rule')}. Everything else between nodes is blocked.` : 'No rules: every node reaches every node.');
                 onClose();
@@ -429,15 +459,15 @@ function RulesSheet({ open, onClose, onSaved }: { open: boolean; onClose: () => 
               label="Protocol"
               value={rule.protocol}
               onChange={protocol => update(i, { protocol })}
-              options={(['tcp', 'udp', 'icmp', 'any'] as const).map(p => ({ value: p, label: p }))}
+              options={(['tcp', 'udp', 'icmp', 'any'] as const).map(p => ({ value: p, label: PROTOCOL_LABELS[p] }))}
             />
             <input
               className="field mono"
               aria-label="Ports"
               spellCheck={false}
               disabled={rule.protocol === 'icmp' || rule.protocol === 'any'}
-              value={rule.ports.join(',')}
-              onChange={e => update(i, { ports: words(e.target.value) })}
+              value={rule.ports}
+              onChange={e => update(i, { ports: e.target.value })}
               placeholder="5432, 8000-8100"
             />
             <IconButton label="Remove rule" onClick={() => setRules(rules.filter((_, j) => j !== i))}>

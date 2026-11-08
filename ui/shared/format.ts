@@ -1,13 +1,35 @@
 // Number and time formatting. Live numbers are shown with tabular figures (the `num` class), so
-// these keep a stable shape: fixed decimals per unit.
+// these keep a stable shape: fixed decimals per unit. No imports, so the tests run it directly.
+
+type Unit = { unit: string; size: number; decimals: number };
+
+// The largest unit the value reaches, with that unit's fixed decimals. Rounding can reach 1000
+// of a unit (999,700 B/s would read "1000 KB/s"): the next unit is used then.
+function scaled(n: number, units: Unit[]): { value: string; unit: string } {
+  let i = units.length - 1;
+  while (i > 0 && n < units[i].size) i--;
+  if (i < units.length - 1 && Number((n / units[i].size).toFixed(units[i].decimals)) >= 1000) i++;
+  return { value: (n / units[i].size).toFixed(units[i].decimals), unit: units[i].unit };
+}
+
+const RATE_UNITS: Unit[] = [
+  { unit: 'B/s', size: 1, decimals: 0 },
+  { unit: 'KB/s', size: 1e3, decimals: 0 },
+  { unit: 'MB/s', size: 1e6, decimals: 1 },
+  { unit: 'GB/s', size: 1e9, decimals: 2 },
+];
+
+const SIZE_UNITS: Unit[] = [
+  { unit: 'B', size: 1, decimals: 0 },
+  { unit: 'KB', size: 1e3, decimals: 0 },
+  { unit: 'MB', size: 1e6, decimals: 1 },
+  { unit: 'GB', size: 1e9, decimals: 1 },
+  { unit: 'TB', size: 1e12, decimals: 2 },
+];
 
 // Speeds are shown in bytes per second, with the same decimal units as data (1 MB = 10^6 bytes).
 export function byteRate(bytesPerSecond: number): { value: string; unit: string } {
-  const b = Math.max(0, Number(bytesPerSecond) || 0);
-  if (b >= 1e9) return { value: (b / 1e9).toFixed(2), unit: 'GB/s' };
-  if (b >= 1e6) return { value: (b / 1e6).toFixed(1), unit: 'MB/s' };
-  if (b >= 1e3) return { value: (b / 1e3).toFixed(0), unit: 'KB/s' };
-  return { value: b.toFixed(0), unit: 'B/s' };
+  return scaled(Math.max(0, Number(bytesPerSecond) || 0), RATE_UNITS);
 }
 
 export function speed(bytesPerSecond: number): string {
@@ -16,12 +38,17 @@ export function speed(bytesPerSecond: number): string {
 }
 
 export function bytes(n: number): string {
-  n = Math.max(0, Number(n) || 0);
-  if (n >= 1e12) return (n / 1e12).toFixed(2) + ' TB';
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
-  if (n >= 1e3) return Math.round(n / 1e3) + ' KB';
-  return n + ' B';
+  const { value, unit } = scaled(Math.max(0, Number(n) || 0), SIZE_UNITS);
+  return `${value} ${unit}`;
+}
+
+// The start of a usage bucket. The server starts daily buckets at midnight UTC, so a day is
+// named by its UTC date: in the local time zone, west of UTC, it would read one day early.
+// Hourly buckets are shown in local time, with the date when the chart spans several days.
+export function bucketLabel(t: number, unit: 'hour' | 'day', withDate = false, locale?: string): string {
+  const date = new Date(t * 1000);
+  if (unit === 'day') return date.toLocaleDateString(locale, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return date.toLocaleString(locale, withDate ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
 }
 
 export function ago(unix: number | undefined, now = Date.now() / 1000): string {
@@ -61,6 +88,18 @@ export function words(text: string): string[] {
 
 export function fileSafe(name: string): string {
   return name.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'ghostlink';
+}
+
+// The name of a downloaded .conf, without the extension. WireGuard for Windows and AmneziaWG
+// name the tunnel after the file and refuse more than 32 characters (or any outside A-Z a-z
+// 0-9 _ = + . -), so the client's name is shortened to keep the protocol and key ID. Three
+// characters are left for the desktop app's "-1" to "-99" when Downloads has the name already.
+export const CONF_NAME_MAX = 29;
+export function confName(user: string, protocol: string, id: string): string {
+  const suffix = `-${protocol}-${id}`.slice(0, CONF_NAME_MAX - 1);
+  const room = CONF_NAME_MAX - suffix.length;
+  const base = fileSafe(user).slice(0, room).replace(/[-.]+$/, '') || 'ghostlink'.slice(0, room);
+  return base + suffix;
 }
 
 export function saveBlob(blob: Blob, name: string): void {

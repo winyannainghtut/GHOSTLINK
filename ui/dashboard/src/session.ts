@@ -37,12 +37,22 @@ export const dashboardTransport: Transport = {
   },
 };
 
+// The token after # in a login link, if the address has one.
+export function loginToken(): string | null {
+  return new URLSearchParams(location.hash.slice(1)).get('t');
+}
+
 export async function signIn(): Promise<{ server: Server | null; error: string }> {
   setTransport(dashboardTransport);
-  const token = new URLSearchParams(location.hash.slice(1)).get('t');
+  const token = loginToken();
   if (token) {
     history.replaceState(null, '', location.pathname);
-    const response = await fetch('/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+    let response: Response;
+    try {
+      response = await fetch('/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+    } catch {
+      return { server: null, error: 'Could not reach the server. Check the connection or the SSH tunnel, then open the login link again.' };
+    }
     if (!response.ok) {
       let message = 'This login link is not valid.';
       try {

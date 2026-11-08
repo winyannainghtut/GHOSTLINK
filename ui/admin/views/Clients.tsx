@@ -14,7 +14,7 @@ type Filter = 'all' | 'online' | 'idle' | 'paused';
 const FILTERS = ['all', 'online', 'idle', 'paused'] as const;
 
 export function Clients({ onNewClient }: { onNewClient: () => void }) {
-  const { users, liveById, lastClient, reloadUsers, loaded } = useStore();
+  const { users, liveById, lastClient, reloadUsers, loaded, stale } = useStore();
   const { toast } = useUI();
   const now = useNow(1000);
   const [query, setQuery] = useState('');
@@ -92,7 +92,8 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
           ))}
         </div>
       ) : (
-        <Card className="overflow-x-auto p-0 sm:p-0">
+        // The kit's own classes come later in the stylesheet, so an override needs "!" to win.
+        <Card className="overflow-x-auto p-0!">
           <table className="w-full min-w-[1020px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[12px] text-fg-3">
@@ -114,7 +115,17 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
                           <DeviceIcon user={u} size={15} />
                         </span>
                         <div>
-                          <div className="font-medium text-fg">{u.name}</div>
+                          {/* The row opens the client on a click; this button opens it from the keyboard. */}
+                          <button
+                            type="button"
+                            className="text-left font-medium text-fg"
+                            onClick={event => {
+                              event.stopPropagation();
+                              setOpenId(u.id);
+                            }}
+                          >
+                            {u.name}
+                          </button>
                           <div className="flex items-center gap-1.5 text-[12px] text-fg-3">
                             <StatusDot status={status} className="scale-75" /> {statusLabel[status]}
                           </div>
@@ -143,7 +154,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
         </Card>
       )}
       <p className="text-center text-[12px] text-fg-3">
-        {plural(shown.length, 'client')} shown · live data every second
+        {plural(shown.length, 'client')} shown · {stale ? 'the server is not answering, so live data is paused' : 'live data every second'}
       </p>
       {tools.sheet}
       <ClientSheet user={open} onClose={() => setOpenId(null)} />
@@ -164,7 +175,7 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
   const key = primaryKey(user);
   const address = tunnelAddress(user);
   return (
-    <Card as="article" className="flex flex-col gap-3.5 sm:p-5">
+    <Card as="article" className="flex flex-col gap-3.5 sm:p-5!">
       <div className="flex items-start gap-3">
         <button type="button" onClick={onOpen} className="grid size-11 shrink-0 place-items-center rounded-[16px] bg-glass-strong text-fg-2 transition hover:text-fg" aria-label={`Open ${user.name}`}>
           <DeviceIcon user={user} />
@@ -226,7 +237,7 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
                 <Copy size={16} />
               </IconButton>
             )}
-            <IconButton label="Revoke key" className="hover:text-bad" onClick={() => tools.revoke(user, key)}>
+            <IconButton label="Revoke key" className="hover:text-bad!" onClick={() => tools.revoke(user, key)}>
               <Trash2 size={16} />
             </IconButton>
             <span className="ml-1 truncate text-[12px] text-fg-3">{protocolName(key.protocol)}</span>

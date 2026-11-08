@@ -37,6 +37,27 @@ async fn vpn_request(action: Action) -> Response {
     .await
 }
 
+/// WireGuard for Windows and AmneziaWG name a tunnel after its .conf file and refuse names longer
+/// than this, or with a space: a second copy is "name-1.conf" rather than "name (1).conf". (The
+/// views keep .conf names to 29 characters, which leaves room for "-99".)
+const CONF_NAME_MAX: usize = 32;
+
+/// The file name for the `n`th try at saving `stem.extension` (0 is the plain name). `stem` holds
+/// only ASCII letters, digits, '-' and '_'.
+fn download_name(stem: &str, extension: &str, n: u32) -> String {
+    let suffix = match (n, extension) {
+        (0, _) => String::new(),
+        (_, "conf") => format!("-{n}"),
+        _ => format!(" ({n})"),
+    };
+    let stem = if extension == "conf" {
+        &stem[..stem.len().min(CONF_NAME_MAX.saturating_sub(suffix.len()))]
+    } else {
+        stem
+    };
+    format!("{stem}{suffix}.{extension}")
+}
+
 /// Saves a connection kit page, an Apple VPN profile or a WireGuard/AmneziaWG .conf in the user's
 /// Downloads folder. WebView2 cannot download blob: links from the app's custom scheme, so the
 /// shell writes the file itself: a name built from safe characters with an allowlisted extension
@@ -73,12 +94,7 @@ fn save_download(
         .download_dir()
         .map_err(|_| "Could not find your Downloads folder".to_string())?;
     for n in 0..100 {
-        let file_name = if n == 0 {
-            format!("{stem}.{extension}")
-        } else {
-            format!("{stem} ({n}).{extension}")
-        };
-        let path = dir.join(file_name);
+        let path = dir.join(download_name(&stem, extension, n));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -113,6 +129,9 @@ fn main() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            // show() leaves a minimized window minimized, and set_focus() does
+                            // nothing then: restore it first.
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -139,4 +158,43 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("Ghostlink desktop could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_name;
+
+    #[test]
+    fn conf_files_keep_names_that_wireguard_can_import() {
+        assert_eq!(
+            download_name("maya-wireguard-15", "conf", 0),
+            "maya-wireguard-15.conf"
+        );
+        assert_eq!(
+            download_name("maya-wireguard-15", "conf", 1),
+            "maya-wireguard-15-1.conf"
+        );
+        let views = "Grandpa-s-Window-wireguard-15"; // the views send at most 29 characters
+        assert_eq!(download_name(views, "conf", 99), format!("{views}-99.conf"));
+        let long = "a".repeat(40);
+        assert_eq!(
+            download_name(&long, "conf", 0),
+            format!("{}.conf", "a".repeat(32))
+        );
+        assert_eq!(
+            download_name(&long, "conf", 12),
+            format!("{}-12.conf", "a".repeat(29))
+        );
+    }
+
+    #[test]
+    fn other_files_keep_their_names() {
+        assert_eq!(download_name("maya-vpn", "html", 0), "maya-vpn.html");
+        assert_eq!(download_name("maya-vpn", "html", 2), "maya-vpn (2).html");
+        let long = "a".repeat(60);
+        assert_eq!(
+            download_name(&long, "mobileconfig", 0),
+            format!("{long}.mobileconfig")
+        );
+    }
 }

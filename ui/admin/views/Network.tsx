@@ -42,7 +42,7 @@ export function Network() {
             <ProtocolTile key={p} protocol={p} server={server} onToggle={on => toggle(p, on)} onPort={port => patch({ protocols: { [p]: { port } } }, `${PROTOCOLS[p]} now uses port ${port}. Keys already shared keep the old port.`)} />
           ))}
         </div>
-        {!server.ipsec_component.running && <div className="mt-4"><Note>IKEv2 and IPsec (the built-in VPN of iPhone, iPad and Mac) need the IPsec component: run sudo ghostlink-server ipsec enable on the server.</Note></div>}
+        {!server.ipsec_component?.running && <div className="mt-4"><Note>IKEv2 and IPsec (the built-in VPN of iPhone, iPad and Mac) need the IPsec component: run sudo ghostlink-server ipsec enable on the server.</Note></div>}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -96,7 +96,10 @@ function ProtocolTile({ protocol, server, onToggle, onPort }: { protocol: Protoc
   const [editing, setEditing] = useState(false);
   const [port, setPort] = useState(String(info.port));
   useEffect(() => setPort(String(info.port)), [info.port]);
-  const unavailable = apple && !server.ipsec_component.running && !info.enabled;
+  const ipsec = server.ipsec_component;
+  const unavailable = apple && !ipsec?.running && !info.enabled;
+  // Keys imported from Outline that kept their own port have their own Shadowsocks listeners.
+  const extraPorts = protocol === 'shadowsocks' ? (server.shadowsocks_extra_ports ?? []) : [];
   return (
     <div className="inset-glass grid gap-3 rounded-[24px] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -131,7 +134,17 @@ function ProtocolTile({ protocol, server, onToggle, onPort }: { protocol: Protoc
           </button>
         )}
       </div>
-      {apple && server.ipsec_component.running && <p className="text-[12px] text-fg-3">IPsec component running · {server.ipsec_component.connections} connected{server.ipsec_component.error ? ` · ${server.ipsec_component.error}` : ''}</p>}
+      {extraPorts.length > 0 && (
+        <p className="text-[12px] text-fg-3">
+          Also <span className="mono text-fg-2">{extraPorts.join(', ')}</span> for keys imported from Outline
+        </p>
+      )}
+      {apple && ipsec?.running && (
+        <p className="text-[12px] text-fg-3">
+          IPsec component running · <span className="num">{ipsec.connections} connected</span>
+          {ipsec.error ? ` · ${ipsec.error}` : ''}
+        </p>
+      )}
     </div>
   );
 }

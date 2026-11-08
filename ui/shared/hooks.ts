@@ -25,25 +25,38 @@ export function useStoredState<T extends string>(key: string, fallback: T, allow
 }
 
 // Runs fn every `ms` milliseconds while mounted (and once at once). A slow call never overlaps
-// the next: the timer waits for it.
+// the next: the timer waits for it. While the page is hidden (a background tab, or a window the
+// system reports as hidden) nothing is fetched, and the next call comes as soon as it is shown.
 export function usePoll(fn: () => Promise<unknown> | void, ms: number, deps: unknown[] = []): void {
   const saved = useRef(fn);
   saved.current = fn;
   useEffect(() => {
     let stopped = false;
+    let running = false;
     let timer: number | undefined;
     const tick = async () => {
-      try {
-        await saved.current();
-      } catch {
-        /* the caller reports errors */
+      window.clearTimeout(timer);
+      if (running) return;
+      running = true;
+      if (!document.hidden) {
+        try {
+          await saved.current();
+        } catch {
+          /* the caller reports errors */
+        }
       }
+      running = false;
       if (!stopped) timer = window.setTimeout(tick, ms);
     };
+    const shown = () => {
+      if (!document.hidden && !stopped) tick();
+    };
     tick();
+    document.addEventListener('visibilitychange', shown);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', shown);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms, ...deps]);

@@ -1,11 +1,10 @@
 // Server settings: name, the address in new keys, the REALITY site, the default speed limit and
 // monitoring retention.
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Check, Field, Inner, Note, Sheet, useUI } from '@shared/glass';
 import { api } from '../api';
+import { defaultSpeedChange, defaultSpeedText } from '../limits';
 import { useStore } from '../store';
-
-const mbOf = (bps: number | undefined) => (bps ? String(bps / 1e6) : '');
 
 export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClose: () => void; footer?: ReactNode }) {
   const { server, reloadServer } = useStore();
@@ -17,8 +16,9 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
   const [historyDays, setHistoryDays] = useState(String(server.history_days));
   const [siteDays, setSiteDays] = useState(String(server.site_days));
   const [historyMB, setHistoryMB] = useState(String(server.history_max_mb));
-  const [speedDefault, setSpeedDefault] = useState(mbOf(server.default_speed_limit_bps));
+  const [speedDefault, setSpeedDefault] = useState(defaultSpeedText(server.default_speed_limit_bps));
   const [error, setError] = useState('');
+  const speedField = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -29,7 +29,7 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
     setHistoryDays(String(server.history_days));
     setSiteDays(String(server.site_days));
     setHistoryMB(String(server.history_max_mb));
-    setSpeedDefault(mbOf(server.default_speed_limit_bps));
+    setSpeedDefault(defaultSpeedText(server.default_speed_limit_bps));
     setError('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -40,20 +40,27 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
     if (hostname.trim() !== server.hostname) patch.hostname = hostname.trim();
     if (reality.trim() !== server.vless_handshake) patch.vless_handshake = reality.trim();
     if (sites !== server.site_stats) patch.site_stats = sites;
-    for (const [key, value, current] of [
-      ['history_days', historyDays, server.history_days],
-      ['site_days', siteDays, server.site_days],
-      ['history_max_mb', historyMB, server.history_max_mb],
+    for (const [key, value, current, label] of [
+      ['history_days', historyDays, server.history_days, 'History'],
+      ['site_days', siteDays, server.site_days, 'Sites'],
+      ['history_max_mb', historyMB, server.history_max_mb, 'Size limit'],
     ] as const) {
       const n = Number(value);
-      if (n && n !== current) patch[key] = n;
+      if (!n || n === current) continue;
+      // Whole numbers only: the desktop app's service refuses a fraction before the server sees it.
+      if (!Number.isInteger(n) || n < 1) {
+        setError(`${label} must be a whole number above zero.`);
+        return;
+      }
+      patch[key] = n;
     }
-    const mb = speedDefault.trim() ? Number(speedDefault) : 0;
-    if (!Number.isFinite(mb) || (mb !== 0 && (mb < 0.001 || mb > 1250))) {
-      setError('The default speed limit is 0.001 to 1250 MB/s, or empty for none.');
+    // A number field reports half-typed text such as "2e" as empty, which would remove the limit.
+    const bps = speedField.current?.validity.badInput ? new Error('The default speed limit is a number of MB/s, or empty for none.') : defaultSpeedChange(speedDefault, server.default_speed_limit_bps ?? 0);
+    if (bps instanceof Error) {
+      setError(bps.message);
       return;
     }
-    if (Math.round(mb * 1e6) !== (server.default_speed_limit_bps ?? 0)) patch.default_speed_limit_bps = Math.round(mb * 1e6);
+    if (bps !== undefined) patch.default_speed_limit_bps = bps;
     if (!Object.keys(patch).length) {
       onClose();
       return;
@@ -102,7 +109,7 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
         </Field>
         <div className="grid gap-2">
           <Field label="Default speed limit" hint="MB/s for every client without its own; empty for none">
-            <input className="field num w-40" type="number" min="0" max="1250" step="any" inputMode="decimal" placeholder="No limit" value={speedDefault} onChange={e => setSpeedDefault(e.target.value)} />
+            <input ref={speedField} className="field num w-40" type="number" min="0" max="1250" step="any" inputMode="decimal" placeholder="No limit" value={speedDefault} onChange={e => setSpeedDefault(e.target.value)} />
           </Field>
           <Note>One cap per client, download and upload alike, across all its devices. A client can have its own limit, or none, in its settings. Changes apply at once, without disconnecting anyone.</Note>
         </div>
