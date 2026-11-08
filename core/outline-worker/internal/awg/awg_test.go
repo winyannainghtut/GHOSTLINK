@@ -465,6 +465,19 @@ func validate(t *testing.T, config string) error {
 	return instance.Close()
 }
 
+// noGoroutinesLeft fails the test if more goroutines run than before (with a little slack),
+// once earlier work has had a moment to wind down.
+func noGoroutinesLeft(t *testing.T, before int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("%s left %d more goroutines running", what, after-before)
+	}
+}
+
 // sing-box closes only what has started, so validating a configuration must leave nothing
 // running.
 func TestUnstartedEndpointLeavesNothingRunning(t *testing.T) {
@@ -476,14 +489,19 @@ func TestUnstartedEndpointLeavesNothingRunning(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Earlier tests may still be winding down, so give the count a moment to settle.
-	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	noGoroutinesLeft(t, before, "validating a configuration 10 times")
+}
+
+// The server restarts its engine on every change, so an engine that started and closed must
+// leave nothing running either, amneziawg-go's event reader included.
+func TestClosedEngineLeavesNothingRunning(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := serverConfig(server, freePort(t, "udp"), "", []string{peerJSON("alice", alice, "10.88.0.2/32")}, nil)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		startBox(t, config).Close()
 	}
-	if after := runtime.NumGoroutine(); after > before+2 {
-		t.Fatalf("validating a configuration 10 times left %d more goroutines running", after-before)
-	}
+	noGoroutinesLeft(t, before, "starting and closing an engine 5 times")
 }
 
 // Validation still refuses the one thing the userspace stack would only refuse at start.
