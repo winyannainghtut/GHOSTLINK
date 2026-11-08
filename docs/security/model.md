@@ -55,8 +55,9 @@ These mechanisms reduce specific failures; they do not certify the platform defi
   - A compromised server process can therefore change who may connect, but cannot add arbitrary firewall rules or strongSwan options.
 - **Credentials:**
   - EAP-MSCHAPv2 passwords reach strongSwan only as NT hashes. An NT hash is still equivalent to the password for MSCHAPv2, so `desired.json` is a secret, like the server state.
-  - XAuth passwords and the IPsec group key are passed as they are, because strongSwan needs them.
+  - XAuth passwords and the IPsec group key are passed as they are, because strongSwan needs them, and so is the server certificate's private key.
   - The CA's private key stays in the server state and is never given to the agent.
+  - The profile installs the CA as a root certificate, with no name constraints. Whoever holds the CA key can sign for any name, so the server state and its backups need the same care as a private key.
 - **Certificates:**
   - a private RSA-3072 CA (20 years), with server certificates of 825 days carrying the IKE EKU, renewed automatically, and client certificates of 5 years;
   - removed keys are revoked in a CRL that is reissued daily (7-day validity);
