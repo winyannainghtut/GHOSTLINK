@@ -1,6 +1,6 @@
 # Ghostlink — guide for developers and AI coding agents
 
-Updated **2026-11-08**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
+Updated **2026-11-09**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
 
 This guide is for anyone, person or AI coding agent, who builds, tests or changes Ghostlink. Read *Start here* first; the numbered sections below are the detailed reference (some of their tables are older, and say so). Agents that only look for `AGENTS.md` should be pointed at this file.
 
@@ -12,7 +12,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 - **Other releases:**
   - v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.2:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.2:** new servers run only Shadowsocks (see *Design decisions to keep*), unreleased; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -33,6 +33,7 @@ These came from the maintainer and shape the code. Keep them unless the maintain
 - **Look (0.7.0):** the app and the dashboard share one frosted-glass design (see §10). Check new UI in all three finishes, Daylight included.
 - **Online state:** a client is online while it sends something at least once a minute; open connections alone don't count (see §13).
 - **Small servers:** with under 1 GB of memory and swap the installer stops unless it gets `--add-swap`. Before a real move from Outline, suggest `--migrate-outline --check`.
+- **Default protocols (2026-11-09):** a new server turns on only Shadowsocks (Outline-compatible). AmneziaWG, WireGuard and VLESS-REALITY still get their ports and keys at `init` and stay off until an administrator turns them on (`set --enable P`, or their switch in the app or the dashboard), and turning one on says which port to allow. Upgrades keep each server's switches; nothing is turned off on its own. A protocol that is off keeps its port: `checkReservedPorts` counts it, so the dashboard or another protocol cannot take it, and turning it on tries it (`heldPorts`). New clients in the app start on Shadowsocks. `install-server.sh --enable PROTOCOL` turns protocols on at install time, and the ports it lists and opens are those of protocols that are on.
 - **Two packages (2026-11-08):** the server and the mesh agent stay separate packages. A node needs no Docker or VPN server, the server runs in an unprivileged container, and network rights on a host stay with small pieces (the mesh agent, and the IPsec component when it is on). `install-server.sh --mesh` installs both on the coordinator's host.
 - **First stable release:** v1.0.0, after the checks under *Next steps*. Launching with unsigned builds is acceptable.
 
@@ -721,7 +722,7 @@ No successful full TUN connection, all-application routing, full/split route com
 ### Ghostlink server — primary server path (v0.3.0)
 
 `core/outline-worker/cmd/ghostlink-server` + `internal/server` (GPL, same Go module as the worker) is an Outline-style server:
-- **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg`, with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
+- **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg` (a new server has only Shadowsocks on), with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
 - **Packaging:** `.deb`/`.rpm` (`packages/linux/server/`, `scripts/build-linux-server.sh`) carry the image (`docker save`); the postinst loads it and prints the management key. The container runs with host networking, no capabilities, a read-only root and a dedicated host account.
 - **Rules:** always-on internal blocks, then per-user (`auth_user`), exempt and global rules; usage via a router `ConnectionTracker`; data limits.
 

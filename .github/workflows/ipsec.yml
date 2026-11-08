@@ -48,19 +48,32 @@ jobs:
           set -eu
           shellcheck --severity=warning scripts/install-server.sh packages/linux/server/ghostlink-server.sh
           bash scripts/install-server.sh --help | grep -q -- '--open-firewall'
+          bash scripts/install-server.sh --help | grep -q -- '--enable'
           deb=$(ls "$PWD"/artifacts/linux-x64/ghostlink-server_*.deb)
           sudo bash scripts/install-server.sh --package "$deb" --hostname 127.0.0.1 | tee install.log
           grep -q '"apiUrl":"https://127.0.0.1:' install.log
           # One command per line: in "a && b" a failing a does not stop a script run with set -e.
-          grep -Eq '^  [0-9]+/udp  AmneziaWG$' install.log
+          grep -Eq '^  [0-9]+/tcp  Shadowsocks \(Outline\)$' install.log
+          grep -Eq '^  [0-9]+/udp  Shadowsocks \(Outline\)$' install.log
           grep -Eq '^  [0-9]+/tcp  management API' install.log
+          # A new server runs only Shadowsocks: the protocols that are off are not listed, and the
+          # next steps say how to turn them on.
+          if grep -Eq '^  [0-9]+/(tcp|udp)  (VLESS-REALITY|WireGuard|AmneziaWG)$' install.log; then echo "the installer lists a protocol that is off" >&2; exit 1; fi
+          grep -q 'key add Alice shadowsocks' install.log
+          grep -q 'off for now: amneziawg, wireguard, vless' install.log
+          # Turning a protocol on names the port to allow, and the installer then lists it.
+          sudo ghostlink-server set --enable amneziawg | tee enable.log
+          grep -Eq 'AmneziaWG is on, on UDP [0-9]+' enable.log
+          grep -Eq 'allow [0-9]+/udp' enable.log
           # A second run changes nothing; machine-readable admin output works through the host command.
           sudo bash scripts/install-server.sh --package "$deb" | tee again.log
           grep -q 'is already installed' again.log
+          grep -Eq '^  [0-9]+/udp  AmneziaWG$' again.log
           sudo ghostlink-server --json users | jq -e 'type == "array"'
-          # Piped, as with curl | sudo bash, adding IKEv2/IPsec.
-          sudo bash -s -- --package "$deb" --ipsec < scripts/install-server.sh | tee ipsec.log
+          # Piped, as with curl | sudo bash, adding IKEv2/IPsec and turning on VLESS-REALITY.
+          sudo bash -s -- --package "$deb" --ipsec --enable vless < scripts/install-server.sh | tee ipsec.log
           grep -q '500/udp  IKEv2/IPsec' ipsec.log
+          grep -Eq '^  [0-9]+/tcp  VLESS-REALITY$' ipsec.log
           sudo ghostlink-server settings | grep -q 'IPsec component: running'
           sudo ghostlink-server ipsec disable
           sudo apt-get purge -y ghostlink-server >/dev/null

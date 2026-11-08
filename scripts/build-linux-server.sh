@@ -81,10 +81,11 @@ cp -R "$work/context/licenses/." "$work/pkg/doc/"
 cat > "$work/pkg/doc/README.md" <<EOF
 # Ghostlink server $version
 
-A self-hosted VPN server in a Docker container: AmneziaWG, WireGuard, VLESS-REALITY and
-Shadowsocks (Outline-compatible), plus optional IKEv2/IPsec for the built-in VPN of iPhone, iPad
-and Mac (\`sudo ghostlink-server ipsec enable\`). Installing the package loads the bundled image, creates the
-server and prints a **management key**. Paste it into the Ghostlink app (Servers I run) or
+A self-hosted VPN server in a Docker container. A new server runs only Shadowsocks
+(Outline-compatible); AmneziaWG, WireGuard and VLESS-REALITY are there to turn on
+(\`sudo ghostlink-server set --enable amneziawg\`), and so is IKEv2/IPsec for the built-in VPN of
+iPhone, iPad and Mac (\`sudo ghostlink-server ipsec enable\`). Installing the package loads the
+bundled image, creates the server and prints a **management key**. Paste it into the Ghostlink app (Servers I run) or
 \`ghostlink server add\` to create users and keys and set traffic rules.
 
     sudo ghostlink-server show-key            # print the management key again
@@ -93,8 +94,9 @@ server and prints a **management key**. Paste it into the Ghostlink app (Servers
 
 - State: \`/var/lib/ghostlink-server\` (owned by the \`ghostlink-server\` system account, mode 0700).
 - Open these ports in your firewall or cloud security group: the API port (TCP), Shadowsocks
-  (TCP+UDP), VLESS (TCP), WireGuard and AmneziaWG (UDP), and UDP 500 and 4500 for IKEv2/IPsec.
-  \`sudo ghostlink-server status\` lists them.
+  (TCP+UDP) and, for each protocol you turn on, its port (VLESS TCP; WireGuard and AmneziaWG UDP;
+  IKEv2/IPsec UDP 500 and 4500). \`sudo ghostlink-server status\` shows every port and whether
+  its protocol is on, and turning a protocol on prints the port to allow.
 - Upgrading the package keeps users, keys and rules. \`apt purge ghostlink-server\` deletes them;
   removing the RPM keeps them.
 

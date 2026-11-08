@@ -127,8 +127,12 @@ jobs:
           test "$served" = "$pin"
           test "$(curl -sk -o /dev/null -w '%{http_code}' "https://$address/not-the-secret/server")" = 404
           curl -sk --fail "$url/server" | tee server.json
-          jq -e '.protocols.amneziawg.enabled and .protocols.vless.enabled' server.json
+          # A new server runs only Shadowsocks; the other protocols have ports and keys but are off.
+          jq -e '.protocols.shadowsocks.enabled and ([.protocols.amneziawg, .protocols.wireguard, .protocols.vless] | all(.enabled | not))' server.json
           user=$(curl -sk --fail -X POST -d '{"name":"ci"}' "$url/users" | jq -r .id)
+          # A key for a protocol that is off is refused until the protocol is turned on.
+          test "$(curl -sk -o /dev/null -w '%{http_code}' -X POST -d '{"protocol":"amneziawg"}' "$url/users/$user/keys")" = 400
+          curl -sk --fail -X PATCH -d '{"protocols":{"amneziawg":{"enabled":true},"wireguard":{"enabled":true},"vless":{"enabled":true}}}' "$url/server" | jq -e '[.protocols.amneziawg, .protocols.wireguard, .protocols.vless] | all(.enabled)'
           for protocol in amneziawg wireguard vless shadowsocks; do
             curl -sk --fail -X POST -d "{\"protocol\":\"$protocol\"}" "$url/users/$user/keys" | jq -e '.access_key | length > 20'
           done
@@ -150,10 +154,16 @@ jobs:
           # An upgrade (here: reinstall) keeps users and keys.
           sudo apt-get install -y --reinstall "./$deb"
           curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
+          # The upgrade keeps each protocol's switch (the server turned three on above).
+          curl -sk --fail "$url/server" | jq -e '.protocols.amneziawg.enabled and .protocols.wireguard.enabled and .protocols.vless.enabled'
           # The installer's --reinstall really reinstalls: the post-install recreates the server.
           before=$(docker inspect --format '{{.Id}}' ghostlink-server)
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --reinstall | tee reinstall.txt
           grep -q 'Reinstalling Ghostlink server' reinstall.txt
+          # The ports listed are those of the protocols that are on, and the hint about turning more on
+          # is not shown when none is off.
+          grep -Eq '^  [0-9]+/udp  AmneziaWG$' reinstall.txt
+          if grep -q 'More protocols' reinstall.txt; then echo "the installer offers to turn on protocols that are all on" >&2; exit 1; fi
           test "$(docker inspect --format '{{.Id}}' ghostlink-server)" != "$before"
           curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
           # Server-side admin commands (inside the container, through the local API).
@@ -295,6 +305,9 @@ jobs:
           grep -q 'Imported from Outline' migrate.txt
           grep -q 'To go back to Outline' migrate.txt
           grep -q '45679/udp  Shadowsocks (keys from Outline)' migrate.txt
+          # The server is new, so only Shadowsocks is on: the protocols that are off are not listed (or opened).
+          if grep -Eq '^  [0-9]+/(tcp|udp)  (VLESS-REALITY|WireGuard|AmneziaWG)$' migrate.txt; then echo "the installer lists a protocol that is off" >&2; exit 1; fi
+          grep -q 'off for now: amneziawg, wireguard, vless' migrate.txt
           for name in shadowbox watchtower; do
             test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' "$name")" = "false no"
           done

@@ -29,6 +29,9 @@ Options:
   --hostname HOST   public IP or DNS name VPN clients use (default: keep the current one, or
                     detect this server's public IP on first install)
   --ipsec           also start the IKEv2/IPsec component (iPhone, iPad, Mac) and turn on IKEv2
+  --enable PROTOCOL also turn on amneziawg, wireguard or vless (repeat it for more than one).
+                    A new server runs only Shadowsocks (Outline-compatible); the others stay
+                    off until turned on. Their ports are listed, and opened with --open-firewall
   --mesh            also turn on the mesh (a private network between your Linux servers),
                     install the ghostlink-mesh agent and join this server as the relay
   --mesh-package F  with --mesh: install this ghostlink-mesh .deb/.rpm (no download)
@@ -59,6 +62,7 @@ trap cleanup EXIT
 main() {
     local version="" package="" hostname="" ipsec=0 open_firewall=0 docker_install=1 reinstall=0 add_swap=0
     local mesh=0 mesh_package="" migrate=0 migrate_check=0 outline_dir=/opt/outline
+    local enable=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
@@ -68,6 +72,8 @@ main() {
             --hostname) [ $# -ge 2 ] || die "--hostname needs a value"; hostname=$2; shift 2 ;;
             --hostname=*) hostname=${1#--hostname=}; shift ;;
             --ipsec) ipsec=1; shift ;;
+            --enable) [ $# -ge 2 ] || die "--enable needs a protocol"; enable+=("$2"); shift 2 ;;
+            --enable=*) enable+=("${1#--enable=}"); shift ;;
             --mesh) mesh=1; shift ;;
             --mesh-package) [ $# -ge 2 ] || die "--mesh-package needs a file"; mesh=1; mesh_package=$2; shift 2 ;;
             --open-firewall) open_firewall=1; shift ;;
@@ -107,8 +113,18 @@ main() {
     if [ "$outline_dir" != /opt/outline ] && [ "$migrate" = 0 ]; then
         die "--outline-dir goes with --migrate-outline"
     fi
-    if [ "$migrate_check" = 1 ] && { [ "$ipsec" = 1 ] || [ "$mesh" = 1 ] || [ "$open_firewall" = 1 ]; }; then
-        warn "--migrate-outline --check only installs Ghostlink and reports; --ipsec, --mesh and --open-firewall apply when you run it without --check"
+    local protocol
+    if [ ${#enable[@]} -gt 0 ]; then
+        for protocol in "${enable[@]}"; do
+            case "$protocol" in
+                amneziawg | wireguard | vless | shadowsocks) ;;
+                ikev2 | ipsec) die "--enable takes amneziawg, wireguard or vless; IKEv2/IPsec is turned on with --ipsec" ;;
+                *) die "--enable takes amneziawg, wireguard or vless (not '$protocol')" ;;
+            esac
+        done
+    fi
+    if [ "$migrate_check" = 1 ] && { [ "$ipsec" = 1 ] || [ "$mesh" = 1 ] || [ "$open_firewall" = 1 ] || [ ${#enable[@]} -gt 0 ]; }; then
+        warn "--migrate-outline --check only installs Ghostlink and reports; --ipsec, --enable, --mesh and --open-firewall apply when you run it without --check"
     fi
     if [ "$migrate" = 1 ] && [ ! -f "$outline_dir/persisted-state/shadowbox_config.json" ]; then
         die "no Outline server found: $outline_dir/persisted-state/shadowbox_config.json does not exist (use --outline-dir if it is elsewhere)"
@@ -270,6 +286,15 @@ main() {
         fi
     fi
 
+    # --- optional: turn on more protocols (a new server runs only Shadowsocks) ---
+    # Turning one on tries its port: if another program holds it, the change is refused and the error says so.
+    if [ ${#enable[@]} -gt 0 ]; then
+        local enable_args=()
+        for protocol in "${enable[@]}"; do enable_args+=(--enable "$protocol"); done
+        ghostlink-server set "${enable_args[@]}" >/dev/null || die "could not turn on ${enable[*]} (see above). The server is installed: sudo ghostlink-server show-key prints its management key, and sudo ghostlink-server set --port PROTOCOL=PORT picks another port"
+        say "Turned on: ${enable[*]}"
+    fi
+
     # --- optional IKEv2/IPsec ---
     if [ "$ipsec" = 1 ]; then
         say "Starting the IKEv2/IPsec component"
@@ -345,7 +370,18 @@ main() {
 Next steps:
   - Ghostlink app: Servers I run > Add server, then paste the management key above.
   - Or on this server:  sudo ghostlink-server user add Alice
-                        sudo ghostlink-server key add Alice amneziawg
+                        sudo ghostlink-server key add Alice shadowsocks
+EOF
+    # A new server runs only Shadowsocks; an upgraded one keeps whatever it had on.
+    local off=()
+    mapfile -t off < <(protocols_off || true)
+    if [ ${#off[@]} -gt 0 ]; then
+        local off_list="${off[*]}"
+        printf '  - More protocols:     off for now: %s. Turn one on with\n' "${off_list// /, }"
+        echo "                        sudo ghostlink-server set --enable PROTOCOL, then allow the port it prints,"
+        echo "                        or run this installer again with --enable PROTOCOL --open-firewall"
+    fi
+    cat <<EOF
   - iPhone/iPad/Mac:    run this installer again with --ipsec, then: sudo ghostlink-server key add Alice ikev2
   - Mesh of servers:    run this installer again with --mesh, then: sudo ghostlink-server mesh invite --tags web
   - All commands:       sudo ghostlink-server help
@@ -413,6 +449,10 @@ install_docker() { # FAMILY OS_ID
 newest_release() { # newest published (non-draft) release, pre-releases included
     curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases?per_page=20" |
         jq -r '[.[] | select(.draft | not) | .tag_name | select(test("^v[0-9]"))][0] // empty' | sed 's/^v//'
+}
+
+protocols_off() { # the protocols a new server leaves off (amneziawg, wireguard, vless) that are off here
+    jq -r '["amneziawg", "wireguard", "vless"][] as $p | select(.[$p].enabled | not) | $p' "$STATE/state.json"
 }
 
 server_ports() { # "PORT/PROTO  service" for everything clients connect to

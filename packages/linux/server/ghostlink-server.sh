@@ -40,7 +40,8 @@ Users, keys, rules and monitoring (also available in the Ghostlink app and the d
   user rename NAME NEW-NAME | user limit NAME 50GB|none | user exempt NAME on|off
   user speed NAME 2MB|none|default     speed limit in bytes per second (2MB = 2 MB/s),
                                        download and upload alike, for all of NAME's keys
-  key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks; prints a QR code
+  key add NAME PROTOCOL [--no-qr]      shadowsocks, or amneziawg, wireguard or vless once turned
+                                       on (set --enable P); prints a QR code
   key add NAME ikev2|ipsec [--auth eap|certificate|psk] [--address H] [--remote-id ID] [--local-id ID]
                                        built-in VPN of iPhone, iPad and Mac (see ipsec below)
   profile NAME ID --output FILE [--prompt-password] [--on-demand]
@@ -54,6 +55,9 @@ Users, keys, rules and monitoring (also available in the Ghostlink app and the d
   usage | stats [NAME] [--range 7d] | clients [NAME]
   top [--once]                         live speed per user (Ctrl+C to quit)
   settings | set [--hostname H] [--enable P] [--disable P] [--port P=N] [--history-days N] ...
+  set --enable amneziawg|wireguard|vless
+                                       turn a protocol on (a new server runs only Shadowsocks);
+                                       prints the port to allow in the firewall
   set --speed-limit 2MB|none           default speed limit for clients without their own
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
