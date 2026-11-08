@@ -122,8 +122,11 @@ jobs:
           if sudo ghostlink-server ipsec enable 2> refused.txt; then echo "ipsec enable followed a symlink" >&2; exit 1; fi
           cat refused.txt
           grep -q 'not a plain directory' refused.txt
-          test "$(stat -c '%U %a' /tmp/not-ipsec)" = 'root 755' && test ! -e /etc/sysctl.d/90-ghostlink-ipsec.conf
-          sudo rm /var/lib/ghostlink-server/ipsec && sudo rmdir /tmp/not-ipsec
+          # One check per line: in "a && b" a failing a does not stop a script run with set -e.
+          test "$(stat -c '%U %a' /tmp/not-ipsec)" = 'root 755'
+          test ! -e /etc/sysctl.d/90-ghostlink-ipsec.conf
+          sudo rm /var/lib/ghostlink-server/ipsec
+          sudo rmdir /tmp/not-ipsec
           # An upgrade (here: reinstall) keeps users and keys.
           sudo apt-get install -y --reinstall "./$deb"
           curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
@@ -139,12 +142,16 @@ jobs:
           sudo ghostlink-server users | grep -q smoke
           sudo ghostlink-server top --once | grep -q smoke
           sudo ghostlink-server stats smoke --range 24h | grep -q 'Traffic for smoke'
-          sudo ghostlink-server kit smoke --output kit.html && sudo grep -q 'vless://' kit.html && test "$(stat -c %a kit.html)" = 600
+          sudo ghostlink-server kit smoke --output kit.html
+          sudo grep -q 'vless://' kit.html
+          test "$(stat -c %a kit.html)" = 600
           # Dashboard: its own port, loopback only, token sign-in, CSRF header required.
           sudo ghostlink-server dashboard | tee dashboard.txt
           dport=$(sed -n 's/.*-L 8080:127\.0\.0\.1:\([0-9]*\) .*/\1/p' dashboard.txt | head -n 1)
           token=$(sed -n 's/.*#t=\([A-Za-z0-9_-]*\).*/\1/p' dashboard.txt | head -n 1)
-          test -n "$dport" && test -n "$token" && test "$dport" != 443
+          test -n "$dport"
+          test -n "$token"
+          test "$dport" != 443
           ss -ltn | grep -q "127.0.0.1:$dport "
           if ss -ltn | grep -Eq "(0\.0\.0\.0|\*|\[::\]):$dport "; then echo "dashboard listens publicly" >&2; exit 1; fi
           curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$dport/" | grep -qx 200
@@ -194,7 +201,8 @@ jobs:
           # 3. The server installer with --mesh: this host joins as the relay (mesh join-here).
           server_deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
           cat scripts/install-server.sh | sudo bash -s -- --package "./$server_deb" --mesh-package "./$deb" | tee installer.txt
-          grep -q '/udp  mesh (this server as a node)' installer.txt && grep -q '/tcp  mesh coordinator' installer.txt
+          grep -q '/udp  mesh (this server as a node)' installer.txt
+          grep -q '/tcp  mesh coordinator' installer.txt
           systemctl is-active ghostlink-mesh
           connected
           sudo ghostlink-server --json mesh nodes | jq -e '[.nodes[] | select(.relay and .online)] | length == 1'
@@ -215,7 +223,8 @@ jobs:
           set -eu
           sudo apt-get purge -y ghostlink-server
           if docker ps -a --format '{{.Names}}' | grep -qx ghostlink-server; then echo "container left after purge" >&2; exit 1; fi
-          test ! -e /var/lib/ghostlink-server && ! id ghostlink-server 2>/dev/null
+          test ! -e /var/lib/ghostlink-server
+          if id ghostlink-server 2>/dev/null; then echo "the account is left after purge" >&2; exit 1; fi
       - name: Smoke-test the migration from Outline (installer --migrate-outline, rollback)
         env:
           ARCH: ${{ inputs.arch }}
@@ -237,7 +246,9 @@ jobs:
           docker run -d --name watchtower --restart always busybox:1.36 sleep infinity
           # --check installs Ghostlink next to Outline and only reports.
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline --check | tee check.txt
-          grep -q 'Check only' check.txt && grep -q '4 clients' check.txt && grep -q 'Old: it uses port 443' check.txt
+          grep -q 'Check only' check.txt
+          grep -q '4 clients' check.txt
+          grep -q 'Old: it uses port 443' check.txt
           test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
           sudo ghostlink-server users | grep -q 'No users yet'
           # A failed import (another program holds Router's port) puts Outline back as it was.
@@ -252,12 +263,17 @@ jobs:
           docker rm -f blocker
           # The migration: Outline stops for good, Ghostlink serves its ports and keys.
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline | tee migrate.txt
-          grep -q 'Imported from Outline' migrate.txt && grep -q 'To go back to Outline' migrate.txt
+          grep -q 'Imported from Outline' migrate.txt
+          grep -q 'To go back to Outline' migrate.txt
           grep -q '45679/udp  Shadowsocks (keys from Outline)' migrate.txt
           for name in shadowbox watchtower; do
             test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' "$name")" = "false no"
           done
-          ss -ltn | grep -q ':45678 ' && ss -ltn | grep -q ':45679 ' && ss -lun | grep -q ':45678 '
+          ss -ltn > tcp.txt
+          ss -lun > udp.txt
+          grep -q ':45678 ' tcp.txt
+          grep -q ':45679 ' tcp.txt
+          grep -q ':45678 ' udp.txt
           sudo ghostlink-server --json users | jq -e '[.[].name] == ["Phone", "Key 1", "Router", "Old"] and .[0].data_limit_bytes == 50000000000'
           credential() { printf '%s' "$1" | base64 -w0 | tr '+/' '-_' | tr -d '='; }
           sudo ghostlink-server keys Phone --show | grep -qF "ss://$(credential chacha20-ietf-poly1305:cGhvbmUtcGFzc3dvcmQ)@127.0.0.1:45678/"
@@ -281,7 +297,8 @@ jobs:
         run: |
           rpm -qip artifacts/linux-$ARCH/ghostlink-server-*.rpm
           rpm -qlp artifacts/linux-$ARCH/ghostlink-server-*.rpm | tee server-files.txt
-          grep -qx /usr/sbin/ghostlink-server server-files.txt && grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
+          grep -qx /usr/sbin/ghostlink-server server-files.txt
+          grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
           grep -qx /usr/lib/ghostlink-server/ipsec-image.tar.gz server-files.txt
           rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-server-*.rpm | grep -q 'ghostlink-server setup'
       - name: IKEv2/IPsec interop (strongSwan client, all four sign-in methods)
