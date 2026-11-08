@@ -10,7 +10,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
         systemctl restart ghostlink-mesh.service >/dev/null 2>&1 || true
     else
         echo "Ghostlink mesh agent installed. Join a mesh with the command from the Ghostlink app"
-        echo "(Servers I run > Mesh > Add node), or: sudo ghostlink-server mesh invite"
+        echo "(Servers I run > Manage > Network > Mesh > Add node), or: sudo ghostlink-server mesh invite"
     fi
 fi
 exit 0

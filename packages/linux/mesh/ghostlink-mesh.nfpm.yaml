@@ -39,6 +39,11 @@ scripts:
   preremove: packages/linux/mesh/preremove.sh
   postremove: packages/linux/mesh/postremove.sh
 
+rpm:
+  scripts:
+    # An upgrade from an older package stops the agent after the new one started it.
+    posttrans: packages/linux/mesh/posttrans.sh
+
 overrides:
   deb:
     depends:
