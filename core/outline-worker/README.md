@@ -14,7 +14,7 @@ The service writes every configuration to private storage. The worker:
 
 - emits only fixed, credential-free JSON events on stderr (`started` with the observed TUN address, `failed` with a code, `closed`); upstream logs stay disabled;
 - calls the engine's graceful `Close()` on a stop message, on stdin EOF (parent died) or on SIGINT/SIGTERM, with a 10-second bound;
-- refuses to start a TUN whose name or addresses collide with an existing interface;
+- refuses to start a TUN whose name is taken, or whose range holds an address of an existing interface (a wider network that only contains the range, such as a Hyper-V or WSL switch, is fine);
 - ignores `SIGPIPE` on Unix, so a broken status pipe cannot interrupt shutdown.
 
 Do not run it as a service with a closed stdin: the daemon owns its lifecycle.
@@ -48,7 +48,7 @@ ghostlink-server serve --state DIR [--log-level warn]               # engine + H
 ghostlink-server show-key|check|version --state DIR
 ```
 
-It normally runs inside the container shipped by the `ghostlink-server` packages; see the [server guide](../../docs/deployment/ghostlink-server.md). `internal/version` holds the version both programs report.
+It normally runs inside the container shipped by the `ghostlink-server` packages; see the [server guide](../../docs/deployment/ghostlink-server.md). The module also builds the mesh agent (`cmd/ghostlink-mesh`) and the IPsec agent (`cmd/ghostlink-ipsec-agent`). `internal/version` holds the one Ghostlink version all four programs report.
 
 ## Licensing
 

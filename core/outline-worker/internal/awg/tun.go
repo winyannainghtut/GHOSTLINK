@@ -32,6 +32,9 @@ func newTunAdapter(device wireguard.Device) *tunAdapter {
 		done:   make(chan struct{}),
 	}
 	go func() {
+		// amneziawg-go reads events until the channel closes, and nothing else ends that reader,
+		// so close it once forwarding stops. This goroutine is the only sender.
+		defer close(adapter.events)
 		source := device.Events()
 		for {
 			select {

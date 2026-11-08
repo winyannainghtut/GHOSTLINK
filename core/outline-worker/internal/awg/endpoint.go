@@ -53,6 +53,7 @@ type Endpoint struct {
 	options        Options
 	localAddresses []netip.Prefix
 	dialer         N.Dialer
+	deviceOptions  wireguard.DeviceOptions
 	tunDevice      wireguard.Device
 	tun            *tunAdapter
 	users          map[netip.Addr]string
@@ -75,6 +76,15 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	if _, err := options.deviceConfig(); err != nil {
 		return nil, err
+	}
+	// The userspace stack is created only in Start, and a repeated address is the one thing in
+	// these options it refuses; check it here so that validating a configuration still does.
+	addresses := make(map[netip.Addr]bool)
+	for _, prefix := range options.Address {
+		if addresses[prefix.Addr()] {
+			return nil, E.New("duplicate address ", prefix.Addr())
+		}
+		addresses[prefix.Addr()] = true
 	}
 	users := make(map[netip.Addr]string)
 	var allowedBuilder netipx.IPSetBuilder
@@ -121,13 +131,25 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	if options.UDPTimeout != 0 {
 		udpTimeout = time.Duration(options.UDPTimeout)
 	}
+	var udpMapping tun.NATMapping
+	var udpFiltering tun.NATFiltering
+	if !ep.isClient() {
+		// Route rules judge a UDP flow once, when its NAT session opens. The default mapping keeps
+		// one session per peer socket, so after one allowed datagram the same socket could reach
+		// any other destination unchecked, the internal blocks included. One session per
+		// destination makes every destination pass the rules.
+		udpMapping = tun.NATMappingAddressAndPortDependent
+		udpFiltering = tun.NATFilteringAddressAndPortDependent
+	}
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)
-	ep.tunDevice, err = wireguard.NewDevice(wireguard.DeviceOptions{
+	ep.deviceOptions = wireguard.DeviceOptions{
 		Context:         ctx,
 		Logger:          logger,
 		System:          false,
 		Handler:         ep,
 		UDPTimeout:      udpTimeout,
+		UDPMapping:      udpMapping,
+		UDPFiltering:    udpFiltering,
 		ICMPTimeout:     C.ICMPTimeout,
 		InterfaceFinder: networkManager.InterfaceFinder(),
 		CreateDialer: func(interfaceName string) N.Dialer {
@@ -139,9 +161,6 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		MTU:            mtu,
 		Address:        options.Address,
 		AllowedAddress: allowedSet.Prefixes(),
-	})
-	if err != nil {
-		return nil, E.Cause(err, "create AmneziaWG network stack")
 	}
 	return ep, nil
 }
@@ -151,6 +170,14 @@ func (e *Endpoint) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	resolveLater := e.isClient() && !M.ParseAddr(e.options.Peers[0].Address).IsValid()
 	switch stage {
 	case adapter.StartStateInitialize:
+		// The userspace stack runs goroutines from the moment it exists, and sing-box closes an
+		// endpoint only once it has started. Created in NewEndpoint, it leaked each time the
+		// server validated a new configuration without starting it.
+		tunDevice, err := wireguard.NewDevice(e.deviceOptions)
+		if err != nil {
+			return E.Cause(err, "create AmneziaWG network stack")
+		}
+		e.tunDevice = tunDevice
 		scope.Add(e.close)
 	case adapter.StartStateStart:
 		if !resolveLater {
@@ -302,13 +329,34 @@ func (e *Endpoint) userFor(source M.Socksaddr) string {
 	return e.users[source.Addr.Unmap()]
 }
 
+// userRouter attaches the peer's user to pre-match, which adapter.JudgeFlow leaves out.
+type userRouter struct {
+	adapter.Router
+	user string
+}
+
+func (r userRouter) PreMatch(metadata adapter.InboundContext, firstPacket []byte) adapter.PreMatchResult {
+	metadata.User = r.user
+	return r.Router.PreMatch(metadata, firstPacket)
+}
+
 func (e *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
+	if e.isClient() {
+		// A client starts its own flows through DialContext and ListenPacket, and their replies
+		// reach those sockets directly. A flow that gets here was started on the far side of the
+		// tunnel. Routing it by this device's rules would let the server, or a peer the server
+		// forwards, reach this device's loopback and LAN, or use it as an exit, so drop it.
+		return tun.FlowVerdict{Action: tun.ActionDrop}
+	}
 	for _, localPrefix := range e.localAddresses {
 		if localPrefix.Contains(destination.Addr()) {
 			return tun.FlowVerdict{Action: tun.ActionAccept}
 		}
 	}
-	return adapter.JudgeFlow(e.router, e.Tag(), e.Type(), network, source, destination, firstPacket)
+	// UDP and ICMP flows are pre-matched before they are routed. Without the user, auth_user
+	// rules cannot match there: an exempt user's UDP met the global blocks, and ping skipped the
+	// per-user blocks and per-user accounting.
+	return adapter.JudgeFlow(userRouter{e.router, e.users[source.Addr().Unmap()]}, e.Tag(), e.Type(), network, source, destination, firstPacket)
 }
 
 func (e *Endpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {

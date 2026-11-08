@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
 	"github.com/sagernet/sing-box/transport/wireguard"
 	wgTun "github.com/sagernet/wireguard-go/tun"
 )
@@ -38,6 +39,34 @@ func (d *closingDevice) Write(bufs [][]byte, offset int) (int, error) {
 func (d *closingDevice) Close() error {
 	d.closed.Store(true)
 	return nil
+}
+
+// amneziawg-go reads the device's events until the channel closes, and nothing else stops that
+// reader. The channel must close with the adapter, or each closed device stays in memory with
+// its reader; the server closes one or two devices on every engine reload.
+func TestTunAdapterEventsCloseWithIt(t *testing.T) {
+	for name, stop := range map[string]func(*tunAdapter, *closingDevice){
+		"adapter closed": func(adapter *tunAdapter, _ *closingDevice) { adapter.Close() },
+		"stack closed":   func(_ *tunAdapter, device *closingDevice) { close(device.events) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			device := &closingDevice{events: make(chan wgTun.Event, 1)}
+			adapter := newTunAdapter(device)
+			device.events <- wgTun.EventUp
+			if event := <-adapter.Events(); event != awgtun.EventUp {
+				t.Fatalf("got event %v, want up", event)
+			}
+			stop(adapter, device)
+			select {
+			case _, open := <-adapter.Events():
+				if open {
+					t.Fatal("an event arrived after the stop")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("the events channel stayed open")
+			}
+		})
+	}
 }
 
 // Regression: on Linux CI an AmneziaWG client crashed during graceful stop because a peer
