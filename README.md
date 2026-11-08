@@ -278,7 +278,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Mesh of Linux servers | Tested in CI with kernel WireGuard between network namespaces: direct and relayed paths through NAT, access rules, shared subnets, names, disable/remove and clean-up. Release CI installs the agent package, joins it to the installed server and removes it cleanly. Not yet run across real cloud servers. Windows nodes are planned |
 | Ghostlink apps for macOS, Android, iOS | Not started (Apple devices use the built-in VPN with profiles; other phones use the third-party apps listed above) |
 
-**Latest release:** v0.8.0, a pre-release (2026-11-08). Fixes found since are on `main` and listed under *Unreleased* in the [changelog](CHANGELOG.md), which lists what each release changed. The first non-pre-release, v1.0.0, waits for signed builds or a decision to launch unsigned, and for real-device checks of the Windows installer, a VPS server and an Apple device.
+**Latest release:** v0.8.1, a pre-release (2026-11-08), with the fixes for 0.8.0 from a report on a running server and two reviews of the code. The [changelog](CHANGELOG.md) lists what each release changed; its 0.8.1 section also says what behaves differently after an upgrade. The first non-pre-release, v1.0.0, waits for signed builds or a decision to launch unsigned, and for real-device checks of the Windows installer, a VPS server and an Apple device.
 
 ## Documentation
 

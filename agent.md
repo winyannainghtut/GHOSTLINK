@@ -8,11 +8,11 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 ### Where things stand
 
-- **Latest release: v0.8.0**, a **pre-release** published on 2026-11-08. It brings per-client speed limits in bytes per second, the in-place move from an Outline server that keeps its `ss://` keys working, and speeds shown in bytes per second everywhere.
+- **Latest release: v0.8.1**, a **pre-release** published on 2026-11-08: the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3). The CHANGELOG's `[0.8.1]` section lists them, with a *Changed* list of what behaves differently after an upgrade; the verification ledger's top two sections record the checks.
 - **Other releases:**
-  - v0.7.0 and v0.5.0 are published pre-releases;
-  - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. Only a maintainer publishes or deletes releases.
-- **`main` after 0.8.0:** fixes from two reviews of 0.8.0 and from a report on a running server, listed under `[Unreleased]` in the CHANGELOG (with a *Changed* list of what behaves differently after an upgrade) and in the verification ledger's top section. They came through pull requests #2 and #3 and are **not in the 0.8.0 packages**; releasing them as **0.8.1** is the maintainer's call, so ask before tagging.
+  - v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
+- **`main` after 0.8.1:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -33,6 +33,7 @@ These came from the maintainer and shape the code. Keep them unless the maintain
 - **Look (0.7.0):** the app and the dashboard share one frosted-glass design (see §10). Check new UI in all three finishes, Daylight included.
 - **Online state:** a client is online while it sends something at least once a minute; open connections alone don't count (see §13).
 - **Small servers:** with under 1 GB of memory and swap the installer stops unless it gets `--add-swap`. Before a real move from Outline, suggest `--migrate-outline --check`.
+- **Two packages (2026-11-08):** the server and the mesh agent stay separate packages. A node needs no Docker or VPN server, the server runs in an unprivileged container, and network rights on a host stay with small pieces (the mesh agent, and the IPsec component when it is on). `install-server.sh --mesh` installs both on the coordinator's host.
 - **First stable release:** v1.0.0, after the checks under *Next steps*. Launching with unsigned builds is acceptable.
 
 ### The 0.8.1 review round (2026-11-08), in short
@@ -49,11 +50,7 @@ A report on a running server and a second full review, reviewed area by area and
 
 ### Next steps, in order
 
-1. **0.8.1**, when the maintainer decides to release the fixes on `main`:
-   - bump the version (see *Version bump*);
-   - turn the CHANGELOG `[Unreleased]` section into `[0.8.1]` with the date and a compare link;
-   - follow the release flow below (tag `v0.8.1`), leaving the draft for a maintainer to publish.
-2. **v1.0.0, the "first launch":**
+1. **v1.0.0, the "first launch":**
    - **Code and docs:**
      - in `release.yml`, pass `--prerelease` only below 1.0 (an `-rc` tag would first need a numeric MSI `Product/@Version`, which candle requires, and package names that the installers expect, since nfpm writes `1.0.0~rc.1`);
      - change the first line of `.github/release-notes.md` ("Unsigned pre-release…");
@@ -66,11 +63,18 @@ A report on a running server and a second full review, reviewed area by area and
      - `--migrate-outline` on a real Outline server;
      - an IKEv2 profile on an iPhone or Mac.
    - **Code signing is the maintainer's decision:** the Windows builds are unsigned, so SmartScreen says "Unknown publisher" (Azure Trusted Signing costs about $10 a month).
-3. **Follow-ups worth offering:**
+2. **Follow-ups worth offering:**
    - Outline keys on ports below 1024, often 443, could be kept if the server container got `NET_BIND_SERVICE`. Today they get new keys.
    - Separate download and upload caps.
    - Windows mesh nodes.
    - The Linux desktop app, blocked by the GTK `glib` advisory.
+3. **Limits found while checking the 0.8.1 notes** (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
+   - **Mesh and Docker:** the agent puts its `FORWARD` jump first only when it adds it (`hostfw.EnsureJumps`), and its 30 s check only tests that the jump exists. Docker puts its own rules first when it starts after the agent, and then every node reaches published container ports whatever the access rules say. Keep the agent's rules ahead of Docker's (for example through `DOCKER-USER`) without fighting kube-proxy or Calico, and add Docker's chains to the mesh end-to-end test.
+   - **An engine that cannot start** (new in 0.8.1, where `serve` no longer exits): `setup`, the installer and `status` say the server is running, and the app and the dashboard show nothing; only the log and `GET /live` (`health.engine_error`) tell. Show it.
+   - **Engine restarts from host addresses** (new in 0.8.1, a side effect of blocking every host address): addresses in 100.64.0.0/10, the mesh's default 100.96.0.0/16 included, count as public host addresses. So the coordinator's own mesh node restarts the VPN engine when it joins or leaves, and can when `ghostlink-mesh` restarts: the agent removes `glmesh0` while it restarts, and the server checks the addresses every 30 s. Those ranges are blocked anyway.
+   - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
+   - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
+   - **Engine log:** the packaged server has no switch for it.
 
 ### Rules for contributors and AI agents
 
@@ -125,12 +129,15 @@ A report on a running server and a second full review, reviewed area by area and
   - `core/outline-worker/internal/version/version.go`;
   - `core/vpn-engine/src/worker_session.rs`;
   - `ui/desktop/src/version.ts`;
-  - `tests/integration/control-plane.test.mjs`.
+  - `tests/integration/control-plane.test.mjs`;
+  - the worker identity quoted in §5 of this guide.
 
-  Then run `node scripts/release-version.mjs`, add the CHANGELOG section, and rebuild the UI.
+  Then update the workspace members in both lockfiles (after both `Cargo.toml` files) with `scripts/cargo.ps1 update --workspace --offline`, once more with `--manifest-path apps/desktop/src-tauri/Cargo.toml`; the release builds pass `--locked`, which refuses a stale lock. Run `node scripts/release-version.mjs`, add the CHANGELOG section, and rebuild the UI.
 - **GUI and traffic checks:** script them with the DevTools protocol (`Runtime.evaluate`, `Page.captureScreenshot`) against the debug app, launched with an isolated WebView2 profile and its own `GHOSTLINK_ENDPOINT`, and a local `ghostlink-server` (`init --state DIR --hostname 127.0.0.1`, then `serve --state DIR`). Real traffic can come from a small Shadowsocks client written for the check; the dashboard opens in the same isolated webview from `GET /dashboard`. Keep such scripts outside the repository.
 - **Flaky CI to know about:**
   - Mesh end-to-end, "open mesh: relay reaches natb:8080", passed on re-run (2026-11-07).
+  - Release, Windows job, "Pinned WiX tools": the download server answered 504 Gateway Time-out (2026-11-08). `scripts/bootstrap-windows.ps1` has no retry; re-run the failed job.
+  - Process test 15 (Outline key import, rename, default and remove) failed once locally on the first run after a rebuild (2026-11-08) and passed the next 7 runs; its error was not captured. Capture the full output (`npm test > file`) if it happens again.
   - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It is fixed by picking a port free on both TCP and UDP, with the UDP port taken from the system first: on the Windows runners, ports free on TCP are often in reserved UDP ranges (a TCP-first helper failed there on 2026-11-08).
 - **Where the speed-limit and Outline code lives:** see §13, *Speed limits and the move from Outline (v0.8.0)*.
 
@@ -200,7 +207,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 
 ## 2. Current completion report
 
-**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.0, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
+**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.1, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
 
 | Area | Implemented / produced | Evidence and remaining gate |
 |---|---|---|
@@ -214,7 +221,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.0 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.1 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -346,7 +353,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.0; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.1; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -738,7 +745,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
 - **Coordinator** (in the unprivileged server):
   - `internal/mesh`:
     - `network.go`: nodes, hashed invite tokens and node secrets (`ID.secret`), addresses, rules and the `tag:`/`node:` selectors;
-    - `live.go`: last reports, the per-pair path state machine (direct, relay after 90 s without a handshake, retried after 15 min) and the topology for the map;
+    - `live.go`: last reports, the per-pair path state machine (direct; relayed after 90 s without a fresh handshake; direct again once a handshake on the probe peer shows it works, with no timed retry) and the topology for the map;
     - `config.go`: per-node configs, relay re-routing of `AllowedIPs`, rules compiled to source CIDRs, and a 53-bit content-hash generation.
   - `internal/server/mesh.go`: `MeshServer`, its own TLS port with the API certificate, `/v1/join|sync|leave`, and a long-poll of up to 10 s. Each sync takes the wake channel before computing its answer. The same file holds the admin handlers under `/mesh…`.
   - `admin_mesh.go`: `ghostlink-server mesh …`; the host script adds `mesh join-here`.
@@ -767,7 +774,7 @@ Pitfalls found here:
 
 - **Speed limits:** `User.SpeedLimitBps` (0 = server default, -1 = none, >0 = cap) and `State.DefaultSpeedLimitBps`, in bytes per second. They are not in the engine config. `internal/server/pace.go` is a token bucket per client and direction.
   - **TCP:** `Monitor.RoutedConnection` wraps each connection in `bufio.NewCounterConn` with `upPace.Wait`/`downPace.Wait` as count functions, which sing's copy loop calls after each chunk (a plain wrapper would be bypassed by its unwrapping).
-  - **UDP:** `RoutedPacketConnection` wraps `policedPacketConn` in `bufio.NewCounterPacketConn`. What the client sends is policed with `pacer.Allow` (dropped above the rate, never delayed, because the Shadowsocks inbound feeds every client's UDP from one loop); UDP to the client waits on `downPace`. `policedPacketConn` must stay opaque to read unwrapping (no `Upstream`, `UpstreamReader`, `ReaderReplaceable` or read waiter), but it must expose `UpstreamWriter`: sing sizes write buffers from the header and tag room the writer behind it needs, and hiding it made the first Shadowsocks UDP reply crash the server (found before release; `udp_test.go` and `police_test.go` guard it).
+  - **UDP:** `RoutedPacketConnection` wraps `policedPacketConn` in `bufio.NewCounterPacketConn`. What the client sends is policed with `pacer.Allow` (dropped above the rate, never delayed, because the Shadowsocks inbound feeds every client's UDP from one loop); UDP to the client waits on `downPace`. `policedPacketConn` must stay opaque to read unwrapping (not `ReaderReplaceable`, no `UpstreamReader` or read waiter). It exposes `Upstream`, through which sing finds the WireGuard stack's handshake reports and NAT timeout (`guard_test.go` checks this), and it must expose `UpstreamWriter`: sing sizes write buffers from the header and tag room the writer behind it needs, and hiding it made the first Shadowsocks UDP reply crash the server (found before release; `udp_test.go` and `police_test.go` guard it).
   - **Online state:** `isOnline` in `monitor.go`: seen within 60 s. Only what the client sends moves "last seen" (new connections, uploads, downloads of at least 16 KB in a second, a WireGuard/AmneziaWG peer whose receive counter grew, polled every 5 s, or a handshake, and IKEv2/IPsec reports). Open connections don't count. `Service.Change` and `Start` call `Monitor.SetSpeedLimits`. IKEv2/IPsec: `ipsecproto.Desired.SpeedLimits`; the agent renders `hashlimit` rules in `GHOSTLINK-IPSEC-LIM` from the current sessions' virtual IPs and re-renders when they change.
 - **Outline import:** `internal/server/outline.go` (`POST /import/outline`, report without secrets, dry run through a sentinel error in `Service.Change`), `admin_outline.go` (`import-outline --dir DIR [--check]`, read-only). Keys may carry `Port`/`Method` overrides; `render.go` adds an inbound `shadowsocks-<port>` per extra port and `CheckPorts` refuses moving the main port onto one. The host command `ghostlink-server migrate-outline` copies Outline's files into `$STATE/outline-import` (0700/0600, server account), checks, stops `shadowbox`/`watchtower` with restart `no`, imports, restores Outline on failure and deletes the copies. `install-server.sh --migrate-outline [--check]` wraps it.
 - **Units:** all speeds in the UI and `top` are bytes per second (`byteRate`, `speed`, `megabytes` in `ui/shared/format.ts`).
@@ -854,9 +861,9 @@ Each Linux job also builds the server (`ghostlink-server_<v>-1_<arch>.deb`, `gho
 
 The Windows and Linux build jobs run `node scripts/release-version.mjs` first (the Linux step used to hide its exit code). The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
-Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents never publish. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.0` exist; v0.5.0, v0.7.0 and v0.8.0 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
+Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents publish only when a maintainer asks. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.1` exist; v0.5.0, v0.7.0, v0.8.0 and v0.8.1 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
 
-Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
+Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows, Linux x64, `desktop.yml` and `ui.yml`), and `attach-linux-arm64` uploads its files and their checksum lines afterwards. Publish only after it has: the installers and the app's **Add node** command take the newest published release, pre-releases included, so a release without the arm64 files breaks installs and upgrades on arm64. If no arm64 runner is available, keep the release a draft until the job can run.
 
 ### Artifacts actually produced
 

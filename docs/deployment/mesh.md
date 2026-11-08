@@ -105,7 +105,7 @@ Useful options:
 | `--endpoint IP:PORT` | Its public address, when it can't be detected. |
 | `--port N` | WireGuard UDP port (default 51820). |
 | `--no-hosts` | Don't add `<node>.mesh` names to `/etc/hosts`. |
-| `--open-firewall` | Allow the WireGuard port in an active ufw or firewalld. With firewalld it also puts the mesh interface in the `trusted` zone; otherwise firewalld refuses all mesh traffic but ping and SSH. The mesh's own access rules still apply. |
+| `--open-firewall` | Allow the WireGuard port in an active ufw or firewalld. With firewalld it also puts the mesh interface in the `trusted` zone; otherwise firewalld refuses all mesh traffic but ping and SSH. The mesh's own access rules still apply. Upgrading the agent changes nothing in firewalld, and the coordinator's own node (`install-server.sh --mesh`, `mesh join-here`) gets neither this nor the hint: on such nodes, run the `firewall-cmd` commands under *Troubleshooting*. |
 | `--package FILE` | Install a downloaded package instead. |
 
 An invite is a secret until it is used: anyone holding it can add a server. It is stored on the coordinator only as a hash, and shown once.
@@ -164,7 +164,7 @@ In the app and the dashboard, the editor is **Access rules** on the Mesh card.
 
 Rules are enforced by the **receiving** node's firewall. The coordinator compiles them into the exact source addresses each node accepts, so a node needs no knowledge of tags.
 
-- **Containers:** ports a node publishes for containers (Docker, Podman, Kubernetes NodePorts) are part of the node. Rules match the port the connection was made to.
+- **Containers:** ports a node publishes for containers (Docker, Podman, Kubernetes NodePorts) are part of the node. Rules match the port the connection was made to. This holds while the agent's firewall rules come before Docker's in the `FORWARD` chain. Docker puts its own rules first when it starts after the agent (at boot, for example), and can do so when it restarts or creates a network; every node can then reach the published ports whatever the rules say. `sudo systemctl restart ghostlink-mesh` puts the agent's rules first again.
 - **Shared subnets:** as a destination (*to*), a node's shared subnets count as part of that node, including its own address in them. As a source (*from*), only nodes' own mesh addresses match: once rules exist, connections that hosts in a shared subnet start are refused by the receiving node, and only replies pass.
 
 ## Shared subnets (site-to-site)
