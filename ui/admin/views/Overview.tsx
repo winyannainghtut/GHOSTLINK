@@ -50,7 +50,10 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
 
   const total = byteRate((live?.down_bps ?? 0) + (live?.up_bps ?? 0));
   const health = live?.health;
-  const pools = server.address_pools ?? [];
+  // The tunnel address pools of WireGuard and AmneziaWG, only while they are on: a protocol that
+  // is off gets no keys (a new server has neither on).
+  const pools = (server.address_pools ?? []).filter(p => server.protocols[p.protocol]?.enabled);
+  const poolsOff = !server.protocols.amneziawg?.enabled && !server.protocols.wireguard?.enabled;
   const used = pools.reduce((n, p) => n + p.used, 0), capacity = pools.reduce((n, p) => n + p.capacity, 0);
 
   const points: RatePoint[] = useMemo(() => {
@@ -120,20 +123,30 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
           label="Address pool"
           icon={<NetworkIcon size={17} />}
           detail={
-            <span className="flex flex-wrap gap-x-3">
-              {pools.map(p => (
-                <span key={p.protocol}>
-                  {protocolName(p.protocol)} <span className="mono">{p.cidr}</span>
-                </span>
-              ))}
-            </span>
+            poolsOff ? (
+              'WireGuard and AmneziaWG are off'
+            ) : (
+              <span className="flex flex-wrap gap-x-3">
+                {pools.map(p => (
+                  <span key={p.protocol}>
+                    {protocolName(p.protocol)} <span className="mono">{p.cidr}</span>
+                  </span>
+                ))}
+              </span>
+            )
           }
         >
-          <div className="flex items-baseline justify-between">
-            <BigNumber value={used} unit={`of ${capacity.toLocaleString()} used`} />
-            <span className="num text-[13px] text-fg-2">{capacity ? ((used / capacity) * 100).toFixed(capacity > 2000 ? 2 : 1) : 0} %</span>
-          </div>
-          <Meter className="mt-3" fraction={capacity ? used / capacity : 0} tone="ok" />
+          {poolsOff ? (
+            <BigNumber value="—" />
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between">
+                <BigNumber value={used} unit={`of ${capacity.toLocaleString()} used`} />
+                <span className="num text-[13px] text-fg-2">{capacity ? ((used / capacity) * 100).toFixed(capacity > 2000 ? 2 : 1) : 0} %</span>
+              </div>
+              <Meter className="mt-3" fraction={capacity ? used / capacity : 0} tone="ok" />
+            </>
+          )}
         </Kpi>
       </div>
 

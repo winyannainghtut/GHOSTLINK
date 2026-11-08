@@ -8,6 +8,7 @@ import { Button, Check, Field, Inner, Note, Segmented, Sheet, StatusDot, useUI }
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type Client, type Key, type ProtocolId, type Stats, type User } from '../api';
 import { hasConf, isApple, tunnelAddress, useKeyTools } from '../keys';
 import { dataLimitValue } from '../limits';
+import { firstKeyProtocol } from '../protocols';
 import { RulesEditor } from '../RulesEditor';
 import { SpeedLimitField, speedChange, speedChoice } from '../SpeedLimit';
 import { clientStatus, statusLabel, useStore } from '../store';
@@ -68,7 +69,11 @@ function KeysTab({ user }: { user: User }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => void load(), [user.id, user.keys.length]);
 
-  const [protocol, setProtocol] = useState<ProtocolId>('amneziawg');
+  const available = KEY_PROTOCOLS.filter(p => server.protocols[p]?.enabled);
+  // New keys start on Shadowsocks, the one protocol a new server has on. While the protocol picked
+  // is off, the form uses Shadowsocks, or else the first protocol that is on.
+  const [picked, setPicked] = useState<ProtocolId>('shadowsocks');
+  const protocol = available.includes(picked) ? picked : (firstKeyProtocol(available, 'shadowsocks') ?? 'shadowsocks');
   const [auth, setAuth] = useState('eap');
   const [address, setAddress] = useState('');
   const [remoteId, setRemoteId] = useState('');
@@ -96,7 +101,6 @@ function KeysTab({ user }: { user: User }) {
     }
   };
 
-  const available = KEY_PROTOCOLS.filter(p => server.protocols[p]?.enabled);
   return (
     <div className="grid gap-4">
       {keys === null ? (
@@ -183,7 +187,7 @@ function KeysTab({ user }: { user: User }) {
         <h3 className="text-[14px]">New key</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Protocol" hint={PROTOCOL_HINTS[protocol]}>
-            <select className="field" value={protocol} onChange={e => setProtocol(e.target.value as ProtocolId)}>
+            <select className="field" value={protocol} onChange={e => setPicked(e.target.value as ProtocolId)}>
               {KEY_PROTOCOLS.map(p => (
                 <option key={p} value={p} disabled={!available.includes(p)}>
                   {PROTOCOLS[p]}

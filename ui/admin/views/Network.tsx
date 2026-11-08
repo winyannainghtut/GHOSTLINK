@@ -4,6 +4,7 @@ import { Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button, Card, CardTitle, Meter, Note, Switch, useUI } from '@shared/glass';
 import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type ProtocolId, type Rules, type Server } from '../api';
+import { turnedOn } from '../protocols';
 import { RulesEditor } from '../RulesEditor';
 import { useStore } from '../store';
 import { MeshCard } from './Mesh';
@@ -19,24 +20,30 @@ export function Network() {
     api<Rules>('GET', '/rules').then(setRules).catch(() => {});
   }, []);
 
-  const patch = async (body: Record<string, unknown>, message: string) => {
+  // The message can depend on the server after the change (the port of a protocol turned on).
+  const patch = async (body: Record<string, unknown>, message: string | ((next: Server) => string)) => {
     try {
       await api('PATCH', '/server', body);
-      setServer(await api<Server>('GET', '/server'));
-      toast(message);
+      const next = await api<Server>('GET', '/server');
+      setServer(next);
+      toast(typeof message === 'string' ? message : message(next));
     } catch (error) {
       toast((error as Error).message, 'bad');
     }
   };
   const toggle = async (p: ProtocolId, on: boolean) => {
     if (!on && !(await confirm({ title: `Pause ${PROTOCOLS[p]}?`, text: `Everyone connected with ${PROTOCOLS[p]} is disconnected until you turn it on again.`, action: 'Pause', danger: true }))) return;
-    await patch({ protocols: { [p]: { enabled: on } } }, `${PROTOCOLS[p]} ${on ? 'is on' : 'paused'}.`);
+    await patch({ protocols: { [p]: { enabled: on } } }, next => (on ? turnedOn(PROTOCOLS[p], p, next.protocols[p]?.port ?? 0) : `${PROTOCOLS[p]} paused.`));
   };
+  // The tunnel address pools of WireGuard and AmneziaWG, only while they are on: a protocol that
+  // is off gets no keys (a new server has neither on).
+  const pools = (server.address_pools ?? []).filter(pool => server.protocols[pool.protocol]?.enabled);
+  const poolsOff = !server.protocols.amneziawg?.enabled && !server.protocols.wireguard?.enabled;
 
   return (
     <div className="grid grid-cols-1 gap-4">
       <Card>
-        <CardTitle title="Protocols" detail="Clients reconnect automatically after a change. Open these ports in the firewall and your cloud security group." />
+        <CardTitle title="Protocols" detail="A new server runs only Shadowsocks; turn on the others you need. Allow the port of each protocol that is on in this server's firewall and your cloud security group. Clients reconnect automatically after a change." />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-6">
           {ORDER.map(p => (
             <ProtocolTile key={p} protocol={p} server={server} onToggle={on => toggle(p, on)} onPort={port => patch({ protocols: { [p]: { port } } }, `${PROTOCOLS[p]} now uses port ${port}. Keys already shared keep the old port.`)} />
@@ -48,25 +55,29 @@ export function Network() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
           <CardTitle title="Address pool" detail="Tunnel addresses for WireGuard and AmneziaWG keys" />
-          <ul className="grid grid-cols-1 gap-4">
-            {(server.address_pools ?? []).map(pool => (
-              <li key={pool.protocol} className="grid grid-cols-1 gap-2">
-                <div className="flex items-baseline justify-between gap-3 text-[13px]">
-                  <span>{protocolName(pool.protocol)}</span>
-                  <span className="mono text-fg-2">{pool.cidr}</span>
-                </div>
-                <Meter fraction={pool.capacity ? pool.used / pool.capacity : 0} tone="ok" />
-                <div className="flex justify-between text-[12px] text-fg-3">
-                  <span className="num">
-                    {pool.used} of {pool.capacity.toLocaleString()} in use
-                  </span>
-                  <span>
-                    Next <span className="mono text-fg-2">{pool.next ?? 'none free'}</span>
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
+          {poolsOff ? (
+            <Note>WireGuard and AmneziaWG are off. Their pools show here when one is on.</Note>
+          ) : (
+            <ul className="grid grid-cols-1 gap-4">
+              {pools.map(pool => (
+                <li key={pool.protocol} className="grid grid-cols-1 gap-2">
+                  <div className="flex items-baseline justify-between gap-3 text-[13px]">
+                    <span>{protocolName(pool.protocol)}</span>
+                    <span className="mono text-fg-2">{pool.cidr}</span>
+                  </div>
+                  <Meter fraction={pool.capacity ? pool.used / pool.capacity : 0} tone="ok" />
+                  <div className="flex justify-between text-[12px] text-fg-3">
+                    <span className="num">
+                      {pool.used} of {pool.capacity.toLocaleString()} in use
+                    </span>
+                    <span>
+                      Next <span className="mono text-fg-2">{pool.next ?? 'none free'}</span>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
         <Card className="lg:col-span-2">
           <CardTitle title="Rules for everyone" detail="Blocked traffic is refused on the server. Changes apply at once." />
