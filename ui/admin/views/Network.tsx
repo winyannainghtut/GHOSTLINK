@@ -34,10 +34,10 @@ export function Network() {
   };
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <Card>
         <CardTitle title="Protocols" detail="Clients reconnect automatically after a change. Open these ports in the firewall and your cloud security group." />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-6">
           {ORDER.map(p => (
             <ProtocolTile key={p} protocol={p} server={server} onToggle={on => toggle(p, on)} onPort={port => patch({ protocols: { [p]: { port } } }, `${PROTOCOLS[p]} now uses port ${port}. Keys already shared keep the old port.`)} />
           ))}
@@ -45,12 +45,12 @@ export function Network() {
         {!server.ipsec_component?.running && <div className="mt-4"><Note>IKEv2 and IPsec (the built-in VPN of iPhone, iPad and Mac) need the IPsec component: run sudo ghostlink-server ipsec enable on the server.</Note></div>}
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
           <CardTitle title="Address pool" detail="Tunnel addresses for WireGuard and AmneziaWG keys" />
-          <ul className="grid gap-4">
+          <ul className="grid grid-cols-1 gap-4">
             {(server.address_pools ?? []).map(pool => (
-              <li key={pool.protocol} className="grid gap-2">
+              <li key={pool.protocol} className="grid grid-cols-1 gap-2">
                 <div className="flex items-baseline justify-between gap-3 text-[13px]">
                   <span>{protocolName(pool.protocol)}</span>
                   <span className="mono text-fg-2">{pool.cidr}</span>
@@ -101,7 +101,7 @@ function ProtocolTile({ protocol, server, onToggle, onPort }: { protocol: Protoc
   // Keys imported from Outline that kept their own port have their own Shadowsocks listeners.
   const extraPorts = protocol === 'shadowsocks' ? (server.shadowsocks_extra_ports ?? []) : [];
   return (
-    <div className="inset-glass grid gap-3 rounded-[24px] p-4">
+    <div className="inset-glass grid grid-cols-1 gap-3 rounded-[24px] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-[15px]">{PROTOCOLS[protocol]}</h3>

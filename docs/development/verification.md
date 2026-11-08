@@ -2,6 +2,18 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.8.2 Layout fixes (2026-11-08, pull request #5)
+
+Reported on the published 0.8.1: the switches of the Island's protocol list stuck out of its box. An independent review of the fix found the same fault in more places and a few other layout faults, and a skeptic checked each finding again (8 of 10 held). Every check below rendered the real UI in the debug app's WebView2 over DevTools (isolated profile, dummy service endpoint) against a local `ghostlink-server` (`%TEMP%\gl-gui\layout081.mjs` and `layout082.mjs`, kept outside the repository).
+
+| Check | Result actually observed |
+|---|---|
+| Island protocol list (all three finishes, 1000 and 1280 px) | Before the fix: each row 352.5 px wide in the 340 px panel, every switch 13.5 px past the panel's edge, AmneziaWG's hint not shortened. After: rows 314 px, switches 25 px inside the edge, the hint shortened, the knobs inside their tracks |
+| Navigation bar, 1000–1600 px in 8 px steps, in the app's own shell and in the dashboard | No overlap of the motion button or the finish picker with the Island or the view buttons. With 360 px slots the motion button still stood 1.8 px out of its slot; the slots are 368 px |
+| Long names, phones and narrow windows (390, 620, 1000 and 1280 px) | A 64-character client name in cards and list and in its sheet (keys and usage), a mesh node waiting for approval named `ubuntu-s-1vcpu-1gb-sgp1-01`, the Network view, the Island: nothing outside its box and no page wider than the screen. Before the last fixes, at 390 px, the Network view made the page 445 px wide, the bar's buttons stuck out by 28 px, and the mesh card's buttons squeezed its summary out of its box |
+| UI | Typecheck, 17 tests and both builds, after every change |
+| Not rendered | The app's My servers and Servers I run cards and its Connect through list need the local service; they use the same CSS rule (`grid-cols-1`, a shortened title in its own span) |
+
 ## v0.8.1 Second full review and a report from a running server (2026-11-08, pull request #3)
 
 Every subsystem was read in full, reviewed again for new defects, checked by a skeptical verifier, fixed area by area in separate worktrees with tests, and merged. What changed is in the CHANGELOG under [0.8.1].

@@ -86,7 +86,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
           </Empty>
         </Card>
       ) : mode === 'cards' ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
           {shown.map(u => (
             <ClientCard key={u.id} user={u} status={statusOf(u)} now={now} onOpen={() => setOpenId(u.id)} onEnabled={on => setEnabled(u, on)} tools={tools} />
           ))}

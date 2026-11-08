@@ -6,9 +6,9 @@ export function Bars({ items, empty, label }: { items: { label: string; bytes: n
   if (!items || !items.length) return <p className="py-6 text-center text-[13px] text-fg-3">{empty}</p>;
   const top = Math.max(1, ...items.map(i => i.bytes));
   return (
-    <ul className="grid gap-3">
+    <ul className="grid grid-cols-1 gap-3">
       {items.slice(0, 8).map(item => (
-        <li key={item.label} className="grid gap-1.5">
+        <li key={item.label} className="grid grid-cols-1 gap-1.5">
           <div className="flex items-baseline justify-between gap-3 text-[13px]">
             <span className="truncate text-fg">{label ? label(item.label) : item.label}</span>
             <span className="num shrink-0 text-fg-2">{bytes(item.bytes)}</span>

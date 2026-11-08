@@ -106,11 +106,11 @@ function KeysTab({ user }: { user: User }) {
           <Note>No keys yet. Create one below; Ghostlink generates it on the server.</Note>
         </Inner>
       ) : (
-        <ul className="grid gap-2.5">
+        <ul className="grid grid-cols-1 gap-2.5">
           {keys.map(key => {
             const summary = user.keys.find(k => k.id === key.id);
             return (
-              <li key={key.id} className="inset-glass grid gap-3 rounded-[24px] px-4 py-3">
+              <li key={key.id} className="inset-glass grid grid-cols-1 gap-3 rounded-[24px] px-4 py-3">
                 <div className="flex items-center gap-3">
                 <div className="grid size-9 place-items-center rounded-full bg-glass-strong text-fg-2">
                   <KeyRound size={16} />
@@ -248,7 +248,7 @@ function UsageTab({ user }: { user: User }) {
     };
   }, [range, user.id]);
   return (
-    <div className="grid gap-5">
+    <div className="grid grid-cols-1 gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Segmented
           size="sm"
@@ -284,12 +284,12 @@ function UsageTab({ user }: { user: User }) {
         {!clients.length ? (
           <Note>No connections recorded in the last 30 days.</Note>
         ) : (
-          <ul className="grid gap-2">
+          <ul className="grid grid-cols-1 gap-2">
             {clients.map(c => (
               <li key={c.ip + c.protocol} className="inset-glass flex items-center justify-between gap-3 rounded-[20px] px-4 py-2.5 text-[13px]">
-                <span className="mono text-fg">{c.ip}</span>
-                <span className="text-fg-3">{protocolName(c.protocol)}</span>
-                <span className="num text-fg-2">{ago(c.last_unix)}</span>
+                <span className="mono min-w-0 truncate text-fg" title={c.ip}>{c.ip}</span>
+                <span className="shrink-0 text-fg-3">{protocolName(c.protocol)}</span>
+                <span className="num shrink-0 text-fg-2">{ago(c.last_unix)}</span>
               </li>
             ))}
           </ul>

@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-08
+
+Layout fixes for the app and the dashboard, reported on 0.8.1. Nothing else changes. Upgrading from 0.8.0? Also read the 0.8.1 notes: they list what behaves differently after that upgrade.
+
+### Fixed
+
+- **Protocols in the Island:** in the "Protocols on this server" list, the switches stuck out of the box, and a long description such as AmneziaWG's was not shortened, because the list's rows grew to fit their longest line. The rows now keep to the box and shorten what does not fit.
+- **Long names and addresses elsewhere:** they could push content out of its box the same way: mesh nodes and nodes waiting for approval, a client's keys and the addresses it connected from, site statistics, the app's servers under *Connect through*, and the client and server cards in narrow windows and on phones. They are now shortened with "…". In the app, a long server name also no longer hides the default-server star.
+- **Navigation bar:** at some window widths the motion button (Subtle, Calm or Still) ran into the Island or the view buttons, and on a phone the buttons stuck out of the bar. The bar's side groups now have room for their buttons, and on a phone they wrap.
+- **The dashboard on a phone:** the Network view was wider than the screen, so the page scrolled sideways and the protocols' switches and ports were cut off. It now fits, and a card whose buttons leave too little room for its title, such as the mesh card, puts them below the title.
+- **CI:** downloads of the WiX tools, the sing-box test peers and a draft release's checksums try again when GitHub answers with a server error, instead of failing the job.
+
 ## [0.8.1] - 2026-11-08
 
 Fixes on top of 0.8.0: what was reported on a running server, what a review of 0.8.0 found, and what a second, full review of the code found. Upgrade servers: this release closes ways for VPN users to reach the server's own services and its network (*Server: what VPN users can reach*), and a way for a compromised server to get hold of any directory on its host (*The state and root*). See *Changed* for what behaves differently after an upgrade.
@@ -450,7 +462,8 @@ What behaves differently after an upgrade:
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.6.0...v0.7.0

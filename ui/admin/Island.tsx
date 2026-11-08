@@ -93,7 +93,9 @@ export function Island() {
       {open && anchor && createPortal(
         <div ref={panel} style={{ top: anchor.top, left: anchor.left }} className="glass-strong fixed z-40 w-[340px] -translate-x-1/2 rounded-[28px] p-3 animate-[sheet-in_0.25s_cubic-bezier(0.2,0.9,0.25,1)]">
           <p className="px-2 pt-1 pb-2 text-[12.5px] text-fg-3">Protocols on this server</p>
-          <ul className="grid gap-1">
+          {/* grid-cols-1 (minmax(0, 1fr)) keeps rows to the panel's width, so long hints are cut
+              short instead of widening every row and pushing the switches out of the panel. */}
+          <ul className="grid grid-cols-1 gap-1">
             {ORDER.map(p => {
               const info = server.protocols[p];
               const apple = APPLE.includes(p);

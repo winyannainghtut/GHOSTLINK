@@ -26,7 +26,7 @@ export function RulesEditor({ rules, onSave, saveLabel = 'Save rules' }: { rules
   }, [saved]);
   return (
     <form
-      className="grid gap-4"
+      className="grid grid-cols-1 gap-4"
       onSubmit={async event => {
         event.preventDefault();
         setBusy(true);
