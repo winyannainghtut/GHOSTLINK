@@ -1,6 +1,6 @@
 // Stacked usage bars per hour or day (download below upload), sized to the element.
 import { useEffect, useRef, useState } from 'react';
-import { bytes } from './format';
+import { bucketLabel, bytes } from './format';
 
 export type UsageBucket = { t: number; down: number; up: number };
 
@@ -33,7 +33,8 @@ export function BarChart({ buckets, unit, height = 170 }: { buckets: UsageBucket
   const top = 10, bottom = 22, plotH = height - top - bottom;
   const max = Math.max(1, ...buckets.map(b => b.down + b.up));
   const slot = width / Math.max(buckets.length, 1);
-  const label = (t: number) => new Date(t * 1000).toLocaleString(undefined, unit === 'hour' ? { hour: '2-digit', minute: '2-digit' } : { month: 'short', day: 'numeric' });
+  // More than a day of hourly bars (7 days is 168): an hour alone would not say which day.
+  const label = (t: number) => bucketLabel(t, unit, unit === 'hour' && buckets.length > 24);
   const at = hover !== null ? buckets[hover] : null;
   return (
     <div ref={box} className="relative">
