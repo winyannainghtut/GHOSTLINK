@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -106,7 +107,14 @@ func (m *MeshServer) Apply() error {
 		return nil
 	}
 	if m.server != nil {
-		_ = m.server.Close()
+		// Shutdown, unlike Close, lets the syncs being answered finish. When the mesh is turned
+		// off, the waiting ones were just woken and answer "disabled", so their nodes take their
+		// links down instead of seeing a closed port, which they treat as an outage.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := m.server.Shutdown(ctx); err != nil {
+			_ = m.server.Close()
+		}
+		cancel()
 		m.server = nil
 	}
 	m.port = port
@@ -239,9 +247,10 @@ func (m *MeshServer) node(w http.ResponseWriter, r *http.Request, host string) (
 	return id, true
 }
 
-// response is what a node gets now.
-func (m *MeshServer) response(id string) meshproto.SyncResponse {
+// response is what a node gets now, and whether the whole mesh is off.
+func (m *MeshServer) response(id string) (meshproto.SyncResponse, bool) {
 	var out meshproto.SyncResponse
+	off := false
 	m.service.Read(func(s *State) {
 		node := (*mesh.Node)(nil)
 		if s.Mesh != nil {
@@ -251,7 +260,7 @@ func (m *MeshServer) response(id string) meshproto.SyncResponse {
 		case node == nil:
 			out.Status = meshproto.StatusRemoved
 		case !s.Mesh.Enabled:
-			out.Status = meshproto.StatusDisabled
+			out.Status, off = meshproto.StatusDisabled, true
 		case node.Status != meshproto.StatusActive:
 			out.Status = node.Status
 		default:
@@ -264,7 +273,7 @@ func (m *MeshServer) response(id string) meshproto.SyncResponse {
 			out.Status, out.Config = meshproto.StatusActive, config
 		}
 	})
-	return out
+	return out, off
 }
 
 func (m *MeshServer) sync(w http.ResponseWriter, r *http.Request, host string) {
@@ -311,8 +320,15 @@ func (m *MeshServer) sync(w http.ResponseWriter, r *http.Request, host string) {
 	deadline := time.Now().Add(meshWait)
 	for {
 		wake := m.service.meshLive.Changed()
-		out := m.response(id)
-		if out.Status != meshproto.StatusActive || out.Config.Generation != req.Applied || !time.Now().Before(deadline) {
+		out, off := m.response(id)
+		// Answer at once when the node has something to do: apply a new configuration, take its
+		// links down or clean up, and when the mesh is turned off (its port is closing). A node
+		// waiting for approval, or disabled with nothing set up, waits like an up-to-date one;
+		// answering it at once made it ask again at once, over and over.
+		answer := off || out.Status == meshproto.StatusRemoved ||
+			(out.Status == meshproto.StatusActive && out.Config.Generation != req.Applied) ||
+			(out.Status != meshproto.StatusActive && req.Applied != 0)
+		if answer || !time.Now().Before(deadline) {
 			meshJSON(w, out)
 			return
 		}
@@ -433,9 +449,6 @@ func (a *API) patchMesh(r *http.Request) (int, any, error) {
 		if s.Mesh == nil {
 			return InputError{errors.New("turn the mesh on first")}
 		}
-		if patch.Enabled != nil && !*patch.Enabled {
-			s.Mesh.Enabled = false
-		}
 		if patch.Name != nil {
 			name := strings.TrimSpace(*patch.Name)
 			if err := ValidName(name); err != nil {
@@ -444,9 +457,15 @@ func (a *API) patchMesh(r *http.Request) (int, any, error) {
 			s.Mesh.Name = name
 		}
 		if patch.CIDR != nil && *patch.CIDR != s.Mesh.CIDR {
+			// Enable also turns the mesh on; a new network alone must not.
+			enabled := s.Mesh.Enabled
 			if err := s.Mesh.Enable(*patch.CIDR, "", s.Mesh.Port); err != nil {
 				return InputError{err}
 			}
+			s.Mesh.Enabled = enabled
+		}
+		if patch.Enabled != nil && !*patch.Enabled {
+			s.Mesh.Enabled = false
 		}
 		if patch.Ping != nil {
 			s.Mesh.Ping = *patch.Ping
@@ -493,6 +512,10 @@ func (a *API) createInvite(r *http.Request) (int, any, error) {
 		out.inviteView = inviteView{t.ID, t.CreatedUnix, t.ExpiresUnix, t.UsesLeft, t.Tags, t.Relay, t.Approval, t.Note}
 		out.Invite = meshproto.EncodeInvite(meshproto.Invite{URL: s.meshURL(request.Local), Pin: pin, Token: secret})
 		out.Command = fmt.Sprintf("curl -fsSL %s | sudo bash -s -- --join '%s'", MeshScript, out.Invite)
+		if t.Relay {
+			// Forwarding needs the server's own consent: running a command that says --relay is it.
+			out.Command += " --relay"
+		}
 		return nil
 	})
 	if err != nil {
