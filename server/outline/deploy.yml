@@ -24,6 +24,7 @@
         mode: '{{ item.mode }}'
       loop:
         - {path: /usr/local/lib/ghostlink-server, group: root, mode: '0755'}
+        - {path: /usr/local/lib/ghostlink-server/upstream, group: root, mode: '0700'}
         - {path: /etc/ghostlink-server, group: ghostlink-proxy, mode: '0750'}
     - name: Download the pinned upstream engine and verify its release digest
       ansible.builtin.get_url:
@@ -31,14 +32,24 @@
         dest: /usr/local/lib/ghostlink-server/upstream.tar.gz
         checksum: sha256:699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
         mode: '0644'
+    # GNU tar run as root keeps the owner stored in the archive: the release builder's UID, which
+    # can be a local account here that could swap the engine before root installs and runs it.
+    # So the archive is extracted as root-owned files, into a folder only root can enter.
+    - name: Remove the engine folder that earlier runs extracted with the archive's owner
+      ansible.builtin.file:
+        path: /usr/local/lib/ghostlink-server/sing-box-1.14.4-linux-amd64
+        state: absent
     - name: Extract the pinned upstream archive
       ansible.builtin.unarchive:
         src: /usr/local/lib/ghostlink-server/upstream.tar.gz
-        dest: /usr/local/lib/ghostlink-server
+        dest: /usr/local/lib/ghostlink-server/upstream
         remote_src: true
+        owner: root
+        group: root
+        extra_opts: [--no-same-owner]
     - name: Install the engine at a stable path
       ansible.builtin.copy:
-        src: /usr/local/lib/ghostlink-server/sing-box-1.14.4-linux-amd64/sing-box
+        src: /usr/local/lib/ghostlink-server/upstream/sing-box-1.14.4-linux-amd64/sing-box
         dest: /usr/local/lib/ghostlink-server/sing-box
         remote_src: true
         owner: root
@@ -61,6 +72,8 @@
         dest: /etc/systemd/system/ghostlink-proxy.service
         mode: '0644'
       register: proxy_unit
+      # A running service keeps its old unit settings until it restarts.
+      notify: Restart proxy
     - name: Start proxy service
       ansible.builtin.systemd:
         name: ghostlink-proxy
