@@ -280,7 +280,7 @@ Read these supporting documents for more detail:
 - [Security model](docs/security/model.md), [dependency findings](docs/security/dependencies.md), [licensing](docs/security/licensing.md).
 - [Outline decision](docs/architecture/outline-access-keys.md), [original architecture record](docs/architecture/decision-record.md).
 - [Outline server deployment](docs/deployment/outline-server.md).
-- [devjourney.md](devjourney.md): chronological handover. **The November section supersedes its explicitly archived October snapshot.** Old statements about no Git, no MSI, no GUI testing or standalone sing-box are historical.
+- `devjourney.md`: the chronological journal. **It is the user's local file, not part of the repository** (removed from Git on 2026-11-08 and listed in `.gitignore`); read it if it is present in the checkout, and never commit it. Its newest-first November log supersedes the archived October snapshot; old statements about no Git, no MSI, no GUI testing or standalone sing-box are historical.
 
 When documentation and source diverge, inspect source/tests and reconcile the documentation. Do not silently convert a historical claim into a current fact.
 
@@ -947,14 +947,14 @@ No application implementation exists yet. The original requirements are:
 
 ### The first approved plan (historical)
 
-The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in `devjourney.md`). Phases 1–2 shipped as **v0.2.0**, Linux client packages as **v0.2.1**, and phases 3–4 as **v0.3.0**, as described in §13. What follows is the original plan text, kept for reference. Remaining server work: an authorized VPS deployment test, Amnezia-app import of our `vpn://` keys, RPM/Fedora install, IPv6 in tunnels, ports below 1024, and routed verification of the management bypass while connected.
+The user approved a four-phase plan (saved in the session as `dapper-orbiting-pearl.md`; summarized in the local `devjourney.md`). Phases 1–2 shipped as **v0.2.0**, Linux client packages as **v0.2.1**, and phases 3–4 as **v0.3.0**, as described in §13. What follows is the original plan text, kept for reference. Remaining server work: an authorized VPS deployment test, Amnezia-app import of our `vpn://` keys, RPM/Fedora install, IPv6 in tunnels, ports below 1024, and routed verification of the management bypass while connected.
 
 - **Phase 3:** `core/outline-worker/cmd/ghostlink-server` + `internal/server`. One process runs sing-box with Shadowsocks (multi-user, legacy AEAD), VLESS-REALITY, WireGuard and AmneziaWG (`internal/awg` in server mode), plus an HTTPS management API behind a secret path, pinned by `certSha256`. It renders global and per-user rules (`auth_user`), always blocks loopback/private/metadata destinations and the API port, counts usage per user via a router `ConnectionTracker`, and enforces data limits. It ships as `.deb`/`.rpm` (nfpm) with the image (`docker save`) included; `postinst` loads it and prints the management key. Upgrades keep state.
 - **Phase 4:** the daemon stores management keys sealed and makes typed, pinned HTTPS calls (`ManagedServerAdd`/`List`/`Remove`, `ServerCall`), with the CLI `ghostlink server ...` and a GUI "Servers I manage" area. Owner-only; never exposed to MCP.
 
 ### First actions for an incoming agent
 
-1. Read this file, current verification/security reports and the November `devjourney.md` section.
+1. Read this file, current verification/security reports and, if it is present locally, the newest entries of `devjourney.md`.
 2. Run read-only `git status --short`, `git log -3 --oneline`; inspect current processes and installed service/pipe before starting development binaries.
 3. Confirm checkout/toolchain/artifact locations. Local ignored tools/artifacts do not travel with a Git clone.
 4. Preserve the standard Outline key flow and managed worker. Do not rerun upstream architecture investigation from scratch or reintroduce stale standalone-engine commands.
@@ -1038,7 +1038,7 @@ After meaningful work:
 
 1. Implement, compile, test the affected behavior and fix failures.
 2. Record exact observed results, skips, environment and remaining gaps in the verification ledger.
-3. Update this handover and the current `devjourney.md` section when decisions, paths, commands, dependency pins or next steps change.
+3. Update this handover (and the local `devjourney.md`, if present; it is not committed) when decisions, paths, commands, dependency pins or next steps change.
 4. Regenerate notices/packages/source archives/checksums if their inputs changed.
 5. Review staged paths for secrets/generated output; commit logically organized source/docs. Do not push or publish without authorization.
 6. Leave concrete next steps and current process/test-state information. Preserve historical facts without allowing them to override current decisions.

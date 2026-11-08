@@ -296,7 +296,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Mesh of Linux servers | [docs/deployment/mesh.md](docs/deployment/mesh.md) |
 | Offline Outline-compatible server | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
 | Web UI (dashboard and desktop) | [ui/README.md](ui/README.md) |
-| Developer / AI-agent handover | [agent.md](agent.md) · [devjourney.md](devjourney.md) |
+| Developer / AI-agent handover | [agent.md](agent.md) |
 
 ## License and acknowledgements
 
