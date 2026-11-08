@@ -31,7 +31,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Add an Outline access key without exposing credentials in process arguments.
+    /// Add a VPN key (ss://, ssconf://, vless://, Amnezia vpn:// or WireGuard/AmneziaWG
+    /// configuration text) from a file or stdin, never from process arguments.
     Key {
         #[command(subcommand)]
         command: KeyCommand,
@@ -607,11 +608,19 @@ async fn run(args: &Args) -> Response {
                     replace,
                 },
         } => {
-            let content =
-                match read_secret(file.as_ref(), *stdin, "access key", "--file", "--stdin") {
-                    Ok(content) => content,
-                    Err(response) => return response,
-                };
+            let content = match read_secret(
+                file.as_ref(),
+                *stdin,
+                "access key",
+                "--file",
+                "--stdin",
+                Duration::from_secs(args.timeout),
+            )
+            .await
+            {
+                Ok(content) => content,
+                Err(response) => return response,
+            };
             Action::AccessKeyImport {
                 name: name.clone(),
                 access_key: content,
@@ -663,7 +672,7 @@ async fn run(args: &Args) -> Response {
         Command::Server {
             command: ServerCommand::InstallHelp,
         } => return Response::ok(json!({ "help_text": install_help() })),
-        Command::Server { command } => match server_action(command) {
+        Command::Server { command } => match server_action(command, args.timeout).await {
             Ok(action) => action,
             Err(response) => return response,
         },
@@ -708,10 +717,27 @@ async fn run(args: &Args) -> Response {
             },
         },
         Command::Agent { command } => match command {
-            AgentCommand::Grant { name, control, .. } => Action::AgentGrant {
-                name: name.clone(),
-                control: *control,
-            },
+            AgentCommand::Grant {
+                name,
+                control,
+                token_file,
+            } => {
+                // Checked before the grant: issuing it replaces any grant of this name, so a
+                // token that cannot be saved would also invalidate the one already in use.
+                let folder = token_file
+                    .parent()
+                    .is_none_or(|p| p.as_os_str().is_empty() || p.is_dir());
+                if token_file.exists() || !folder {
+                    return Response::err(
+                        "invalid_request",
+                        "--token-file must name a new file in an existing folder; it will not overwrite an existing one",
+                    );
+                }
+                Action::AgentGrant {
+                    name: name.clone(),
+                    control: *control,
+                }
+            }
             AgentCommand::Revoke { name } => Action::AgentRevoke { name: name.clone() },
         },
         Command::Version => unreachable!(),
@@ -868,12 +894,14 @@ fn print(response: &Response, json_output: bool) {
 }
 
 /// Reads a credential from a file or a pipe, never from an argument or an interactive terminal.
-fn read_secret(
+/// A pipe is read within `timeout`.
+async fn read_secret(
     file: Option<&PathBuf>,
     stdin: bool,
     what: &str,
     file_flag: &str,
     stdin_flag: &str,
+    timeout: Duration,
 ) -> Result<String, Response> {
     const LIMIT: u64 = 16384;
     if let Some(file) = file {
@@ -897,19 +925,28 @@ fn read_secret(
         if std::io::stdin().is_terminal() {
             return Err(Response::err("invalid_request", &format!("Pipe the {what} to stdin or use {file_flag}; interactive terminal entry is disabled to avoid echoing credentials")));
         }
-        let mut value = String::new();
-        if std::io::stdin()
-            .take(LIMIT + 1)
-            .read_to_string(&mut value)
-            .is_err()
-            || value.len() as u64 > LIMIT
-        {
-            return Err(Response::err(
+        // On a blocking thread: a pipe that never closes must not hold the CLI past --timeout
+        // or keep Ctrl+C from being handled.
+        let read = tokio::task::spawn_blocking(|| {
+            let mut value = String::new();
+            std::io::stdin()
+                .take(LIMIT + 1)
+                .read_to_string(&mut value)
+                .map(|_| value)
+        });
+        return match tokio::time::timeout(timeout, read).await {
+            Ok(Ok(Ok(value))) if value.len() as u64 <= LIMIT => Ok(value),
+            Err(_) => Err(Response::err(
+                "timeout",
+                &format!(
+                    "Timed out reading the {what} from stdin; close the pipe after the {what}"
+                ),
+            )),
+            _ => Err(Response::err(
                 "invalid_profile",
                 &format!("Cannot read the {what} from stdin"),
-            ));
-        }
-        return Ok(value);
+            )),
+        };
     }
     Err(Response::err(
         "invalid_request",
@@ -996,7 +1033,8 @@ fn call(server: &str, op: ServerOp) -> Action {
     }
 }
 
-fn server_action(command: &ServerCommand) -> Result<Action, Response> {
+/// `timeout` is the CLI's `--timeout` in seconds, for reading a management key from a pipe.
+async fn server_action(command: &ServerCommand, timeout: u64) -> Result<Action, Response> {
     Ok(match command {
         ServerCommand::InstallHelp => unreachable!("answered locally"),
         ServerCommand::Add {
@@ -1012,7 +1050,9 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                 "management key",
                 "--key-file",
                 "--key-stdin",
-            )?,
+                Duration::from_secs(timeout),
+            )
+            .await?,
             replace: *replace,
         },
         ServerCommand::List => Action::ManagedServerList {},
@@ -1155,6 +1195,16 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
                         "--output must name a new file; it will not overwrite an existing one",
                     ));
                 }
+                // Checked before the server creates a key whose configuration could not be saved.
+                if output.as_ref().is_some_and(|path| {
+                    matches!(protocol.as_str(), "wireguard" | "amneziawg")
+                        && conf_path(path).exists()
+                }) {
+                    return Err(Response::err(
+                        "invalid_request",
+                        "--output FILE also writes FILE.conf for WireGuard and AmneziaWG keys, and that file already exists; it will not overwrite it",
+                    ));
+                }
                 if output.is_some() && (protocol == "ikev2" || protocol == "ipsec") {
                     return Err(Response::err(
                         "invalid_request",
@@ -1289,6 +1339,13 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             call(server, ServerOp::Clients { user: user.clone() })
         }
     })
+}
+
+/// The `.conf` file written next to a WireGuard or AmneziaWG key saved with `--output FILE`.
+fn conf_path(path: &std::path::Path) -> PathBuf {
+    let mut conf = path.as_os_str().to_owned();
+    conf.push(".conf");
+    PathBuf::from(conf)
 }
 
 /// Writes `content` to a NEW file only this user can read.
@@ -1459,7 +1516,14 @@ fn finish_server_response(
                     output: Some(path), ..
                 },
         } => {
-            let command = data["command"].as_str().unwrap_or_default().to_string();
+            // Never save an empty file and drop the answer: the invite is shown only once.
+            let Some(command) = data["command"].as_str().filter(|c| !c.trim().is_empty()) else {
+                return Err(Response::err(
+                    "server_error",
+                    "The invite was created, but the server returned no join command; revoke it with server mesh revoke and create another",
+                ));
+            };
+            let command = command.to_string();
             if write_private(path, &format!("{command}\n")).is_err() {
                 return Err(Response::err(
                     "permission_denied",
@@ -1512,14 +1576,16 @@ fn finish_server_response(
             },
         } => {
             if let Some(path) = output {
-                let access_key = data["access_key"].as_str().unwrap_or_default().to_string();
+                let Some(access_key) = data["access_key"].as_str().filter(|k| !k.trim().is_empty())
+                else {
+                    return Err(Response::err("server_error", "The key was created on the server, but it returned no key to save; list it with server keys list --show-keys"));
+                };
+                let access_key = access_key.to_string();
                 if write_private(path, &format!("{access_key}\n")).is_err() {
                     return Err(Response::err("permission_denied", "The key was created on the server, but the NEW private --output file could not be written; list it with server keys list --show-keys"));
                 }
                 if let Some(config) = data["config"].as_str().filter(|c| !c.is_empty()) {
-                    let mut conf = path.clone().into_os_string();
-                    conf.push(".conf");
-                    let conf = PathBuf::from(conf);
+                    let conf = conf_path(path);
                     if write_private(&conf, config).is_err() {
                         return Err(Response::err(
                             "permission_denied",
@@ -1548,7 +1614,13 @@ fn finish_server_response(
         ServerCommand::Keys {
             command: ServerKeysCommand::Kit { output, .. },
         } => {
-            let page = data.as_str().unwrap_or_default().to_string();
+            let Some(page) = data.as_str().filter(|p| !p.trim().is_empty()) else {
+                return Err(Response::err(
+                    "server_error",
+                    "The server did not return a connection kit",
+                ));
+            };
+            let page = page.to_string();
             if write_private(output, &page).is_err() {
                 return Err(Response::err(
                     "permission_denied",
