@@ -217,11 +217,19 @@ impl Daemon {
         replace: bool,
         info: &Value,
     ) -> Result<Response> {
-        // Another request may have saved this ID while the server was being checked.
-        if !replace && self.store.managed_servers.contains_key(&name) {
+        // Another request may have saved this ID, or other servers, while the server was being
+        // checked.
+        let exists = self.store.managed_servers.contains_key(&name);
+        if exists && !replace {
             return Ok(Response::err(
                 "invalid_request",
                 "A managed server with this ID already exists; choose another ID or explicitly replace it",
+            ));
+        }
+        if !exists && self.store.managed_servers.len() >= MAX_MANAGED_SERVERS {
+            return Ok(Response::err(
+                "invalid_request",
+                "At most 32 managed servers may be saved",
             ));
         }
         let (host, port) = key.host_port();
@@ -271,5 +279,49 @@ impl ManagedServer {
             "version": self.version,
             "added_unix": self.added_unix,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_that_overlap_cannot_pass_the_server_limit() {
+        // Both adds were planned while 31 servers were saved; the first one filled the list.
+        let mut daemon = crate::test_daemon("server-limit");
+        for n in 0..MAX_MANAGED_SERVERS {
+            daemon.store.managed_servers.insert(
+                format!("s{n}"),
+                ManagedServer {
+                    sealed_key: vec![],
+                    host: "192.0.2.1".into(),
+                    port: 8443,
+                    server_name: "test".into(),
+                    version: String::new(),
+                    added_unix: 0,
+                },
+            );
+        }
+        let key = || {
+            ManagementKey::parse(&format!(
+                r#"{{"apiUrl":"https://192.0.2.1:8443/abcdefghijklmnop0123","certSha256":"{}"}}"#,
+                "ab".repeat(32)
+            ))
+            .unwrap()
+        };
+        let late = daemon
+            .finish_add("late".into(), key(), false, &json!({}))
+            .unwrap();
+        assert_eq!(late.error.unwrap().code, "invalid_request");
+        assert_eq!(daemon.store.managed_servers.len(), MAX_MANAGED_SERVERS);
+        // Replacing a saved server is still possible at the limit.
+        assert!(
+            daemon
+                .finish_add("s0".into(), key(), true, &json!({}))
+                .unwrap()
+                .success
+        );
+        let _ = std::fs::remove_dir_all(&daemon.args.data_dir);
     }
 }
