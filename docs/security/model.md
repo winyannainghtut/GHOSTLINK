@@ -82,11 +82,12 @@ These mechanisms reduce specific failures; they do not certify the platform defi
   - keys, addresses inside the mesh network, routes outside it, endpoints, names and protocols;
   - no two peers may claim overlapping addresses, and no peer may claim the node's own address;
   - nothing reaches a shell.
-  - It changes only `glmesh0`, its own `GHOSTLINK-MESH-*` chains (matching only `glmesh0`), routes it tags with its own protocol number, and a marked block in `/etc/hosts`. Stopping or leaving removes all of them.
-- **Forwarding needs local consent:** a node forwards traffic, as a relay or for shared subnets, only if its own operator allowed it (`--relay`, `--advertise-routes` or `allow-forwarding`). The coordinator cannot turn a node into a router by itself. Shared subnets need both the node's offer and the administrator's approval.
+  - It changes only `glmesh0`, its own `GHOSTLINK-MESH-*` chains, routes it tags with its own protocol number, and a marked block in `/etc/hosts`. Stopping or leaving removes all of them. Its filter chains see only traffic on `glmesh0`; its nat and mangle chains only change mesh traffic. It never replaces a route of the host's: a shared subnet the host is on, or already routes, stays off the mesh.
+  - The firewall goes in before the interface carries traffic, so a firewall error leaves the node off the mesh rather than open to it.
+- **Forwarding needs local consent:** a node forwards traffic, as a relay or for shared subnets, only if its own operator allowed it (`--relay`, `--advertise-routes` or `allow-forwarding`). Without it the agent installs no forwarding rules, even where IPv4 forwarding is already on. The coordinator cannot turn a node into a router by itself. Shared subnets need both the node's offer and the administrator's approval.
 - **Relays read relayed traffic:** a relay decrypts and re-encrypts traffic between two nodes that cannot connect directly. Use only your own servers as relays. Direct pairs are encrypted end to end between the two nodes.
 - **Access rules** are enforced by each receiving node's firewall. Replies to allowed connections always pass, and ping does unless turned off. A compromised node can send anything, but its peers accept only what the rules allow from its mesh address.
-- **Not provided:** IPv6 in the mesh, Windows nodes, and NAT hole punching (two nodes behind NAT use the relay). The `/etc/hosts` names are a convenience, not authentication.
+- **Not provided:** IPv6 in the mesh, Windows nodes, and deliberate NAT hole punching (two nodes behind NAT connect directly only through 1:1 or port-preserving NAT, otherwise through the relay). The `/etc/hosts` names are a convenience, not authentication.
 
 **Monitoring data.** The server keeps per-user usage, traffic-type and protocol totals, and the last 20 connecting addresses per user (30 days) on the server only.
 - **Top sites/services:** off by default. They are totals per service per day (never URLs or times), kept 30 days, and deleted at once when turned off.

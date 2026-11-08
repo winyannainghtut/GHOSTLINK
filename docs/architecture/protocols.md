@@ -164,6 +164,7 @@ flowchart LR
 - **Join:** the agent generates its WireGuard key and posts the invite token, its name, public key, listen port, reported endpoints and offered subnets. It gets back a node ID, a node secret and its address (the next free one in the mesh network).
 - **Sync:** every call reports per-peer handshake, rx/tx and endpoint, ping RTTs, the applied generation and any error.
   - The coordinator answers at once when the node's configuration differs from the applied one, otherwise after up to 10 s, or as soon as anything changes (a join, an admin change, a path change, a node coming online or moving address).
+  - A node that is not active (waiting for approval, disabled) waits the same way, unless it still has a configuration to take down. When the mesh is turned off, the port shuts down gracefully, so the waiting syncs answer `disabled` first.
   - The generation is a 53-bit hash of the configuration's content, so identical configurations never cause re-applies.
 - **Per-node configuration** (`meshproto.Config`):
   - the address with the mesh prefix and the listen port;
@@ -178,16 +179,17 @@ flowchart LR
   3. the address the coordinator sees the target connect from, with the target's listen port;
   4. a private address, when neither is public (a LAN-only mesh).
   5. Otherwise none: the target connects out.
-- **Paths:** a pair starts direct.
-  - It is relayed when neither side has an endpoint for the other, or when no handshake is younger than 3 minutes 90 s after the pair started. It stays relayed for 15 minutes, then tries direct again.
-  - Relaying moves the far node's `AllowedIPs` into the relay peer on both sides. The relay has IP forwarding on, and its FWD chain allows mesh-to-mesh traffic between relayed peers.
+- **Paths:** a pair starts direct. Tick decides every 5 s.
+  - It is relayed when neither side has an endpoint for the other, or when no handshake is younger than 3 minutes once 90 s have passed. The 90 s count from when both nodes are online and have applied a configuration.
+  - Relaying moves the far node's `AllowedIPs` into the relay peer on both sides. Each side keeps the far node as a probe: a peer with its endpoint and keepalive but no `AllowedIPs`. A handshake on the probe since the pair was relayed makes it direct again. There is no timed retry, so traffic never leaves the relay for a direct path that does not work.
+  - The relay has IP forwarding on, and its FWD chain allows mesh-to-mesh traffic between relayed peers, but only with the node's local consent.
 - **Firewall on each node:**
-  - `GHOSTLINK-MESH-IN` (INPUT from `glmesh0`): established traffic, ping when allowed, then the compiled rules for the node's address (or everything when the mesh has no rules), then drop.
-  - `GHOSTLINK-MESH-FWD` (FORWARD from `glmesh0`): established traffic; on a relay, traffic back out of `glmesh0` to the relayed peer. Mesh traffic to the node's shared subnets passes under the same rules; anything else is dropped.
+  - `GHOSTLINK-MESH-IN` (INPUT from `glmesh0`): established traffic, ping when allowed, then the compiled rules for the node's address and its own addresses in its shared subnets (or everything when the mesh has no rules), then drop.
+  - `GHOSTLINK-MESH-FWD` (FORWARD from `glmesh0`): established traffic; connections DNATed from the node's mesh address (published container ports), under the node's rules matched by the original destination and port; on a relay, traffic back out of `glmesh0` to the relayed peer. Mesh traffic to the node's shared subnets passes under the same rules; anything else is dropped.
   - `GHOSTLINK-MESH-OUT` (FORWARD into `glmesh0`): replies going back into the mesh.
   - `GHOSTLINK-MESH-POST`: masquerade from the mesh into shared subnets. `GHOSTLINK-MESH-MSS`: MSS clamping on `glmesh0`.
-  - They are written with `iptables-<nft|legacy>-restore --noflush` through `internal/hostfw`, as the IPsec agent does.
-- **Map data:** `GET /mesh/topology` returns node views (status, online within 30 s, in sync, endpoint, seen-from, routes, version, error, rates) and link views (path, via, RTT from pings, handshake age, rates). All of it is live in memory and none is stored.
+  - They are written with `iptables-<nft|legacy>-restore --noflush` through `internal/hostfw`, as the IPsec agent does, before the interface is configured. The backend is the one the host's `iptables` command uses. Every 30 s the agent checks its jumps and, if one is missing, restores the chains and jumps.
+- **Map data:** `GET /mesh/topology` returns node views (status, online within 30 s, in sync, endpoint, seen-from, routes, version, error, rates) and link views (path, via, RTT from pings, handshake age, and rates: what node A receives from and sends to node B). All of it is live in memory and none is stored.
 
 ## Process notes
 
