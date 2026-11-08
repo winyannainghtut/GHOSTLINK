@@ -145,9 +145,10 @@ flowchart LR
 
 - **Connections:** four of them (`gl-ikev2-cert`, `gl-ikev2-eap`, `gl-ikev1-cert` and `gl-ikev1-psk` in Aggressive Mode) use fixed proposals. All are UDP-encapsulated (`encap = yes`) and draw from the pools `10.79.0.0/20` and `10.80.0.0/20`.
 - **Identities:** the IKEv2 server identity is `%any`, so the identifier the device requests is answered when the server certificate carries it. Every key's remote identifier is added to that certificate.
-- **Users:** identified by EAP or XAuth name, else by the certificate's identity.
+- **Users:** identified by EAP or XAuth name, else by the certificate's identity. A key stores its identity when it is created (`name-ID@ghostlink` unless given), so renaming the user cannot orphan the key or its certificate. The agent refuses a whole settings file for one bad identity, so the default always starts with a letter or digit, and the server leaves out a key whose identity the agent would refuse instead of writing nothing.
 - **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to a sing-box `direct` inbound (high port, allowed only from the pools), whose `hijack-dns` applies the DNS rules for everyone.
-- **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted.
+- **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted. The counters are totals since each session began, and the agent and its sessions outlive the server, so the first report after the server starts only sets the baseline. A child's counters are then remembered for 3 minutes after it last appears: a session that enforcement ended is in no report for a moment and comes back as a closed child, and its final counters must be counted against what was counted already. A closed child that is reported again with no new bytes does not count as the client being seen.
+- **Settings file:** every writer of `desired.json` goes through one lock. Saved changes write only when the agent would be told something new (the CRL's dates and the generation are not changes), because each new generation makes the agent reload strongSwan and its firewall; the daily check and the start of the server always write, which refreshes the CRL.
 
 ## Mesh of Linux servers (v0.6.0)
 

@@ -27,15 +27,23 @@ type Service struct {
 	hooks        []func(previous, next *State)
 	historyBytes atomic.Int64
 	report       func(string, error)
-	// ipsecSeen holds the agent's last byte counters per SA child (touched by Run only).
-	ipsecSeen map[string][2]uint64
+	// ipsecSeen holds the agent's last byte counters per SA child, and ipsecLast is when the
+	// last report was read (both touched by recordIPsec only: see there).
+	ipsecSeen map[string]ipsecBaseline
+	ipsecLast time.Time
+	// ipsecMu serializes the writes of the agent's settings; ipsecWritten identifies the ones
+	// written last (see writeIPsecDesired).
+	ipsecMu      sync.Mutex
+	ipsecWritten string
+	// startup is the work Start left running in the background.
+	startup sync.WaitGroup
 	// meshLive is what mesh agents last reported, and which pairs are relayed.
 	meshLive *mesh.Live
 }
 
 func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
 	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
-		report: func(string, error) {}, ipsecSeen: map[string][2]uint64{}, meshLive: mesh.NewLive()}
+		report: func(string, error) {}, ipsecSeen: map[string]ipsecBaseline{}, meshLive: mesh.NewLive()}
 	// Mesh agents waiting for a new configuration wake on every change to the mesh.
 	service.OnChange(func(previous, next *State) {
 		before, _ := json.Marshal(previous.Mesh)
@@ -52,10 +60,10 @@ func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
 		}
 		service.meshLive.Notify()
 	})
-	// The IPsec agent follows every saved change.
+	// The IPsec agent follows every saved change that changes what it is told.
 	service.OnChange(func(previous, next *State) {
 		if previous.appleEnabled() || next.appleEnabled() {
-			if err := service.WriteIPsecDesired(time.Now()); err != nil {
+			if err := service.writeIPsecDesired(time.Now(), false); err != nil {
 				service.report("ipsec", err)
 			}
 		}
@@ -97,10 +105,13 @@ func (s *Service) Start() error {
 		return err
 	}
 	if s.store.State.appleEnabled() {
+		// Also checks the server certificate now, not only a day from now: a server restarted
+		// more often than that would never renew it, and one started with a new address needs
+		// a certificate that names it.
+		s.startup.Add(1)
 		go func() {
-			if err := s.WriteIPsecDesired(time.Now()); err != nil {
-				s.report("ipsec", err)
-			}
+			defer s.startup.Done()
+			s.RenewIPsec(time.Now())
 		}()
 	}
 	return nil
@@ -328,7 +339,10 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-func (s *Service) Close() error { return s.engine.Close() }
+func (s *Service) Close() error {
+	s.startup.Wait() // the check of the IPsec certificate that Start began, if it is still running
+	return s.engine.Close()
+}
 
 // InputError is a problem with the request rather than the server.
 type InputError struct{ Err error }

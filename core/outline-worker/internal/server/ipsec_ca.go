@@ -199,11 +199,53 @@ func (s *State) issueServerCert(now time.Time) error {
 }
 
 // localIdentity is the identity a key uses towards the server (EAP and XAuth name, cert CN).
+// A key stores its identity when it is created (see NewKeyWith), so renaming the user changes
+// nothing for the device. Only keys from before that have none stored and still derive it.
 func (k *Key) localIdentity(user *User) string {
 	if k.LocalID != "" {
 		return k.LocalID
 	}
-	return fmt.Sprintf("%s-%s@ghostlink", strings.ToLower(identityLabel(user.Name)), k.ID)
+	return defaultIdentity(user.Name, k.ID)
+}
+
+// defaultIdentity is name-ID@ghostlink. The agent accepts an identity only if it starts with a
+// letter or digit, so characters the label may keep but that cannot lead (- _ .) are dropped
+// from its start, and a name with nothing usable (for example one written in another script)
+// becomes "user". A name that already starts with a letter or digit gives the same identity as
+// before.
+func defaultIdentity(name, keyID string) string {
+	label := strings.TrimLeft(strings.ToLower(identityLabel(name)), "-_.")
+	if label == "" {
+		label = "user"
+	}
+	return fmt.Sprintf("%s-%s@ghostlink", label, keyID)
+}
+
+// pinIdentities stores the identity of every Apple key that has none, so a later rename cannot
+// change it, and reports whether it changed anything. A certificate key whose certificate names
+// another identity (the old default was refused by the agent for some names, so such a key never
+// worked) gets a new certificate for the stored one.
+func (s *State) pinIdentities(now time.Time) bool {
+	changed := false
+	for _, u := range s.Users {
+		for _, k := range u.Keys {
+			if !k.isApple() || k.LocalID != "" {
+				continue
+			}
+			k.LocalID, changed = k.localIdentity(u), true
+			if k.Auth != AuthCertificate {
+				continue
+			}
+			if cert, err := parseCertPEM(k.CertPEM); err == nil && cert.Subject.CommonName != k.LocalID {
+				// Best effort: without the CA the old certificate stays as it was.
+				revoked := *k
+				if s.issueClientCert(u, k, now) == nil {
+					s.revoke(&revoked, now)
+				}
+			}
+		}
+	}
+	return changed
 }
 
 // identityLabel keeps the characters IKE identities and file names tolerate.
@@ -281,12 +323,23 @@ func (s *State) CRL(now time.Time) (string, error) {
 		return "", err
 	}
 	template := &x509.RevocationList{
-		Number:     big.NewInt(now.Unix()),
-		ThisUpdate: now.Add(-time.Hour),
-		NextUpdate: now.AddDate(0, 0, 7),
+		Number:                    big.NewInt(now.Unix()),
+		ThisUpdate:                now.Add(-time.Hour),
+		NextUpdate:                now.AddDate(0, 0, 7),
+		RevokedCertificateEntries: s.crlEntries(now),
 	}
+	der, err := x509.CreateRevocationList(rand.Reader, template, ca, crypto.Signer(caKey))
+	if err != nil {
+		return "", err
+	}
+	return pemEncode("X509 CRL", der), nil
+}
+
+// crlEntries are the certificates the CRL refuses: revoked ones and those on hold.
+func (s *State) crlEntries(now time.Time) []x509.RevocationListEntry {
+	var entries []x509.RevocationListEntry
 	for _, r := range s.IPsec.Revoked {
-		template.RevokedCertificateEntries = append(template.RevokedCertificateEntries, x509.RevocationListEntry{
+		entries = append(entries, x509.RevocationListEntry{
 			SerialNumber: big.NewInt(r.Serial), RevocationTime: time.Unix(r.At, 0),
 		})
 	}
@@ -297,17 +350,13 @@ func (s *State) CRL(now time.Time) (string, error) {
 	for _, u := range s.Users {
 		for _, k := range u.Keys {
 			if k.CertSerial != 0 && !active[u.ID] {
-				template.RevokedCertificateEntries = append(template.RevokedCertificateEntries, x509.RevocationListEntry{
+				entries = append(entries, x509.RevocationListEntry{
 					SerialNumber: big.NewInt(k.CertSerial), RevocationTime: now.Add(-time.Minute), ReasonCode: crlHold,
 				})
 			}
 		}
 	}
-	der, err := x509.CreateRevocationList(rand.Reader, template, ca, crypto.Signer(caKey))
-	if err != nil {
-		return "", err
-	}
-	return pemEncode("X509 CRL", der), nil
+	return entries
 }
 
 // crlHold is the certificateHold reason (RFC 5280), a revocation that can be lifted.

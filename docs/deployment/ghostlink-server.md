@@ -173,7 +173,7 @@ Apple devices have IKEv2 and IPsec built in (`NEVPNProtocolIKEv2` and `NEVPNProt
 | **IPsec** (IKEv1, "Cisco IPsec"; older) | Certificate + XAuth password, the default | For devices or tools that only offer IPsec |
 | | Shared group key + XAuth password | **Weak** (see below); the API returns a warning |
 
-Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`).
+Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`). The identity is fixed when the key is created: renaming the user later does not change it, so profiles already on devices keep working. In the default, only letters, digits, `.`, `_` and `-` of the name are kept, and it must start with a letter or digit, so a name such as `_bob` gives `bob-ID@ghostlink` and one with no usable characters (for example `Иван`) gives `user-ID@ghostlink`.
 
 ### Turn it on
 
@@ -199,7 +199,7 @@ Open **UDP 500 and UDP 4500** in the host firewall and the cloud security group.
 2. **iPhone/iPad:** open it. Settings shows **Profile Downloaded**; tap it, then **Install** (iOS 16 and later: Settings → General → **VPN & Device Management**). **Mac:** double-click it, then open System Settings → Privacy & Security → **Profiles**.
 3. Turn the VPN on in Settings → **VPN**.
 
-The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA so the device can check the server's certificate. iOS does not trust it for websites unless someone enables it under Settings → General → About → Certificate Trust Settings. Don't. `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
+The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: signing needs an Apple Developer certificate. The profile also installs the server's own CA so the device can check the server's certificate. iOS does not trust it for websites unless someone enables it under Settings → General → About → Certificate Trust Settings. Don't. A Mac may treat a root certificate from a profile as trusted for websites too, and the CA has no name constraints, so keep the server's state file safe (see [Security notes](#security-notes)). `--prompt-password` (app: **Profile without password**) leaves the certificate password out of the file, and the device asks for it during installation. `--on-demand` makes the device connect whenever it is online.
 
 ### What applies to IKEv2/IPsec users
 
@@ -215,13 +215,13 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 
 ### How the component is isolated
 
-- The main server stays unprivileged. It writes the desired settings to `/var/lib/ghostlink-server/ipsec/desired.json` (mode 0640, shared only with its own group). They contain NT hashes of the EAP passwords, never the passwords themselves, and the CA's certificate but not its key.
+- The main server stays unprivileged. It writes the desired settings to `/var/lib/ghostlink-server/ipsec/desired.json` (mode 0640, shared only with its own group). The file is a secret, like the server's state. It holds NT hashes of the EAP passwords (never the passwords, but an NT hash is enough to sign in with EAP-MSCHAPv2), the XAuth passwords and the IPsec group key in plain text because strongSwan needs them, the server certificate with its private key, and the CA's certificate but not the CA's key. Do not give its group or a backup tool wider access than the server's state file has.
 - The component runs `ghostlink-ipsec-agent` as root inside its container, in the server account's group, with:
   - only `NET_ADMIN`, `NET_RAW` and `NET_BIND_SERVICE`;
   - `--read-only`, `no-new-privileges`, host networking;
   - only the `ipsec` directory mounted.
 - **What the agent does:**
-  - re-validates every field: identities, ranges, ports, hashes, PEM;
+  - re-validates every field: identities, ranges (the address pools must be private), ports, hashes, PEM. It does so in every state, also with IKEv2 and IPsec both off, because it applies the firewall then too;
   - uses only algorithms fixed in its own code;
   - writes strongSwan's configuration and its own iptables chains (`GHOSTLINK-IPSEC-*`), with one jump from each built-in chain; speed limits are rules in `GHOSTLINK-IPSEC-LIM`, rendered again whenever a capped user's session starts or ends;
   - creates a dummy interface `glipsec0` for the pool gateways;
@@ -240,7 +240,8 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
   - Aggressive Mode exposes material that allows offline guessing of the key.
 
   Use certificates if you need IPsec. `set --rotate-ipsec-psk` replaces the group key, after which every IPsec PSK profile must be reinstalled.
-- The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes. Client certificates last 5 years; removing the key revokes them.
+- The CA and server certificate are RSA 3072. The server certificate carries the hostname, every remote identifier in use, and the IKE EKU macOS needs. It lasts 825 days and is renewed automatically 60 days before expiry or when the address changes, whether the address is changed while the server runs or with `setup --hostname`; the server checks when it starts and then once a day. Client certificates last 5 years; removing the key revokes them.
+- The profile installs the CA as a root certificate on the device. It lasts 20 years and has no name constraints, so whoever holds its key (it is in the server's `state.json`) can sign a certificate for any name. On iOS the user must turn trust on by hand, and nobody should; on a Mac a root from a profile may be trusted for websites as well. Protect `state.json` and its backups, and remove the profile from a device that no longer needs it. Name constraints are not set, because the CA is never reissued and the allowed names (the address and every remote identifier) change.
 - Apple behaviour (installing profiles, connecting) is verified by hand, not by CI. CI runs a real strongSwan client with each profile's exact parameters against the component; see the [verification ledger](../development/verification.md).
 
 ## Speed limits

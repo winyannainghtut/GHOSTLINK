@@ -214,11 +214,24 @@ func Initialize(dir string, options InitOptions) (*Store, bool, error) {
 				return nil, false, err
 			}
 		}
+		// Apple keys keep the identity they were created with, even if their user is renamed.
+		if store.State.pinIdentities(time.Now()) {
+			if err := store.Save(); err != nil {
+				return nil, false, err
+			}
+		}
 		if host := strings.TrimSpace(options.Hostname); host != "" && host != store.State.Hostname {
 			if err := ValidHostname(host); err != nil {
 				return nil, false, err
 			}
 			store.State.Hostname = host
+			// IKEv2/IPsec profiles name the new address, so the server certificate must too
+			// (as when the address is changed through the API).
+			if store.State.IPsec.CAPEM != "" {
+				if err := store.State.ensureIPsecPKI(time.Now(), free); err != nil {
+					return nil, false, err
+				}
+			}
 			if err := store.Save(); err != nil {
 				return nil, false, err
 			}

@@ -90,7 +90,9 @@ func (k *Key) isApple() bool { return k.Protocol == IKEv2 || k.Protocol == IPsec
 
 // AppleProfile renders an Apple configuration profile (.mobileconfig) for an IKEv2 or IPsec key,
 // using the built-in NEVPNProtocolIKEv2 / NEVPNProtocolIPSec. It carries the server's CA so the
-// self-signed server certificate is trusted for this VPN only.
+// device can check the server certificate. The CA is installed as a root certificate with no
+// name constraints: iOS does not trust it for websites unless the user turns that on, but a Mac
+// may trust a profile's root for everything, so the CA key must be kept as safe as the state.
 func (s *State) AppleProfile(user *User, key *Key, options ProfileOptions) (string, error) {
 	if !key.isApple() {
 		return "", errNotApple
@@ -104,7 +106,10 @@ func (s *State) AppleProfile(user *User, key *Key, options ProfileOptions) (stri
 		return "", errors.New("the IPsec component has not been set up yet")
 	}
 	id := func(part string) string { return stableUUID(s.IPsec.CAPEM, key.ID, part) }
-	prefix := "org.ghostlink." + identityLabel(strings.ToLower(s.Name)) + "." + key.ID
+	// The device replaces an installed profile that has the same identifier. The server's name
+	// can be changed and two servers can share one, so the identifier names the server by its
+	// CA, as the payload UUIDs do.
+	prefix := "org.ghostlink." + strings.ToLower(strings.ReplaceAll(stableUUID(s.IPsec.CAPEM), "-", ""))[:12] + "." + key.ID
 	identity := key.localIdentity(user)
 	address := key.ServerAddress
 	if address == "" {
