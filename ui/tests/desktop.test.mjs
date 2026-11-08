@@ -39,10 +39,16 @@ test('every failure code the engines set is explained in words', () => {
   const codes = new Set();
   for (const file of sources) {
     const text = readFileSync(new URL(file, import.meta.url), 'utf8');
-    for (const m of text.matchAll(/reason = Some\("([a-z_]+)"\)/g)) codes.add(m[1]);
+    // reason = Some("code"), or Some(if … { "code" } else { "code" }); the engine's own event
+    // codes tested inside that `if` are not reasons.
+    for (const line of text.split('\n')) {
+      if (line.includes('reason = Some(')) for (const m of line.matchAll(/Some\("([a-z_]+)"\)|\{ "([a-z_]+)" \}/g)) codes.add(m[1] ?? m[2]);
+    }
     for (const m of text.matchAll(/last_error = Some\("([a-z_]+)"\.into\(\)\)/g)) codes.add(m[1]);
+    // OpenVPN: reason = Some(event) for these events.
     for (const m of text.matchAll(/matches!\(event, ((?:"[a-z_]+"\s*\|?\s*)+)\)/g)) for (const c of m[1].matchAll(/"([a-z_]+)"/g)) codes.add(c[1]);
   }
+  assert.ok(codes.has('outline_engine_start_failed_check_permissions_or_driver') && codes.has('authentication_failed') && codes.has('autoconnect_failed'), [...codes].join(' '));
   assert.ok(codes.size >= 15, `only ${codes.size} codes found`);
   const fallback = failureText(undefined);
   for (const code of codes) assert.notEqual(failureText(code), fallback, `${code} has no words`);
