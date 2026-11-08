@@ -25,7 +25,7 @@ Check only: nothing has changed yet. The import would do this:
   12 clients, one per Outline access key; 11 keep their Outline key as it is.
   Shadowsocks: port 41234, plus 9000 for keys on other ports (cipher chacha20-ietf-poly1305).
   Server: My Outline, address in keys 203.0.113.7.
-  VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import).
+  VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import). It is off; its port is ready for when you turn it on.
   These clients get a new key, which you need to send them:
     Office: it uses port 443; Ghostlink cannot serve ports below 1024
 ```
@@ -94,4 +94,4 @@ You can also remove Outline's images (`sudo docker image ls` shows them).
 
 ## Over the API
 
-`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `dry_run`, `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to), `disabled` and `notes`. It contains no passwords. Inside the container, `ghostlink-server admin import-outline --dir DIR [--check]` posts the two files from a directory the server can read (under its state directory); `sudo ghostlink-server migrate-outline` does that for you.
+`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `dry_run`, `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to, and `off`: true when the protocol is off, so nothing listens on its new port yet), `disabled` and `notes`. It contains no passwords. Inside the container, `ghostlink-server admin import-outline --dir DIR [--check]` posts the two files from a directory the server can read (under its state directory); `sudo ghostlink-server migrate-outline` does that for you.
