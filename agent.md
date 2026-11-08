@@ -75,6 +75,7 @@ A report on a running server and a second full review, reviewed area by area and
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
    - **Engine log:** the packaged server has no switch for it.
+   - **Header slots:** the right-hand groups of the dashboard's and the app's navigation bars have a fixed width at `lg` (300 px and 290 px) for a centred middle, but their buttons need about 360 px, so they reach about 60 px into the middle group. Nothing overlaps at 1000–1440 px; a wider Island could.
 
 ### Rules for contributors and AI agents
 
@@ -541,6 +542,7 @@ Since v0.7.0 the desktop app's interface is built from `ui/desktop` (React 19, T
   - Sentence-case labels; `.mono` only for machine-readable text (addresses, host names, CIDRs, keys, identities, ports, interface names, shell commands, mesh rule selectors; every `textarea.field` is monospace); `.num` (tabular figures) for live numbers.
   - Speeds use `speed()`/`byteRate()` in `ui/shared/format.ts`; compact live readouts (the Islands) use `LiveRates` in `ui/shared/glass.tsx`, each rate with its own unit in a fixed slot.
   - The fonts are self-hosted (OFL). No inline styles: React's `style` prop is applied through the CSSOM, which the CSP allows, and is used only for computed popover positions.
+  - **Lists with shortened text:** a bare `grid` has one `auto` column, which never gets narrower than its longest row's unwrapped text, so `truncate` does nothing and the row, with its switch or number, grows out of its box. Lists whose rows shorten text use `grid grid-cols-1` (`minmax(0, 1fr)`), also on a row that is itself a grid. The Island's protocol list had this from v0.7.0 until 0.8.1.
 - **Shell:** a floating navigation bar with My servers, Servers I run and Settings. Its Dynamic Island shows the connection (state, server, duration, live speed) and opens a server switcher. Floating panels render in a portal (`shared/Popover.tsx`), because a frosted element cannot blur through a frosted parent.
 - **My servers:**
   - a connection hero with a power control and live rates;

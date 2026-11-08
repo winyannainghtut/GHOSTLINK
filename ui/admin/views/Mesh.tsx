@@ -160,7 +160,7 @@ function Overview({ nodes, info, onSelect, change }: { nodes: MeshNode[]; info: 
       <div>
         <h3 className="mb-2 px-1 text-[14px]">Nodes</h3>
         {!nodes.length && <Note>No nodes yet. Choose Add node and run the command it gives you on each Linux server.</Note>}
-        <ul className="grid gap-1">
+        <ul className="grid grid-cols-1 gap-1">
           {nodes.map(n => (
             <li key={n.id}>
               <button type="button" onClick={() => onSelect(n.id)} className="flex w-full items-center gap-3 rounded-[18px] px-3 py-2 text-left transition hover:bg-glass-strong">

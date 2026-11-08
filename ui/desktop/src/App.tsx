@@ -136,7 +136,7 @@ function ConnectionIsland() {
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={320} align="center">
         <p className="px-3 pt-1.5 pb-2 text-[12.5px] text-fg-3">{profiles.length ? 'Connect through' : 'No servers on this device yet'}</p>
-        <ul className="grid gap-0.5">
+        <ul className="grid grid-cols-1 gap-0.5">
           {profiles.map(p => {
             const here = c?.profile === p.name;
             const status = here ? c!.status : 'disconnected';

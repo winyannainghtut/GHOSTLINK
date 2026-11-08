@@ -17,6 +17,7 @@ Reported on a server running 0.8.0:
   - **What counts:** a new connection, an upload, a substantial download, a WireGuard/AmneziaWG keepalive (the keys the server issues send one every 25 s, so idle but connected WireGuard and AmneziaWG clients stay online) or an IKEv2/IPsec session that is up. The server now checks WireGuard and AmneziaWG peers every 5 s instead of every 30 s.
   - **Clients view:** the "Last handshake" column and card field are now "Last seen", which is what they show.
 - **Off switches in the Daylight finish:** an off switch was almost invisible, white on white, and more so when disabled (IKEv2 and IPsec without the IPsec component). Off switches now have a visible track in every finish.
+- **Protocols in the Island:** in the "Protocols on this server" list, the switches stuck out of the box, and a long description such as AmneziaWG's was not shortened, because the list's rows grew to fit their longest line. The rows now keep to the box and shorten what does not fit. The lists of mesh nodes, of a client's keys, of sites in the statistics and of the app's servers under *Connect through* could be pushed out the same way by a long name, and are fixed too.
 - **Live speed in the Island:** the dashboard's and the app's capsules showed both rates in MB/s with two decimals, so anything under 5 KB/s read 0.00. Each rate now has its own unit (B/s, KB/s, MB/s or GB/s), with room for it, so the capsule keeps its width.
 
 Found by a review of 0.8.0 after its release:

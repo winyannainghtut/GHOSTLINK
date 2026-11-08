@@ -106,11 +106,11 @@ function KeysTab({ user }: { user: User }) {
           <Note>No keys yet. Create one below; Ghostlink generates it on the server.</Note>
         </Inner>
       ) : (
-        <ul className="grid gap-2.5">
+        <ul className="grid grid-cols-1 gap-2.5">
           {keys.map(key => {
             const summary = user.keys.find(k => k.id === key.id);
             return (
-              <li key={key.id} className="inset-glass grid gap-3 rounded-[24px] px-4 py-3">
+              <li key={key.id} className="inset-glass grid grid-cols-1 gap-3 rounded-[24px] px-4 py-3">
                 <div className="flex items-center gap-3">
                 <div className="grid size-9 place-items-center rounded-full bg-glass-strong text-fg-2">
                   <KeyRound size={16} />
