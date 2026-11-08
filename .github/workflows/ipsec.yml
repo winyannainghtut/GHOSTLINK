@@ -51,7 +51,9 @@ jobs:
           deb=$(ls "$PWD"/artifacts/linux-x64/ghostlink-server_*.deb)
           sudo bash scripts/install-server.sh --package "$deb" --hostname 127.0.0.1 | tee install.log
           grep -q '"apiUrl":"https://127.0.0.1:' install.log
-          grep -Eq '^  [0-9]+/udp  AmneziaWG$' install.log && grep -Eq '^  [0-9]+/tcp  management API' install.log
+          # One command per line: in "a && b" a failing a does not stop a script run with set -e.
+          grep -Eq '^  [0-9]+/udp  AmneziaWG$' install.log
+          grep -Eq '^  [0-9]+/tcp  management API' install.log
           # A second run changes nothing; machine-readable admin output works through the host command.
           sudo bash scripts/install-server.sh --package "$deb" | tee again.log
           grep -q 'is already installed' again.log
