@@ -15,12 +15,6 @@ export function speed(bytesPerSecond: number): string {
   return `${value} ${unit}`;
 }
 
-// MB/s with two significant decimals, for compact live readouts such as the Island.
-export function megabytes(bytesPerSecond: number): string {
-  const mb = Math.max(0, Number(bytesPerSecond) || 0) / 1e6;
-  return mb.toFixed(mb >= 100 ? 0 : mb >= 10 ? 1 : 2);
-}
-
 export function bytes(n: number): string {
   n = Math.max(0, Number(n) || 0);
   if (n >= 1e12) return (n / 1e12).toFixed(2) + ' TB';

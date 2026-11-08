@@ -18,6 +18,7 @@
   --color-glass: var(--glass);
   --color-glass-strong: var(--glass-strong);
   --color-field: var(--field);
+  --color-switch-off: var(--switch-off);
   --color-line: var(--line);
   --color-cta: var(--cta-bg);
   --color-cta-fg: var(--cta-fg);
@@ -38,6 +39,8 @@
   --glass: rgb(255 255 255 / 0.04);
   --glass-strong: rgb(255 255 255 / 0.075);
   --field: rgb(255 255 255 / 0.05);
+  /* A switch's track when off: a neutral fill that shows on every surface. */
+  --switch-off: rgb(120 120 128 / 0.36);
   --line: rgb(255 255 255 / 0.09);
   --highlight: rgb(255 255 255 / 0.14);
   --shadow: 0 24px 60px -28px rgb(0 0 0 / 0.7);
@@ -76,6 +79,7 @@
   --glass: rgb(255 255 255 / 0.52);
   --glass-strong: rgb(255 255 255 / 0.74);
   --field: rgb(255 255 255 / 0.7);
+  --switch-off: rgb(120 120 128 / 0.24);
   --line: rgb(15 22 36 / 0.085);
   --highlight: rgb(255 255 255 / 0.95);
   --shadow: 0 24px 50px -30px rgb(30 40 60 / 0.35);

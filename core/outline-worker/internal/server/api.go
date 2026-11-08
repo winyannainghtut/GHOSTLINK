@@ -777,11 +777,7 @@ func (a *API) live(*http.Request) (int, any, error) {
 	a.service.Read(func(s *State) {
 		for _, u := range s.Users {
 			live := users[u.Tag()]
-			online := live.Active > 0 || (live.LastActive > 0 && now-live.LastActive <= 60)
-			if !online && live.LastActive > 0 && now-live.LastActive <= 180 {
-				// A WireGuard handshake within its rekey interval also means connected.
-				online = true
-			}
+			online := isOnline(live.LastActive, now)
 			result.Users = append(result.Users, liveUser{u.ID, u.Name, live.UpBps, live.DownBps, live.Active, online, live.LastActive})
 			result.Active += live.Active
 			if online {

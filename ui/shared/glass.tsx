@@ -11,9 +11,32 @@ import {
   type ComponentProps,
   type ReactNode,
 } from 'react';
+import { speed } from './format';
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
+}
+
+// Live download and upload for a compact readout such as the Island, each in bytes per second
+// with its own unit. Each value has room for its usual widest form, so the capsule keeps its
+// width as the numbers change. className must set the display (`inline-flex`, or for example
+// `hidden sm:inline-flex`): a display class here would win over the caller's.
+export function LiveRates({ down, up, className }: { down: number; up: number; className: string }) {
+  // The arrow stays with its number; the pair is right-aligned in its slot, so spare room falls
+  // between the two rates rather than inside one.
+  const rate = (arrow: string, label: string, value: number) => (
+    <span className="inline-flex min-w-[9ch] items-baseline justify-end gap-1 whitespace-nowrap">
+      <span aria-hidden="true">{arrow}</span>
+      <span className="sr-only">{label}</span>
+      <span>{speed(value)}</span>
+    </span>
+  );
+  return (
+    <span className={cx('num items-baseline gap-1.5', className)}>
+      {rate('↓', 'Download', down)}
+      {rate('↑', 'Upload', up)}
+    </span>
+  );
 }
 
 export function Card({ className, children, as: Tag = 'section' }: { className?: string; children: ReactNode; as?: 'section' | 'div' | 'article' }) {
@@ -126,7 +149,7 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
       }}
       className={cx(
         'relative inline-flex h-[26px] w-[44px] shrink-0 items-center rounded-full border border-line transition-colors duration-300',
-        checked ? 'bg-ok' : 'bg-field',
+        checked ? 'bg-ok' : 'bg-switch-off',
       )}
     >
       <span

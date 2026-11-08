@@ -130,6 +130,19 @@ func TestMonitoringEndToEnd(t *testing.T) {
 	if seen["Alice"] != "shadowsocks 127.0.0.1" || seen["Bob"] != "wireguard 127.0.0.1" {
 		t.Fatalf("client addresses: %+v", clients.Clients)
 	}
+	// The peer poll reads Bob's receive counter, which shows whether he is still sending.
+	server.service.pollPeers(time.Now())
+	monitor.mu.Lock()
+	var bobRx uint64
+	for id, rx := range monitor.peerRx {
+		if strings.HasPrefix(id, WireGuard+"/") {
+			bobRx = rx
+		}
+	}
+	monitor.mu.Unlock()
+	if bobRx == 0 {
+		t.Fatal("the peer poll did not record Bob's WireGuard receive counter")
+	}
 
 	// Saved history is reloaded by a new monitor.
 	server.service.SaveHistory(time.Now())

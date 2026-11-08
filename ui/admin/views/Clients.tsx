@@ -96,7 +96,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
           <table className="w-full min-w-[1020px] border-collapse text-[13px]">
             <thead>
               <tr className="text-left text-[12px] text-fg-3">
-                {['Client', 'Tunnel IP', 'Endpoint', 'Last handshake', 'Live', 'Usage', 'Speed limit', 'Access', ''].map(h => (
+                {['Client', 'Tunnel IP', 'Endpoint', 'Last seen', 'Live', 'Usage', 'Speed limit', 'Access', ''].map(h => (
                   <th key={h} className="border-b border-line px-4 py-3 font-medium">
                     {h}
                   </th>
@@ -187,7 +187,7 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
       <div className="inset-glass grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-[22px] px-4 py-3 text-[12.5px]">
         <Cell label="Tunnel IP" value={address ? `${address}/32` : '—'} mono />
         <Cell label="Endpoint" value={lastClient[user.id]?.ip ?? '—'} mono />
-        <Cell label="Last handshake" value={ago(live?.last_active_unix, now)} />
+        <Cell label="Last seen" value={ago(live?.last_active_unix, now)} />
         <div className="grid min-w-0 gap-0.5">
           <span className="text-fg-3">Live</span>
           <span className="num truncate">

@@ -6,6 +6,16 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ### Fixed
 
+Reported on a server running 0.8.0:
+
+- **Online and idle:** a client that had disconnected could show as online for many minutes, for example after switching WireGuard or AmneziaWG off. Its connections stay open on the server for a while, and remote services keep writing to them, which counted as activity.
+  - **Now:** a client is online while it sends something at least once a minute, and shows as idle within about a minute of disconnecting.
+  - **What counts:** a new connection, an upload, a substantial download, a WireGuard/AmneziaWG keepalive (the keys the server issues send one every 25 s, so idle but connected clients stay online) or an IKEv2/IPsec session that is up. The server now checks WireGuard and AmneziaWG peers every 5 s instead of every 30 s.
+  - **Clients view:** the "Last handshake" column and card field are now "Last seen", which is what they show.
+- **Off switches in the Daylight finish:** an off switch was almost invisible, white on white, and more so when disabled (IKEv2 and IPsec without the IPsec component). Off switches now have a visible track in every finish.
+- **Live speed in the Island:** the dashboard's and the app's capsules showed both rates in MB/s with two decimals, so anything under 5 KB/s read 0.00. Each rate now has its own unit (B/s, KB/s, MB/s or GB/s), with room for it, so the capsule keeps its width.
+- **Tests on Windows:** the server could pick a port that Windows reserves for IPv4 only, and its end-to-end test then failed to start Shadowsocks. The port check now tries the IPv4 wildcard as well.
+
 Found by a review of 0.8.0 after its release:
 
 - **Speed limits:**

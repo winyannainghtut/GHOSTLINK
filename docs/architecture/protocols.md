@@ -118,10 +118,13 @@ Open connections are counted by wrappers that embed sing's counter conns, so ups
 
 Periodic work in `service.go`:
 - **Every second:** a sampler turns totals into per-user rates and a 120-sample server series.
-- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, a WireGuard/AmneziaWG peer poll, and a disk check.
+- **Every 5 s:** a WireGuard/AmneziaWG peer poll, and the IPsec component's session report.
+- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, another peer poll, and a disk check.
 - **Every 5 min:** a save with rotation.
 
-The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=` and `last_handshake_time_*`) supplies real client addresses and online state for WireGuard-family users, whose routed source is only a tunnel address.
+The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=`, `last_handshake_time_*` and `rx_bytes`) supplies real client addresses for WireGuard-family users, whose routed source is only a tunnel address, and shows whether each peer is still sending.
+
+**Online state** (`isOnline` in `monitor.go`) means the client was seen in the last 60 s. Each user has one "last seen" time that only the client's own activity moves: a new connection or flow, an upload in a one-second sample, a download of at least 16 KB in one second (a client that has gone stops acknowledging, so a bulk transfer to it stalls within seconds), a WireGuard/AmneziaWG peer whose receive counter grew between polls (issued keys send a keepalive every 25 s) or that completed a handshake, and every IKEv2/IPsec report while a session is up. Open connections are counted but don't make a client online. A client that leaves without closing them, for example WireGuard switched off or a phone out of range, can leave them open on the server for many minutes, and remote services keep writing small amounts to them.
 
 The dashboard (`dashboard.go` with embedded static files) serves the same API mux under `/api/` after its own session checks, and the server commands (`admin.go`) call the API over loopback. All three front ends share one implementation.
 

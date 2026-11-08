@@ -2,8 +2,7 @@
 // protocol with its own switch: the server's equivalent of pausing or resuming the tunnel.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { megabytes } from '@shared/format';
-import { Switch, cx, useUI } from '@shared/glass';
+import { LiveRates, Switch, cx, useUI } from '@shared/glass';
 import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, type ProtocolId, type Server } from './api';
 import { useStore } from './store';
 
@@ -83,9 +82,7 @@ export function Island() {
         <span className="font-medium">{active ? 'Live' : 'Paused'}</span>
         <span className="text-white/45">·</span>
         <span className="num text-white/80">{live ? `${live.online_users} online` : '—'}</span>
-        <span className="num hidden text-white/55 sm:inline">
-          ↓ {megabytes(live?.down_bps ?? 0)} ↑ {megabytes(live?.up_bps ?? 0)} MB/s
-        </span>
+        <LiveRates down={live?.down_bps ?? 0} up={live?.up_bps ?? 0} className="hidden text-white/55 sm:inline-flex" />
       </button>
       {open && anchor && createPortal(
         <div ref={panel} style={{ top: anchor.top, left: anchor.left }} className="glass-strong fixed z-40 w-[340px] -translate-x-1/2 rounded-[28px] p-3 animate-[sheet-in_0.25s_cubic-bezier(0.2,0.9,0.25,1)]">

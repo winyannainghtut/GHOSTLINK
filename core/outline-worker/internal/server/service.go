@@ -218,8 +218,9 @@ func (s *Service) Account() error {
 	})
 }
 
-// pollPeers maps WireGuard/AmneziaWG peers back to users for their addresses and handshakes.
-func (s *Service) pollPeers() {
+// pollPeers maps WireGuard/AmneziaWG peers back to users for their addresses, handshakes and
+// whether they are still sending (see Monitor.PeersSeen).
+func (s *Service) pollPeers(now time.Time) {
 	byKey := map[string]string{}
 	s.Read(func(state *State) {
 		for _, u := range state.Users {
@@ -230,13 +231,15 @@ func (s *Service) pollPeers() {
 			}
 		}
 	})
+	var reports []PeerReport
 	for protocol, peers := range s.engine.PeerStatus() {
 		for key, status := range peers {
 			if user, ok := byKey[protocol+"/"+key]; ok {
-				s.monitor.PeerSeen(user, protocol, status.Endpoint, status.LastHandshake)
+				reports = append(reports, PeerReport{User: user, Protocol: protocol, Key: key, Status: status})
 			}
 		}
 	}
+	s.monitor.PeersSeen(reports, now)
 }
 
 func (s *Service) settings() MonitorSettings {
@@ -248,7 +251,7 @@ func (s *Service) settings() MonitorSettings {
 // Record flushes counted traffic into the history and checks the disk; it is safe to call at
 // any time (the API calls it before answering statistics).
 func (s *Service) Record(now time.Time) {
-	s.pollPeers()
+	s.pollPeers(now)
 	s.monitor.Flush(now)
 	if paused, changed := s.monitor.CheckDisk(s.store.Dir()); changed {
 		if paused {
@@ -278,8 +281,9 @@ func (s *Service) Health() Health {
 	return health
 }
 
-// Run samples rates every second, records and enforces limits every 30 s and saves history
-// every 5 minutes, until ctx ends; then it records and saves once more.
+// Run samples rates every second, polls WireGuard/AmneziaWG peers and the IPsec component every
+// 5 s, records and enforces limits every 30 s and saves history every 5 minutes, until ctx
+// ends; then it records and saves once more.
 func (s *Service) Run(ctx context.Context) {
 	second := time.NewTicker(time.Second)
 	defer second.Stop()
@@ -299,6 +303,8 @@ func (s *Service) Run(ctx context.Context) {
 			s.monitor.Sample(now)
 			if ticks%5 == 0 {
 				s.health.Sample(now)
+				// Often enough that a client who left shows as idle within about a minute.
+				s.pollPeers(now)
 				s.recordIPsec(now)
 				s.Read(func(state *State) {
 					if state.meshEnabled() {

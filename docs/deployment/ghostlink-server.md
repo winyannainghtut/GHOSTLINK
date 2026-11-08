@@ -157,7 +157,7 @@ sudo ghostlink-server dashboard --reset-token  # new login link; signs everyone 
 - **The page** (since 0.7.0 the same frosted-glass views as the app's **Servers I run**):
   - **Navigation bar:** Overview, Clients and Network. A live capsule shows whether the server is live, who is online and the current speed. Opening it gives a switch for each protocol; pausing one disconnects its users until it is back on. Server settings sit on the right.
   - **Overview:** active tunnels, live throughput, server uptime and the address pool, then throughput for the last 60 seconds, hour or 24 hours. Below that: server health, today by client, traffic types, protocols and top services.
-  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, last handshake, live speed, data used and the speed limit in force. Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
+  - **Clients:** cards or a list, with search and Online / Idle / Paused filters, an access switch, tunnel IP, last endpoint, when the client was last seen, live speed, data used and the speed limit in force. A client is online while it sends something at least once a minute (see [Monitoring](#monitoring-and-privacy)). Quick actions: QR code, download .conf, copy key, revoke. **Details** opens keys (create any protocol, including IKEv2/IPsec with its options), usage history, the client's own rules and settings.
   - **New client:** a name, a protocol, an optional data limit and a speed limit (the server's default, none, or MB/s); the next free tunnel address is shown before creating. The server generates the key, and the sheet then shows the QR code, the .conf and the connection kit.
   - **Network:** protocols (on/off and ports), the address pools, the rules for everyone and the [mesh](mesh.md) map.
   - **Appearance:** Obsidian, Titanium or Daylight; background waves Subtle, Calm or Still. These are kept in the browser.
@@ -259,12 +259,14 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 
 | Record | Detail | Kept |
 |---|---|---|
-| Live | Speed per user (each second), open connections, online state, last activity | In memory, last 2 minutes |
+| Live | Speed per user (each second), open connections, online state, when the client was last seen | In memory, last 2 minutes |
 | Usage over time | Bytes up/down per user per hour, and per day | Hourly 7 days; daily 90 days (`set --history-days`, 7–365) |
 | Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), DNS, Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, other TCP/UDP | With the daily records |
 | Protocols used | Bytes per protocol a user connected with | With the daily records |
 | Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times | 30 days (`set --site-days`, 1–90); turning it off deletes them at once |
 | Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint | 30 days |
+
+**Online and idle.** A client is online when it was seen in the last minute: it opened a connection or sent data, its WireGuard/AmneziaWG peer received anything (the keys the server issues send a keepalive every 25 s, so an idle but connected client stays online), or one of its IKEv2/IPsec sessions is up. A download to it counts only while it is substantial, because a client that has gone cannot acknowledge one. Open connections alone don't count: a client that leaves without closing them, for example by switching WireGuard off, can leave them open on the server for many minutes. A client that disconnects shows as idle within about a minute.
 
 What it can't see: VPN traffic is encrypted, so the server never sees page contents or full URLs. Site names come from the TLS/QUIC handshake, HTTP Host and DNS, and apps that hide them (for example with ECH) show up only as their traffic type.
 

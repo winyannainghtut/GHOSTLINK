@@ -39,21 +39,24 @@ type InitOptions struct {
 	PortFree func(network string, port uint16) bool
 }
 
+// portFree tries the dual-stack wildcard and the IPv4 one: Windows reserves port ranges per
+// IP version, so a port free on [::] can still be refused on 0.0.0.0 or 127.0.0.1.
 func portFree(network string, port uint16) bool {
-	address := fmt.Sprintf(":%d", port)
-	switch network {
-	case "tcp":
-		listener, err := net.Listen("tcp", address)
-		if err != nil {
-			return false
+	for _, address := range []string{fmt.Sprintf(":%d", port), fmt.Sprintf("0.0.0.0:%d", port)} {
+		switch network {
+		case "tcp":
+			listener, err := net.Listen("tcp", address)
+			if err != nil {
+				return false
+			}
+			listener.Close()
+		case "udp":
+			conn, err := net.ListenPacket("udp", address)
+			if err != nil {
+				return false
+			}
+			conn.Close()
 		}
-		listener.Close()
-	case "udp":
-		conn, err := net.ListenPacket("udp", address)
-		if err != nil {
-			return false
-		}
-		conn.Close()
 	}
 	return true
 }

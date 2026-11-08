@@ -1,5 +1,5 @@
-// A client's speed limit, in megabytes per second like the live rates: the server's default,
-// no limit, or a cap of its own. One cap covers download and upload alike, across all of the
+// A client's speed limit, entered in megabytes per second (bytes, like every speed shown): the
+// server's default, no limit, or a cap of its own. One cap covers download and upload alike, across all of the
 // client's keys and devices.
 import { Field, Segmented } from '@shared/glass';
 import { speed } from '@shared/format';
