@@ -294,19 +294,24 @@ func (m MonitorSettings) historyDays() int {
 	return defaultHistoryDays
 }
 
+// siteDays is how long site totals are kept. Unless set, it is the default but never longer
+// than the history, so a shorter history needs no site setting of its own.
 func (m MonitorSettings) siteDays() int {
 	if m.SiteDays > 0 {
 		return m.SiteDays
 	}
-	return defaultSiteDays
+	return min(defaultSiteDays, m.historyDays())
 }
 
-func (m MonitorSettings) historyMaxBytes() int {
+// historyMaxMB caps history.json in MB of 1,000,000 bytes, like every size the server shows.
+func (m MonitorSettings) historyMaxMB() int {
 	if m.HistoryMaxMB > 0 {
-		return m.HistoryMaxMB << 20
+		return m.HistoryMaxMB
 	}
-	return defaultHistoryMaxMB << 20
+	return defaultHistoryMaxMB
 }
+
+func (m MonitorSettings) historyMaxBytes() int { return m.historyMaxMB() * 1_000_000 }
 
 // DashboardConfig is the admin web dashboard. Private mode serves plain HTTP on 127.0.0.1 only
 // (reach it through an SSH tunnel); public mode serves HTTPS on all addresses.

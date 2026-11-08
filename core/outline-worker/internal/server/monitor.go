@@ -50,6 +50,8 @@ type Monitor struct {
 	flushedUp   map[string]int64
 	flushedDn   map[string]int64
 	flushedDet  map[detailKey]int64
+	// siteMark is each site counter's value at the last daily check (see pruneSites).
+	siteMark map[detailKey]int64
 	// speedLimits are the clients' caps in bytes per second (absent: none), applied to their
 	// pacers, also for clients whose counters are created later.
 	speedLimits map[string]int64
@@ -131,6 +133,7 @@ func NewMonitor() *Monitor {
 		flushedUp:  map[string]int64{},
 		flushedDn:  map[string]int64{},
 		flushedDet: map[detailKey]int64{},
+		siteMark:   map[detailKey]int64{},
 		peerRx:     map[string]uint64{},
 	}
 }
@@ -181,7 +184,7 @@ func (m *Monitor) detailCounter(key detailKey) *atomic.Int64 {
 			m.sites[key.user] = seen
 		}
 		if !seen[key.label] && len(seen) >= maxSitesPerUserDay {
-			key.label = "Other sites"
+			key.label = otherSites
 		}
 		seen[key.label] = true
 	}
@@ -447,6 +450,27 @@ func (m *Monitor) Sample(now time.Time) {
 	if day := dayStart(now); day != m.sampleDay {
 		m.sampleDay = day
 		m.sites = map[string]map[string]bool{}
+		m.pruneSites()
+	}
+}
+
+// pruneSites forgets the site counters that counted nothing for a whole day and have nothing
+// left to flush, so a server with site statistics on does not keep every site its clients ever
+// visited in memory. A connection still open on a forgotten site loses only its site total.
+// Called locked, once a day.
+func (m *Monitor) pruneSites() {
+	for key, c := range m.detail {
+		if key.kind != "site" {
+			continue
+		}
+		n := c.Load()
+		if mark, marked := m.siteMark[key]; marked && n == mark && n == m.flushedDet[key] {
+			delete(m.detail, key)
+			delete(m.flushedDet, key)
+			delete(m.siteMark, key)
+		} else {
+			m.siteMark[key] = n
+		}
 	}
 }
 
@@ -511,6 +535,7 @@ func (m *Monitor) SetSiteStats(on bool) {
 		if key.kind == "site" {
 			delete(m.detail, key)
 			delete(m.flushedDet, key)
+			delete(m.siteMark, key)
 		}
 	}
 	m.sites = map[string]map[string]bool{}
@@ -618,6 +643,9 @@ func siteLabel(metadata adapter.InboundContext) string {
 	return labelFor(domain)
 }
 
+// otherSites holds what has no site label of its own: past the daily cap, or not a site name.
+const otherSites = "Other sites"
+
 func labelFor(domain string) string {
 	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
 	if domain == "" {
@@ -625,6 +653,11 @@ func labelFor(domain string) string {
 	}
 	if _, err := netip.ParseAddr(domain); err == nil {
 		return ""
+	}
+	// Names come from what the client sends (TLS SNI, HTTP Host), unchecked and up to tens of
+	// kilobytes long: only a real DNS name may become a label kept in memory and the history.
+	if normalized, err := normalizeDomain(domain); err != nil || normalized != domain {
+		return otherSites
 	}
 	for _, service := range services {
 		for _, suffix := range service.suffixes {

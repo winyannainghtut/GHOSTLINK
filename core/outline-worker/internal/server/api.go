@@ -228,7 +228,7 @@ func (a *API) serverInfo(s *State) serverInfo {
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
 		ShadowsocksExtraPorts: s.shadowsocksPorts()[1:],
 		SiteStats:             s.Monitor.SiteStats, DefaultSpeedLimitBps: s.DefaultSpeedLimitBps, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
-		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
+		HistoryMaxMB: s.Monitor.historyMaxMB(), DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
 	}
 }
 

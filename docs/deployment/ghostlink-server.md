@@ -261,9 +261,9 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 |---|---|---|
 | Live | Speed per user (each second), open connections, online state, when the client was last seen | In memory, last 2 minutes |
 | Usage over time | Bytes up/down per user per hour, and per day | Hourly 7 days; daily 90 days (`set --history-days`, 7–365) |
-| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), DNS, Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, other TCP/UDP | With the daily records |
+| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, Time (NTP), other TCP/UDP, and "IPsec (not inspected)" for IKEv2/IPsec. DNS is answered by the server itself and is not counted | With the daily records |
 | Protocols used | Bytes per protocol a user connected with | With the daily records |
-| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times | 30 days (`set --site-days`, 1–90); turning it off deletes them at once |
+| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times. A name that is not a valid DNS name counts as "Other sites" | 30 days (`set --site-days`, 1–90), and never longer than the daily records; turning it off deletes them at once |
 | Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint | 30 days |
 
 **Online and idle.** A client is online when it was seen in the last minute: it opened a connection or sent data, its WireGuard/AmneziaWG peer received anything (the keys the server issues send a keepalive every 25 s, so an idle but connected client stays online), or one of its IKEv2/IPsec sessions is up. A download to it counts only while it is substantial, because a client that has gone cannot acknowledge one. Open connections alone don't count: a client that leaves without closing them, for example by switching WireGuard off, can leave them open on the server for many minutes. A client that disconnects shows as idle within about a minute.
