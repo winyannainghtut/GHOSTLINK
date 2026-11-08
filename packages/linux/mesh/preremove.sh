@@ -1,7 +1,9 @@
 #!/bin/sh
 # Ghostlink mesh pre-remove (deb "remove"/"upgrade", rpm %preun). Removing the package leaves
 # the mesh (the coordinator drops the node) and removes the interface, firewall chains and
-# /etc/hosts entries; a Debian upgrade only stops the agent until the new version starts.
+# /etc/hosts entries. A deb upgrade only stops the agent until the new version's postinst starts
+# it. An rpm upgrade runs this old script after the new package's %post has already restarted
+# the agent, so it must leave the agent alone.
 set -e
 case "${1:-}" in
     remove | purge | 0)

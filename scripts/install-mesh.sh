@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ghostlink mesh installer: installs the ghostlink-mesh agent from the newest published release
-# and joins this Linux server to a mesh. The Ghostlink app (Servers I run > Mesh > Add node) and
-# `ghostlink-server mesh invite` print the full command, for example:
+# and joins this Linux server to a mesh. The Ghostlink app (Servers I run > Manage > Network >
+# Mesh > Add node) and `ghostlink-server mesh invite` print the full command, for example:
 #
 #   curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash -s -- --join 'glmesh1:...'
 set -euo pipefail
@@ -17,17 +17,21 @@ Join this Linux server to a Ghostlink mesh.
 
 It detects Debian/Ubuntu (.deb) or Fedora/RHEL family (.rpm) on x86_64 or arm64, checks that the
 kernel has WireGuard, installs the ghostlink-mesh package (verified against the release's
-SHA256SUMS.txt), joins with the invite and starts the agent. Run it again to upgrade the agent.
+SHA256SUMS.txt), joins with the invite and starts the agent. Run it again to upgrade the agent;
+without --join it only installs or upgrades it (then, on the coordinator itself:
+sudo ghostlink-server mesh join-here).
 
 Options:
-  --join INVITE              the invite (glmesh1:...) from the Ghostlink app or server
+  --join INVITE              the invite (glmesh1:...) from the Ghostlink app or server; it can
+                             also come from the GHOSTLINK_MESH_INVITE environment variable
   --name NAME                node name (default: this machine's host name)
   --advertise-routes CIDR,.. offer subnets behind this server (approved in the app)
   --relay                    allow this server to relay for nodes behind NAT
   --endpoint IP:PORT         public address, when it can't be detected
   --port N                   WireGuard UDP port (default 51820)
   --no-hosts                 do not add <node>.mesh names to /etc/hosts
-  --open-firewall            allow the WireGuard port in an active ufw or firewalld
+  --open-firewall            allow the WireGuard port in an active ufw or firewalld, and with
+                             firewalld put the mesh interface in its trusted zone
   --version X.Y.Z            install this release instead of the newest published one
   --package FILE             install a ghostlink-mesh .deb/.rpm you already downloaded
   -h, --help                 show this help
@@ -41,7 +45,9 @@ cleanup() { [ -z "$work" ] || rm -rf -- "$work"; }
 trap cleanup EXIT
 
 main() {
-    local invite="" version="" package="" open_firewall=0 port=51820
+    # An invite in the environment stays out of the process list and sudo's log.
+    local invite=${GHOSTLINK_MESH_INVITE:-} version="" package="" open_firewall=0 port=51820
+    unset GHOSTLINK_MESH_INVITE
     local join_args=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -67,10 +73,15 @@ main() {
         [ -f "$package" ] || die "$package does not exist"
         package=$(cd "$(dirname "$package")" && pwd)/$(basename "$package")
     fi
+    [ -z "$invite" ] || [[ "$invite" == glmesh1:* ]] || die "the invite starts with glmesh1:"
     local joined=0
     [ -f /var/lib/ghostlink-mesh/node.json ] && joined=1
-    [ -n "$invite" ] || [ "$joined" = 1 ] || die "give the invite: --join 'glmesh1:...' (Ghostlink app: Servers I run > Mesh > Add node)"
-    [ -z "$invite" ] || [[ "$invite" == glmesh1:* ]] || die "the invite starts with glmesh1:"
+    if [ -n "$invite" ] && [ "$joined" = 1 ]; then
+        # Running the join command again upgrades the agent: the invite is not needed.
+        say "This server is already in a mesh, so the invite is not used; upgrading the agent only"
+        echo "    (to join another mesh, leave this one first: sudo ghostlink-mesh leave)"
+        invite=""
+    fi
 
     # shellcheck source=/dev/null
     . /etc/os-release
@@ -138,9 +149,20 @@ main() {
     fi
 
     if [ -n "$invite" ]; then
-        [ "$joined" = 0 ] || die "this server is already in a mesh; leave first: sudo ghostlink-mesh leave"
         say "Joining the mesh"
-        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join "${join_args[@]}"
+        # Bash before 4.4 (Amazon Linux 2, EL7) calls an empty array unbound under set -u.
+        GHOSTLINK_MESH_INVITE="$invite" ghostlink-mesh join ${join_args[@]+"${join_args[@]}"}
+    fi
+    # Before the agent starts: a firewalld reload can remove the agent's iptables rules.
+    [ "$open_firewall" = 0 ] || open_host_firewall "$port"
+    if [ ! -f /var/lib/ghostlink-mesh/node.json ]; then
+        cat <<EOF
+
+The Ghostlink mesh agent $version is installed; this server is not in a mesh yet. Join it with
+the command from the Ghostlink app or from \`sudo ghostlink-server mesh invite\`, or, on the
+coordinator itself: sudo ghostlink-server mesh join-here
+EOF
+        return
     fi
     systemctl enable --now ghostlink-mesh.service >/dev/null
     systemctl restart ghostlink-mesh.service
@@ -149,13 +171,6 @@ main() {
         [ "$state" = active ] || [ "$state" = pending ] && break
         sleep 1
     done
-    if [ "$open_firewall" = 1 ]; then
-        if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-            ufw allow "$port/udp" comment 'Ghostlink mesh' >/dev/null && say "Allowed UDP $port in ufw"
-        elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-            firewall-cmd --permanent --add-port="$port/udp" >/dev/null && firewall-cmd --reload >/dev/null && say "Allowed UDP $port in firewalld"
-        fi
-    fi
     echo
     ghostlink-mesh status || true
     cat <<EOF
@@ -164,6 +179,41 @@ If this server has a public address, allow UDP $port in its firewall and cloud s
 other nodes connect directly (behind NAT nothing is needed; traffic then uses the relay).
 Check any time with: sudo ghostlink-mesh status
 EOF
+    if [ "$open_firewall" = 0 ] && firewalld_running; then
+        cat <<EOF
+firewalld is running: it refuses mesh traffic other than ping and SSH until the mesh interface is
+trusted. Run this installer again with --open-firewall, or:
+  sudo firewall-cmd --permanent --zone=trusted --change-interface=$(mesh_interface) && sudo firewall-cmd --reload
+EOF
+    fi
+}
+
+firewalld_running() { command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; }
+
+mesh_interface() { jq -r '.interface // "glmesh0"' /var/lib/ghostlink-mesh/node.json 2>/dev/null || echo glmesh0; }
+
+# open_host_firewall allows the WireGuard port in an active ufw or firewalld. With firewalld the
+# mesh interface also goes into the trusted zone: its own nftables table would otherwise reject
+# mesh traffic that the agent's iptables chains accept (a packet has to pass both). The agent's
+# chains still enforce the mesh's access rules.
+open_host_firewall() {
+    local port=$1 iface
+    iface=$(mesh_interface)
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        if ufw allow "$port/udp" comment 'Ghostlink mesh' >/dev/null; then
+            say "Allowed UDP $port in ufw"
+        else
+            echo "warning: could not allow UDP $port in ufw" >&2
+        fi
+    elif firewalld_running; then
+        if firewall-cmd --permanent --add-port="$port/udp" >/dev/null &&
+            firewall-cmd --permanent --zone=trusted --change-interface="$iface" >/dev/null &&
+            firewall-cmd --reload >/dev/null; then
+            say "Allowed UDP $port in firewalld, and put $iface in its trusted zone"
+        else
+            echo "warning: could not change firewalld; allow UDP $port and trust $iface yourself" >&2
+        fi
+    fi
 }
 
 pkg_manager() {

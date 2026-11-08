@@ -8,7 +8,7 @@ The mesh connects your servers to each other privately, as an overlay network:
 
 A Ghostlink server **coordinates** the mesh. It decides addresses, distributes keys and access rules, chooses paths, and collects what nodes report. The Ghostlink app and the server's web dashboard draw it as a live **map**.
 
-> **Linux servers only in 0.6.0.** Windows servers, and the Ghostlink app on Windows as a mesh node, will follow in a later release. The protocol between the coordinator and nodes is already OS-neutral for that.
+> **Linux servers only for now.** Windows servers, and the Ghostlink app on Windows as a mesh node, will follow in a later release. The protocol between the coordinator and nodes is already OS-neutral for that.
 
 This is a layer-3 network in the style of ZeroTier, Tailscale or Nebula. It is not a Kubernetes-style service mesh with sidecars. ZeroTier One was a design reference only: no ZeroTier code is used (see [Licensing](../security/licensing.md)).
 
@@ -28,12 +28,17 @@ This is a layer-3 network in the style of ZeroTier, Tailscale or Nebula. It is n
 
 - **Agent:** each node runs the `ghostlink-mesh` agent, a static Go program with a hardened systemd service.
   - It creates the kernel WireGuard interface `glmesh0`, its peers and routes.
-  - It sets up firewall chains (`GHOSTLINK-MESH-*`, matching only `glmesh0`) and an `/etc/hosts` block with the `<node>.mesh` names.
+  - It sets up firewall chains (`GHOSTLINK-MESH-*`) and an `/etc/hosts` block with the `<node>.mesh` names.
+    - The firewall goes in first, before the interface carries any traffic.
+    - Its filter chains see only traffic on `glmesh0`. Its nat and mangle chains only masquerade mesh traffic to shared subnets and clamp TCP on `glmesh0`.
+    - If a firewall reload removes the chains, the agent puts them back within about 30 seconds.
   - It reports handshakes, traffic and ping latency to the coordinator. The node's WireGuard private key **never leaves the node**.
-- **Paths: direct first, then the relay.** Every pair of nodes connects directly when at least one of them can be reached.
-  - If two nodes have no working handshake within 90 seconds, the coordinator routes that pair **through the relay** for 15 minutes, then tries direct again.
-  - Two nodes that are both behind NAT always use the relay; the mesh does no NAT hole punching.
-  - The relay is any node marked as a relay. Usually it is the coordinator's own host, joined with `mesh join-here` or `install-server.sh --mesh`.
+- **Paths: direct first, then the relay.** Every pair of nodes connects directly when at least one of them can be reached. The coordinator decides every 5 seconds:
+  - A pair with no handshake 90 seconds after both nodes are up goes **through the relay**. So does an established direct pair whose newest handshake is more than 3 minutes old.
+  - A pair where neither node has an address for the other goes through the relay at once.
+  - While a pair uses the relay, its two nodes keep trying each other directly. The pair goes back to direct as soon as that works.
+  - Two nodes behind NAT are first tried at the public address each is seen from. That works only through 1:1 or port-preserving NAT; otherwise they use the relay. There is no deliberate NAT hole punching.
+  - One relay is in use at a time: the first node (in join order) marked as a relay that is active and online, or else the first active relay node. Other relay nodes are on standby. Usually the relay is the coordinator's own host, joined with `mesh join-here` or `install-server.sh --mesh`.
 - **Addresses the coordinator gives out:**
   - a node's own report of its addresses;
   - the address the coordinator sees it connect from, with its WireGuard port. That covers 1:1 NAT such as AWS EC2 and Lightsail public IPs.
@@ -53,20 +58,20 @@ or turn it on later and make the server a node too:
 
 ```sh
 sudo ghostlink-server mesh enable         # prints the mesh network and the agents' TCP port
-curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash   # the agent
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | sudo bash   # the agent only
 sudo ghostlink-server mesh join-here      # this host joins as the relay
 ```
 
-In the Ghostlink app the same is **Servers I run → Manage → Mesh → Turn on mesh**. The dashboard has a **Mesh** view.
+In the Ghostlink app, turn it on with **Servers I run → Manage → Network**, then **Turn on mesh** on the **Mesh** card. The dashboard has the same Mesh card in its **Network** view.
 
 Allow the coordinator's **mesh TCP port** (printed by `mesh enable`; `sudo ghostlink-server mesh` shows it again), and **UDP 51820** if this host is a node. Open them in the firewall and in your cloud security group.
 
 ### 2. Add a server
 
-In the app, go to **Mesh → Add node** and choose:
+On the Mesh card, choose **Add node** and pick:
 - **tags**, for access rules;
 - how many servers the invite may add, and for how long (by default one server within 24 hours);
-- whether the new node may be a relay;
+- whether the new node may be a relay (its command then ends with `--relay`, the server's consent to forwarding);
 - whether it waits for your approval.
 
 Copy the command it shows and run it on the new server:
@@ -88,6 +93,8 @@ ghostlink server mesh invite --server home --tags web    # from your computer (C
 - it installs the `ghostlink-mesh` package from the newest published release, verified against `SHA256SUMS.txt`;
 - it joins with the invite, starts the service, and prints the node's mesh address.
 
+Without `--join` it only installs or upgrades the agent. Running the join command again on a node upgrades the agent and leaves the node in its mesh.
+
 Useful options:
 
 | Option | Effect |
@@ -98,15 +105,23 @@ Useful options:
 | `--endpoint IP:PORT` | Its public address, when it can't be detected. |
 | `--port N` | WireGuard UDP port (default 51820). |
 | `--no-hosts` | Don't add `<node>.mesh` names to `/etc/hosts`. |
-| `--open-firewall` | Allow the WireGuard port in an active ufw or firewalld. |
+| `--open-firewall` | Allow the WireGuard port in an active ufw or firewalld. With firewalld it also puts the mesh interface in the `trusted` zone; otherwise firewalld refuses all mesh traffic but ping and SSH. The mesh's own access rules still apply. |
 | `--package FILE` | Install a downloaded package instead. |
 
 An invite is a secret until it is used: anyone holding it can add a server. It is stored on the coordinator only as a hash, and shown once.
 
+While the join command runs, the invite also shows in that server's process list and in sudo's log. A single-use invite is used up by then; revoke one that works more than once when your servers have joined (`sudo ghostlink-server mesh revoke ID`). To keep the invite out of both, run the installer from a root shell with the invite in the environment:
+
+```sh
+sudo -i
+read -rs GHOSTLINK_MESH_INVITE && export GHOSTLINK_MESH_INVITE   # paste the invite, then Enter
+curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-mesh.sh | bash
+```
+
 ### 3. Check it
 
 ```sh
-sudo ghostlink-mesh status            # on a node: its address, peers, path and latency
+sudo ghostlink-mesh status            # on a node: its address, its peers (direct or through the relay), latency
 sudo ghostlink-server mesh            # on the coordinator: nodes and links
 sudo ghostlink-server mesh map        # links: direct or through the relay, latency, traffic
 ping db.mesh                          # from any node
@@ -114,7 +129,7 @@ ping db.mesh                          # from any node
 
 ## The map
 
-In the app, **Servers I run → Manage → Mesh → Open mesh map** shows every node and every link. The dashboard's **Mesh** view shows the same map. It updates every 5 seconds.
+When the mesh is on, the Mesh card shows a map of every node and every link: in the app under **Servers I run → Manage → Network**, and in the dashboard's **Network** view. It updates every 5 seconds.
 
 - **Links:**
   - solid green: direct;
@@ -145,9 +160,12 @@ sudo ghostlink-server mesh rules add --from tag:web --to tag:db --proto tcp --po
 ghostlink server mesh rules --server home --rule "tag:web tag:db tcp 5432" --rule "tag:ops * any"
 ```
 
-In the app the editor is **Mesh → Access rules**.
+In the app and the dashboard, the editor is **Access rules** on the Mesh card.
 
-Rules are enforced by the **receiving** node's firewall. The coordinator compiles them into the exact source addresses each node accepts, so a node needs no knowledge of tags. A node's shared subnets count as part of that node.
+Rules are enforced by the **receiving** node's firewall. The coordinator compiles them into the exact source addresses each node accepts, so a node needs no knowledge of tags.
+
+- **Containers:** ports a node publishes for containers (Docker, Podman, Kubernetes NodePorts) are part of the node. Rules match the port the connection was made to.
+- **Shared subnets:** as a destination (*to*), a node's shared subnets count as part of that node, including its own address in them. As a source (*from*), only nodes' own mesh addresses match: once rules exist, connections that hosts in a shared subnet start are refused by the receiving node, and only replies pass.
 
 ## Shared subnets (site-to-site)
 
@@ -158,13 +176,15 @@ A node can make a private network behind it reachable from the mesh, for example
 
 The other nodes then route that subnet through this node, under the access rules. By default the node **masquerades** traffic into the subnet, so its hosts need no route back; `mesh node NAME --masquerade off` turns that off. A subnet that overlaps the mesh network or another node's subnet is refused.
 
-A node only forwards traffic if its own operator allowed it, at join time with `--relay` or `--advertise-routes`. Making a node a relay or a subnet router later from the app therefore also needs, on that node:
+A node never routes a shared subnet into the mesh where that would cut it off from a network it is on, replace a route it already has for that subnet, or send its own traffic to a peer around in a loop. Its status and the map name the subnets it leaves out.
+
+A node only forwards traffic if its own operator allowed it, at join time with `--relay` or `--advertise-routes`. Without that, its agent installs no forwarding rules, even where IPv4 forwarding is already on (Docker hosts, for example). Making a node a relay or a subnet router later from the app therefore also needs, on that node:
 
 ```sh
 sudo ghostlink-mesh allow-forwarding && sudo systemctl restart ghostlink-mesh
 ```
 
-Until then its status shows the problem, and so does the map.
+Until then its status shows the problem, and so does the map. Pairs that need the relay do not work while such a node is the relay in use.
 
 ## Ports
 
@@ -172,7 +192,7 @@ Until then its status shows the problem, and so does the map.
 |---|---|---|
 | Coordinator | mesh TCP port (picked when the mesh is turned on; see `sudo ghostlink-server mesh`) | Agents connecting out to join and sync. |
 | Every node with a public address | UDP 51820 (or `--port`) inbound | WireGuard from other nodes. |
-| Nodes behind NAT | nothing inbound | They connect out; pairs of NAT nodes use the relay. |
+| Nodes behind NAT | nothing inbound | They connect out; two NAT nodes usually reach each other through the relay. |
 
 VPN users of the Ghostlink server cannot reach the mesh port: it is refused like the management API.
 
@@ -184,7 +204,7 @@ On the coordinator, `sudo ghostlink-server mesh …`:
 |---|---|
 | `mesh` | Status, nodes and links. |
 | `mesh enable [--cidr 100.96.0.0/16]` | Turn the mesh on. The network can be chosen until the first node joins. |
-| `mesh disable` | Turn it off. Nodes disconnect within seconds; nothing is deleted. |
+| `mesh disable` | Turn it off. Connected nodes take their links down within seconds; a node that is offline at that moment keeps its links until the mesh is on again or its agent restarts. Nothing is deleted. |
 | `mesh invite [--tags web,db] [--uses 1] [--hours 24] [--relay] [--approval]` | Print the one-line join command. Up to 1000 uses and 90 days. |
 | `mesh invites`, `mesh revoke ID` | List and revoke open invites. |
 | `mesh nodes` | Nodes, addresses, tags and status. |
@@ -202,9 +222,9 @@ On a node, `sudo ghostlink-mesh …`:
 | Command | Effect |
 |---|---|
 | `join` | Join, with the invite in `GHOSTLINK_MESH_INVITE` or on standard input. The installer does this. |
-| `status [--json]` | This node, its peers, paths and latency. |
+| `status [--json]` | This node and its peers: addresses, endpoint, handshake, latency and traffic. A node reached through the relay is listed as `(through the relay)`, and its address is among the relay peer's. |
 | `allow-forwarding` | Consent to relaying and subnet sharing. |
-| `leave` | Leave the mesh. The coordinator drops the node; the interface, firewall chains and `/etc/hosts` block are removed, and IP forwarding is set back to what it was. |
+| `leave` | Leave the mesh. The coordinator drops the node; the interface, firewall chains and `/etc/hosts` block are removed. IP forwarding is set back to what it was before the node first forwarded, unless Docker, libvirt or similar software on the machine may need it. |
 | `version` | Print the version. |
 
 The node's state is in `/var/lib/ghostlink-mesh`, readable only by root. Removing the package leaves the mesh, and purging it deletes the state.
@@ -218,7 +238,8 @@ The node's state is in `/var/lib/ghostlink-mesh`, readable only by root. Removin
   - Both are stored as hashes, compared in constant time, and failed attempts are rate-limited.
   - A node's WireGuard private key is generated on the node and never sent anywhere.
 - **The coordinator is trusted** to say which peers, addresses and rules a node uses: it is your Ghostlink server, and whoever holds its management key controls the mesh. Each agent still re-validates everything it receives:
-  - keys, addresses inside the mesh network or approved subnets, endpoints, names and protocols;
+  - keys, endpoints, names and protocols;
+  - mesh addresses must be single addresses inside the mesh network; other ranges must be IPv4 subnets of /8 or narrower that don't overlap the mesh. The agent can't tell whether a subnet was approved;
   - peers' allowed addresses must not overlap or claim the node's own address;
   - nothing it receives reaches a shell.
 - **A relay can read relayed traffic:** it decrypts and re-encrypts traffic between two nodes that use it. Use your own servers as relays. Direct pairs are end-to-end encrypted between the two nodes.
@@ -226,12 +247,13 @@ The node's state is in `/var/lib/ghostlink-mesh`, readable only by root. Removin
 
 See also the [security model](../security/model.md).
 
-## Limits in 0.6.0
+## Limits
 
 - Linux servers only: Windows servers and Windows clients will come later.
 - Kernel WireGuard is required (Linux 5.6 or newer, which covers all current server distributions). Container-based VPS types such as OpenVZ and LXC usually lack it; a userspace fallback is planned.
 - IPv4 inside the mesh. Peers can be up to 250 per node, and each node can offer up to 16 subnets.
-- No NAT hole punching beyond sharing addresses: two nodes behind NAT use the relay.
+- No deliberate NAT hole punching: two nodes behind NAT connect directly only through 1:1 or port-preserving NAT, and otherwise use the relay.
+- The coordinator keeps the paths in memory. After it restarts, pairs that need the relay can be cut off for up to about 90 seconds while it finds that out again.
 - The map shows the live state, with no mesh traffic history.
 
 ## Troubleshooting
@@ -242,4 +264,6 @@ See also the [security model](../security/model.md).
 | A link stays `down` or goes through the relay | Open UDP 51820 on at least one of the two nodes. With `--endpoint IP:51820`, a node can state its public address when the coordinator sees a different one. |
 | `this kernel has no WireGuard support` | Use a KVM VPS or dedicated server with Linux 5.6+. |
 | A relay or subnet does not work and the status asks for forwarding | Run `sudo ghostlink-mesh allow-forwarding && sudo systemctl restart ghostlink-mesh` on that node. |
+| Ping and SSH work over the mesh, other ports don't (Fedora, RHEL, Rocky, Alma) | firewalld refuses mesh traffic until the mesh interface is trusted: `sudo firewall-cmd --permanent --zone=trusted --change-interface=glmesh0 && sudo firewall-cmd --reload`, or install with `--open-firewall`. |
+| The status says `/etc/hosts` was replaced by another program | The agent sees the file through a bind mount that ends when a program replaces the file (`sed -i`, Ansible, some editors). Run `sudo systemctl restart ghostlink-mesh`. |
 | Logs | `journalctl -u ghostlink-mesh` on a node; `sudo ghostlink-server logs` on the coordinator. |

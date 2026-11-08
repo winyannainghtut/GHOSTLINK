@@ -35,11 +35,11 @@ cat > "$work/pkg/doc/README.md" <<EOF
 Joins this Linux server to a Ghostlink mesh: a private network between your servers over kernel
 WireGuard (interface \`glmesh0\`), coordinated by a Ghostlink server.
 
-    sudo ghostlink-mesh status       # this node, its peers, paths and latency
+    sudo ghostlink-mesh status       # this node and its peers: direct or through the relay, latency
     sudo ghostlink-mesh leave        # leave the mesh and remove everything the agent set up
 
-- Join with the command from the Ghostlink app (Servers I run > Mesh > Add node) or
-  \`sudo ghostlink-server mesh invite\` on the coordinator.
+- Join with the command from the Ghostlink app (Servers I run > Manage > Network > Mesh >
+  Add node) or \`sudo ghostlink-server mesh invite\` on the coordinator.
 - Public nodes need UDP 51820 (or the chosen --port) open; nodes behind NAT need nothing inbound.
 - State: \`/var/lib/ghostlink-mesh\` (the node's private key never leaves this machine).
 

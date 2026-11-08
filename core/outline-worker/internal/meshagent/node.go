@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,11 +57,12 @@ type Node struct {
 	Endpoint        string   `json:"endpoint,omitempty"`
 	AdvertiseRoutes []string `json:"advertise_routes"`
 	// Forwarding is this machine's consent to forward packets (as a relay, or to shared
-	// subnets). The coordinator can't turn it on by itself.
+	// subnets). The coordinator can't turn it on by itself: without it the agent installs no
+	// forwarding rules, even where IPv4 forwarding is already on.
 	Forwarding bool `json:"forwarding"`
 	// Hosts keeps <node>.mesh names in /etc/hosts.
 	Hosts bool `json:"hosts"`
-	// ForwardingBefore is ip_forward before the agent changed it, to restore on leave.
+	// ForwardingBefore is ip_forward from before this node first forwarded, to restore on leave.
 	ForwardingBefore string `json:"forwarding_before,omitempty"`
 }
 
@@ -231,4 +233,33 @@ func LocalEndpoints(configured string, port uint16, meshInterface string) []stri
 		}
 	}
 	return out
+}
+
+// forwardingUsers names the software that may rely on IPv4 forwarding, judged by the interfaces
+// it creates. Docker, libvirt, LXD and the like turn forwarding on only when they start, so
+// turning it off under them cuts off their containers and VMs.
+func forwardingUsers(interfaces []string) []string {
+	known := []struct{ prefix, name string }{
+		{"docker", "Docker"}, {"br-", "Docker"}, {"podman", "Podman"}, {"cni", "Kubernetes"}, {"flannel", "Kubernetes"},
+		{"cali", "Kubernetes"}, {"cilium", "Kubernetes"}, {"kube", "Kubernetes"}, {"virbr", "libvirt"}, {"lxdbr", "LXD"},
+		{"lxcbr", "LXC"}, {"incusbr", "Incus"}, {"wg", "WireGuard"}, {"tun", "a VPN"}, {"glipsec", "IKEv2/IPsec"},
+	}
+	var out []string
+	for _, name := range interfaces {
+		for _, k := range known {
+			if strings.HasPrefix(name, k.prefix) && !slices.Contains(out, k.name) {
+				out = append(out, k.name)
+			}
+		}
+	}
+	return out
+}
+
+func interfaceNames() []string {
+	var names []string
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		names = append(names, iface.Name)
+	}
+	return names
 }

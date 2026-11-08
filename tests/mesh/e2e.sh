@@ -9,7 +9,9 @@
 #
 # nata and natb can't reach each other directly, so their traffic must go through the relay.
 # Checked: joining, every pair pings, paths (direct vs relay), names (<node>.mesh), access rules,
-# subnet sharing only after approval, disabling and removing nodes, and a clean host afterwards.
+# a published port (DNAT, as Docker does), subnet sharing only after approval and the router's
+# own address in it, disabling and removing nodes, an interface deleted under its agent, the
+# firewall after a reload, and a clean host afterwards.
 # Usage: sudo tests/mesh/e2e.sh DIR-WITH-ghostlink-server-AND-ghostlink-mesh
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
@@ -134,18 +136,29 @@ in_ns nata wg show glmesh0 | grep -q "$(admin --json mesh nodes | jq -r '.nodes[
 admin mesh map | tee "$work/map.txt"
 grep -q "via relay" "$work/map.txt"
 
-step "Access rules: only web -> db TCP 5432"
+step "A published port: pub DNATs its port 9000 to a server, as Docker does for a container"
+# lan stands in for the container. Docker turns on forwarding itself.
+in_ns lan python3 -m http.server 8000 --bind 0.0.0.0 >/dev/null 2>&1 & pids+=($!)
+in_ns pub sysctl -q -w net.ipv4.ip_forward=1
+in_ns pub iptables -t nat -A PREROUTING -d "$(address pub)" -p tcp --dport 9000 -j DNAT --to-destination 192.168.50.10:8000
+published() { in_ns "$1" curl -s -o /dev/null --max-time 4 "http://pub.mesh:9000/"; }
+wait_for 20 "open mesh: relay reaches pub's published port" published relay
+
+step "Access rules: only web -> db TCP 5432, and web -> pub TCP 9000"
 in_ns natb python3 -m http.server 5432 --bind 0.0.0.0 >/dev/null 2>&1 & pids+=($!)
 in_ns natb python3 -m http.server 8080 --bind 0.0.0.0 >/dev/null 2>&1 & pids+=($!)
 sleep 1
 http() { in_ns "$1" curl -s -o /dev/null --max-time 4 "http://natb.mesh:$2/"; }
 wait_for 20 "open mesh: relay reaches natb:8080" http relay 8080
 admin mesh rules add --from tag:web --to tag:db --proto tcp --ports 5432
+admin mesh rules add --from tag:web --to node:pub --proto tcp --ports 9000
 sleep 3
 wait_for 20 "web (pub) reaches db:5432" http pub 5432
 wait_for 20 "web (nata, relayed) reaches db:5432" http nata 5432
+wait_for 20 "web (nata) reaches pub's published port" published nata
 if http pub 8080; then fail "web reached db:8080, which no rule allows"; fi
 if http relay 5432; then fail "relay (not web) reached db:5432"; fi
+if published relay; then fail "relay (not web) reached pub's published port"; fi
 reaches relay "$(address natb)" || fail "ping must still pass"
 admin mesh rules clear
 
@@ -155,6 +168,7 @@ admin mesh nodes | grep -q "1 waiting" || fail "the offered subnet is not listed
 admin mesh approve pub
 wait_for 30 "relay reaches 192.168.50.10 behind pub" reaches relay 192.168.50.10
 wait_for 30 "natb reaches 192.168.50.10 behind pub" reaches natb 192.168.50.10
+wait_for 30 "relay reaches pub's own address in the subnet it shares" reaches relay 192.168.50.1
 
 step "Disable and remove"
 admin mesh node natb --disable
@@ -165,6 +179,17 @@ wait_for 40 "re-enabled node is back" reaches pub "$(address natb)"
 admin mesh remove nata
 wait_for 20 "a removed node's agent cleans up and stops" bash -c "! ip netns exec nata ip link show glmesh0 >/dev/null 2>&1 && [ ! -e '$work/nata/node.json' ]"
 wait_for 20 "peers drop the removed node" bash -c "! ip netns exec pub wg show glmesh0 allowed-ips | grep -q 100.96.0.3/32"
+
+step "An interface deleted under its agent comes back"
+in_ns pub ip link del glmesh0
+wait_for 45 "pub's agent creates its interface again" reaches relay "$(address pub)"
+
+step "The agent puts its firewall back after a firewall reload"
+# A reload that replaces the filter table (iptables-restore, netfilter-persistent) drops the agent's chains.
+printf '*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\nCOMMIT\n' | in_ns natb iptables-restore
+has_jump() { in_ns natb iptables -C INPUT -i glmesh0 -j GHOSTLINK-MESH-IN 2>/dev/null; }
+has_jump && fail "the reload left the mesh jump in place"
+wait_for 60 "natb's agent restores its firewall" has_jump
 
 step "Stopping an agent leaves its host clean"
 kill "${agent[pub]}"
