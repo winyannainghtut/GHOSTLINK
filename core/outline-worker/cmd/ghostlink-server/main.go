@@ -40,7 +40,8 @@ flags:
   --state DIR      state directory (default /var/lib/ghostlink-server)
   --hostname HOST  public IP or DNS name clients use (init; detected when omitted)
   --name NAME      server display name (init)
-  --log-level L    engine log level: error, warn, info, debug (serve; default warn)
+  --log-level L    engine log level: off, error, warn, info, debug (serve; default off,
+                   because the engine's own messages name the sites and addresses users try)
 `
 
 func fail(format string, args ...any) {
@@ -91,7 +92,9 @@ func main() {
 	state := flags.String("state", defaultState, "")
 	hostname := flags.String("hostname", "", "")
 	name := flags.String("name", "", "")
-	logLevel := flags.String("log-level", "warn", "")
+	// Off by default: at every level the engine logs failed lookups and connections with the
+	// names and addresses users tried, and the server keeps no record of traffic.
+	logLevel := flags.String("log-level", "off", "")
 	_ = flags.Parse(os.Args[2:])
 	if flags.NArg() != 0 {
 		fail("unexpected argument %q", flags.Arg(0))
@@ -141,7 +144,7 @@ func printKey(dir string) {
 
 func serve(dir, logLevel string) {
 	switch logLevel {
-	case "error", "warn", "info", "debug":
+	case "off", "error", "warn", "info", "debug":
 	default:
 		fail("unknown log level %q", logLevel)
 	}
@@ -165,8 +168,10 @@ func serve(dir, logLevel string) {
 		}
 		fmt.Fprintf(os.Stderr, "ghostlink-server: %s: %v\n", what, err)
 	})
+	// An engine that cannot start is reported and retried; the API still starts so that the
+	// server commands and the dashboard can fix what stops it (usually a busy port).
 	if err := service.Start(); err != nil {
-		fail("could not start the VPN engine: %v", err)
+		fail("could not start: %v", err)
 	}
 	api := server.NewAPI(service, version.Ghostlink)
 	httpServer, listener, err := api.Listen()

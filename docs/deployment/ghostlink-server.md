@@ -271,10 +271,10 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 What it can't see: VPN traffic is encrypted, so the server never sees page contents or full URLs. Site names come from the TLS/QUIC handshake, HTTP Host and DNS, and apps that hide them (for example with ECH) show up only as their traffic type.
 
 **Rotation, so the disk never fills:**
-- **By age:** every save (every 5 minutes, and at shutdown) drops records past their retention.
+- **By age:** every save drops records past their retention. The server saves every 5 minutes and when it stops cleanly (`stop`, `restart`, a reboot). `setup` (which every package install and upgrade runs) and `remove` replace the container without that last save, so up to 5 minutes of history and the last 30 s of usage are lost then.
 - **By size:** the file has a hard size limit (default 20 MB; `set --history-max-mb`). Over it, the oldest site totals go first, then the oldest breakdowns, then hourly records; daily totals go last.
-- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed.
-- **Container log:** Docker caps it at 10 MB × 3, and it holds only warnings and errors, never traffic.
+- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed. Usage that cannot be saved, for example on a full disk, is kept and saved later.
+- **Container log:** Docker caps it at 10 MB × 3, and it holds only the server's own warnings and errors, never traffic. The VPN engine's own messages are off, because they name the sites and addresses users try.
 
 ## Administer the container
 
@@ -305,7 +305,7 @@ Every port is random on first install (10000–32000, all different) and shown b
 | IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
 | Mesh coordinator (when the mesh is on) | TCP, for mesh agents; VPN users cannot reach it. A host that is also a mesh node needs UDP 51820 too ([mesh ports](mesh.md#ports)) |
 
-Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities.
+Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities: moving a service to one is refused, as is a port another program uses.
 
 ## Upgrade and remove
 
@@ -316,7 +316,8 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 ## How it is built
 
 - One Go program, `ghostlink-server` (GPL-3.0-or-later, from `core/outline-worker/cmd/ghostlink-server`), runs the management API and one unmodified sing-box 1.14.4 instance. Shadowsocks and VLESS are sing-box inbounds. WireGuard and AmneziaWG are both served by Ghostlink's `amneziawg` endpoint on unmodified amneziawg-go (zero obfuscation for plain WireGuard), on a userspace network stack. So every user's traffic, whatever the protocol, passes the same router and rules.
-- **Changes:** each change is applied to a copy of the state and started in a new engine instance, and only then saved. A change the engine refuses, such as a port already in use, leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own.
+- **Changes:** each change is applied to a copy of the state and saved only if it worked. A change to what the engine serves (protocols, ports, keys, rules, users) starts a new engine instance first, so a change the engine refuses leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own. Names, monitoring, speed limits and the dashboard change without a restart. A new port for a protocol or the dashboard is tried before the change is saved, also for a protocol without keys yet, so a port below 1024 or one another program uses is refused at once.
+- **Starting:** if the engine cannot start, usually because another program holds one of its ports, the management API, the dashboard and the server commands still start, so the port can be changed with `set --port`. The log says why, `GET /live` reports it as `health.engine_error`, and the engine is tried again every 30 seconds.
 - **Container:**
   - image: `gcr.io/distroless/static-debian12:nonroot`, pinned by digest, plus the static binary and its notices;
   - user: the host account `ghostlink-server`;
@@ -371,7 +372,7 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
 | `POST /import/outline` | Take over an Outline server's access keys on a server with no users: `{"access_keys": …, "server": …, "dry_run": true}` with Outline's two files; answers with a report and no passwords ([details](migrate-from-outline.md#over-the-api)) |
 
-`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour.
+`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour, and `health.engine_error` while the VPN engine cannot start.
 
 `PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
 

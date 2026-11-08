@@ -424,6 +424,18 @@ func (m *Monitor) Drain() map[string]uint64 {
 	return result
 }
 
+// Undrain gives back what Drain returned when it could not be accounted (the change failed),
+// so the next accounting counts it.
+func (m *Monitor) Undrain(counted map[string]uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tag, n := range counted {
+		if u, ok := m.users[tag]; ok {
+			u.pending.Add(int64(n))
+		}
+	}
+}
+
 // Sample records one per-second rate point. Run it once a second.
 func (m *Monitor) Sample(now time.Time) {
 	m.mu.Lock()
