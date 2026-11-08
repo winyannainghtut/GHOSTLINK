@@ -54,21 +54,21 @@ Outline's Shadowsocks ports are already open in your firewall and cloud security
 | Access key (name, password, port, cipher) | A client with the same name and one Shadowsocks key with the same password, port and cipher. A key with no name becomes "Key ID"; repeated names get " (2)", " (3)" |
 | The port most keys use | The server's Shadowsocks port. Keys on other ports keep theirs: each extra port gets its own Shadowsocks listener |
 | Ciphers `chacha20-ietf-poly1305`, `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | Kept. On one port, the cipher most keys use is kept; a key with another cipher on that port gets a new key |
-| A key's data limit, or the server's default data limit | The client's data limit. Outline's limit of 0 bytes (a paused key) becomes a client that is turned off |
+| A key's data limit, or the server's default data limit | The client's data limit, but it means something else: Outline counts the last 30 days, while Ghostlink counts usage from the move on and never resets it by itself. A client that reaches its limit stays off until you reset its usage (`sudo ghostlink-server user reset NAME`) or raise the limit. The report says so. Outline's limit of 0 bytes (a paused key) becomes a client that is turned off |
 | Server name and address (`hostname`) | The server's name and the address in keys, so new keys look like the old ones. The management key changes with the address. With the installer's `--hostname`, that address wins |
 | Usage | Starts at 0. Outline counts the last 30 days, which Ghostlink cannot rebuild |
 | Metrics settings, the Outline Manager connection | Not used. Outline Manager no longer reaches this server |
 
 A client gets a **new** Shadowsocks key, listed in the report, when its Outline key:
 
-- uses a port below 1024 (for example 443). The Ghostlink container runs without capabilities, so it cannot listen there;
-- uses a port Ghostlink's management API, dashboard, mesh or IKEv2/IPsec DNS listener already uses;
+- has no valid port (1-65535), or uses a port below 1024 (for example 443). The Ghostlink container runs without capabilities, so it cannot listen there;
+- uses the port of Ghostlink's management API, dashboard, mesh (also while the mesh is off) or IKEv2/IPsec DNS listener (also while IKEv2/IPsec is off), or UDP 4500 while IKEv2/IPsec is on;
 - shares a port with keys that use another cipher, or uses a cipher Outline does not offer;
 - has an empty or unusual password (more than 256 characters, or not plain text).
 
 Show and send their new key with `sudo ghostlink-server keys NAME --show`, the app or the dashboard.
 
-Two Outline keys with the same password on the same port cannot be told apart by any Shadowsocks server. Both keep working, but their traffic counts for the first one, and the report says so.
+Two Outline keys with the same password on the same port cannot be told apart by any Shadowsocks server. Both keep working, each connection counts for either client, and turning one of them off does not stop the key. The report says so.
 
 The import only runs on a Ghostlink server **with no clients yet**, and takes at most 500 keys (the most a server can hold).
 

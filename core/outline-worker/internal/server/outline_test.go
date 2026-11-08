@@ -142,7 +142,9 @@ func TestOutlineImportPlan(t *testing.T) {
 	if !slices.Equal(report.Disabled, []string{"Paused"}) {
 		t.Fatalf("disabled: %v", report.Disabled)
 	}
-	if len(report.Notes) != 1 || !strings.Contains(report.Notes[0], "Twin has the same key as Alice") {
+	// Outline's limits count the last 30 days, Ghostlink's from now on: the report says so.
+	if len(report.Notes) != 2 || !strings.Contains(report.Notes[0], "Twin has the same key as Alice") ||
+		!strings.Contains(report.Notes[1], "10 clients keep their Outline data limit") || !strings.Contains(report.Notes[1], "last 30 days") {
 		t.Fatalf("notes: %v", report.Notes)
 	}
 	// The report never carries a password.
@@ -366,5 +368,32 @@ func TestOutlineImportEndToEnd(t *testing.T) {
 	// A second import is refused: the server has clients now.
 	if status := server.call(t, "POST", "/import/outline", body, nil); status != http.StatusBadRequest {
 		t.Fatalf("second import: status %d", status)
+	}
+}
+
+// A mesh that is turned off keeps its port through an import: turning it on again reuses it.
+func TestOutlineImportKeepsTheMeshPortWhileTheMeshIsOff(t *testing.T) {
+	free := func(string, uint16) bool { return true }
+	state, err := NewState(InitOptions{Hostname: "198.51.100.1", PortFree: free})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.enableMesh("", "", free); err != nil {
+		t.Fatal(err)
+	}
+	state.Mesh.Enabled = false
+	port := int(state.Mesh.Port)
+	serverJSON, keysJSON := outlineFiles("", port, nil, map[string]any{"name": "Mesh", "password": "meshpass", "port": port})
+	server, keys := decodeOutline(t, serverJSON, keysJSON)
+	report, err := state.importOutline(server, keys, free, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.NewKeys) != 1 || !strings.Contains(report.NewKeys[0].Reason, "the mesh") || int(state.Shadowsocks.Port) == port {
+		t.Fatalf("an Outline key took the mesh's port: %+v, Shadowsocks on %d", report, state.Shadowsocks.Port)
+	}
+	state.Mesh.Enabled = true
+	if err := state.CheckPorts(); err != nil {
+		t.Fatalf("the mesh cannot be turned on again: %v", err)
 	}
 }
