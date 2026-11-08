@@ -1,5 +1,6 @@
 name: Desktop and local engine verification
-on: [push, pull_request, workflow_dispatch]
+# Also called by release.yml, so that a draft release needs these checks to pass.
+on: [push, pull_request, workflow_dispatch, workflow_call]
 permissions:
   contents: read
 jobs:

@@ -1,7 +1,8 @@
 name: Release
 # Builds unsigned pre-release packages for every supported platform. Pushing a vX.Y.Z tag that
 # matches the Cargo workspace version also creates a DRAFT GitHub release for review; nothing
-# is public until a maintainer publishes the draft. A manual run only builds the artifacts.
+# is public until a maintainer publishes the draft. A manual run, on a branch or a tag, only
+# builds and tests. A published release is never changed.
 on:
   push:
     tags: ['v*']
@@ -75,10 +76,19 @@ jobs:
       runner: ubuntu-22.04-arm
       arch: arm64
 
+  # The checks every push runs (Go tests and vet, the process suite, clippy and formatting, and
+  # the committed web UI builds), so a draft is only made from a commit that passes them.
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+
+  ui:
+    uses: ./.github/workflows/ui.yml
+
   publish:
     name: Draft GitHub release
-    if: github.ref_type == 'tag'
-    needs: [windows, linux-x64]
+    # Only a pushed tag makes or updates the draft; a manual run is a dry run, even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [windows, linux-x64, desktop, ui]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -104,8 +114,18 @@ jobs:
           VERSION: ${{ needs.windows.outputs.version }}
         run: |
           node scripts/changelog-section.mjs "$VERSION" > changes.md
-          node -e 'const fs=require("fs");const t=fs.readFileSync(".github/release-notes.md","utf8").replaceAll("@VERSION@",process.argv[1]).replace("@CHANGES@",fs.readFileSync("changes.md","utf8").trim());fs.writeFileSync("notes.md",t)' "$VERSION"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          # The changes go in through a function, so "$&", "$'" or "$$" in them stay as written.
+          node -e 'const fs=require("fs");const t=fs.readFileSync(".github/release-notes.md","utf8").replaceAll("@VERSION@",process.argv[1]).replace("@CHANGES@",()=>fs.readFileSync("changes.md","utf8").trim());fs.writeFileSync("notes.md",t)' "$VERSION"
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            # A published release keeps the files and checksums it was published with.
+            if [ "$draft" != true ]; then echo "$TAG is already published; this run changed nothing." >&2; exit 1; fi
+            # A re-run replaces the draft's files and deletes those it did not build again (such as
+            # arm64 files when the arm64 job does not finish this time), so that SHA256SUMS.txt lists
+            # every file. attach-linux-arm64 adds this run's arm64 files.
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > assets.txt
+            while IFS= read -r name; do
+              if [ ! -e "release/$name" ]; then gh release delete-asset "$TAG" "$name" --repo "$GITHUB_REPOSITORY" --yes; fi
+            done < assets.txt
             gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
@@ -114,7 +134,7 @@ jobs:
 
   attach-linux-arm64:
     name: Attach Linux arm64 to the draft release
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [publish, linux-arm64]
     runs-on: ubuntu-24.04
     permissions:
@@ -129,8 +149,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # A published release keeps the files and checksums it was published with.
+          draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != true ]; then echo "$TAG is already published; the arm64 files were not attached." >&2; exit 1; fi
           # The artifact holds packages and the IPsec source bundle in subfolders; attach them flat.
-          mkdir flat && find arm64 -type f -exec mv -t flat {} + && rm -rf arm64 && mv flat arm64
+          mkdir flat
+          find arm64 -type f -exec mv -t flat {} +
+          rm -rf arm64
+          mv flat arm64
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir sums
           # Idempotent on re-runs: drop any previous line for these files before appending.
           cp sums/SHA256SUMS.txt sums/next.txt
@@ -140,5 +166,16 @@ jobs:
             mv sums/filtered.txt sums/next.txt
           done
           (cd arm64 && sha256sum -- *) >> sums/next.txt
-          mv sums/next.txt sums/SHA256SUMS.txt && cat sums/SHA256SUMS.txt
+          mv sums/next.txt sums/SHA256SUMS.txt
+          cat sums/SHA256SUMS.txt
+          # Every file the draft will hold must have a line in SHA256SUMS.txt.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > assets.txt
+          ls arm64 >> assets.txt
+          sort -u -o assets.txt assets.txt
+          while IFS= read -r name; do
+            if [ "$name" != SHA256SUMS.txt ] && ! awk -v n="$name" '$2 == n || $2 == "*"n {found = 1} END {exit !found}' sums/SHA256SUMS.txt; then
+              echo "SHA256SUMS.txt would not list $name" >&2
+              exit 1
+            fi
+          done < assets.txt
           gh release upload "$TAG" arm64/* sums/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
