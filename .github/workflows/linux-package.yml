@@ -44,7 +44,9 @@ jobs:
         id: version
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then set -- --tag "$GITHUB_REF_NAME"; fi
-          echo "version=$(node scripts/release-version.mjs "$@")" >> "$GITHUB_OUTPUT"
+          # Assign first: inside echo's arguments a failed check would not fail the step.
+          version=$(node scripts/release-version.mjs "$@")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Unit tests
         run: cargo test --locked --workspace
       - name: Install nfpm (pinned)
@@ -60,15 +62,30 @@ jobs:
           ARCH: ${{ inputs.arch }}
         run: |
           set -eu
+          running() {
+            for i in $(seq 1 20); do systemctl is-active --quiet ghostlinkd && return 0; sleep 0.5; done
+            systemctl is-active ghostlinkd
+          }
           deb=$(ls artifacts/linux-$ARCH/ghostlink_*.deb)
           sudo apt-get install -y "./$deb"
           grep -q "^GHOSTLINK_OWNER_UID=$(id -u)$" /etc/ghostlink/ghostlinkd.env
-          for i in $(seq 1 20); do systemctl is-active --quiet ghostlinkd && break; sleep 0.5; done
-          systemctl is-active ghostlinkd
+          running
           ghostlink --json status | tee status.json
           grep -q '"status":"disconnected"' status.json
           ghostlink --json doctor | tee doctor.json
           grep -q '"outline_engine_available":true' doctor.json
+          # An upgrade (here: a reinstall) restarts an enabled service and leaves a disabled one off.
+          sudo apt-get install -y --reinstall "./$deb"
+          running
+          sudo systemctl disable --now ghostlinkd
+          sudo apt-get install -y --reinstall "./$deb"
+          if systemctl is-enabled --quiet ghostlinkd || systemctl is-active --quiet ghostlinkd; then echo "an upgrade turned a disabled service back on" >&2; exit 1; fi
+          # Removing the package and installing it again turns an enabled service back on.
+          sudo systemctl enable --now ghostlinkd
+          sudo apt-get remove -y ghostlink
+          sudo apt-get install -y "./$deb"
+          systemctl is-enabled ghostlinkd
+          running
           sudo apt-get purge -y ghostlink
           if systemctl is-active --quiet ghostlinkd; then echo "service still running after purge" >&2; exit 1; fi
           test ! -e /usr/bin/ghostlinkd && test ! -e /var/lib/ghostlink
@@ -79,9 +96,12 @@ jobs:
           sudo apt-get install -y rpm
           rpm -qip artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm
           rpm -qlp artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm | tee files.txt
-          grep -qx /usr/bin/ghostlinkd files.txt && grep -qx /usr/lib/ghostlink/ghostlink-tunnel files.txt
+          grep -qx /usr/bin/ghostlinkd files.txt
+          grep -qx /usr/lib/ghostlink/ghostlink-tunnel files.txt
           grep -qx /usr/lib/systemd/system/ghostlinkd.service files.txt
-          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm | grep -q ghostlinkd
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-[0-9]*.rpm > scripts.txt
+          grep -q 'posttrans scriptlet' scripts.txt
+          grep -q ghostlinkd scripts.txt
       - name: Server image, .deb and .rpm
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -124,12 +144,16 @@ jobs:
           sudo ghostlink-server users | grep -q smoke
           sudo ghostlink-server top --once | grep -q smoke
           sudo ghostlink-server stats smoke --range 24h | grep -q 'Traffic for smoke'
-          sudo ghostlink-server kit smoke --output kit.html && sudo grep -q 'vless://' kit.html && test "$(stat -c %a kit.html)" = 600
+          sudo ghostlink-server kit smoke --output kit.html
+          sudo grep -q 'vless://' kit.html
+          test "$(stat -c %a kit.html)" = 600
           # Dashboard: its own port, loopback only, token sign-in, CSRF header required.
           sudo ghostlink-server dashboard | tee dashboard.txt
           dport=$(sed -n 's/.*-L 8080:127\.0\.0\.1:\([0-9]*\) .*/\1/p' dashboard.txt | head -n 1)
           token=$(sed -n 's/.*#t=\([A-Za-z0-9_-]*\).*/\1/p' dashboard.txt | head -n 1)
-          test -n "$dport" && test -n "$token" && test "$dport" != 443
+          test -n "$dport"
+          test -n "$token"
+          test "$dport" != 443
           ss -ltn | grep -q "127.0.0.1:$dport "
           if ss -ltn | grep -Eq "(0\.0\.0\.0|\*|\[::\]):$dport "; then echo "dashboard listens publicly" >&2; exit 1; fi
           curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$dport/" | grep -qx 200
@@ -146,11 +170,14 @@ jobs:
         env:
           ARCH: ${{ inputs.arch }}
         run: |
-          set -eu
+          # pipefail: the installers below are piped into tee, which would hide their exit status.
+          set -euo pipefail
           deb=$(ls artifacts/linux-$ARCH/ghostlink-mesh_*.deb)
           clean() {
             if ip link show glmesh0 >/dev/null 2>&1; then echo "glmesh0 left behind" >&2; exit 1; fi
-            if sudo iptables-save | grep -q GHOSTLINK-MESH; then echo "firewall chains left behind" >&2; exit 1; fi
+            # grep reads all of the output (no -q), so iptables-save is never cut off by SIGPIPE,
+            # which pipefail would turn into "no chains found".
+            if sudo iptables-save | grep GHOSTLINK-MESH >/dev/null; then echo "firewall chains left behind" >&2; exit 1; fi
             if grep -q ghostlink-mesh /etc/hosts; then echo "/etc/hosts block left behind" >&2; exit 1; fi
           }
           connected() {
@@ -179,13 +206,15 @@ jobs:
           # 3. The server installer with --mesh: this host joins as the relay (mesh join-here).
           server_deb=$(ls artifacts/linux-$ARCH/ghostlink-server_*.deb)
           cat scripts/install-server.sh | sudo bash -s -- --package "./$server_deb" --mesh-package "./$deb" | tee installer.txt
-          grep -q '/udp  mesh (this server as a node)' installer.txt && grep -q '/tcp  mesh coordinator' installer.txt
+          grep -q '/udp  mesh (this server as a node)' installer.txt
+          grep -q '/tcp  mesh coordinator' installer.txt
           systemctl is-active ghostlink-mesh
           connected
           sudo ghostlink-server --json mesh nodes | jq -e '[.nodes[] | select(.relay and .online)] | length == 1'
           sudo apt-get purge -y ghostlink-mesh
           clean
-          test ! -e /var/lib/ghostlink-mesh && test ! -e /usr/bin/ghostlink-mesh
+          test ! -e /var/lib/ghostlink-mesh
+          test ! -e /usr/bin/ghostlink-mesh
           sudo ghostlink-server --json mesh nodes | jq -e '.nodes | length == 0'
       - name: Inspect the mesh .rpm
         env:
@@ -193,8 +222,11 @@ jobs:
         run: |
           rpm -qip artifacts/linux-$ARCH/ghostlink-mesh-*.rpm
           rpm -qlp artifacts/linux-$ARCH/ghostlink-mesh-*.rpm | tee mesh-files.txt
-          grep -qx /usr/bin/ghostlink-mesh mesh-files.txt && grep -qx /usr/lib/systemd/system/ghostlink-mesh.service mesh-files.txt
-          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-mesh-*.rpm | grep -q 'ghostlink-mesh leave'
+          grep -qx /usr/bin/ghostlink-mesh mesh-files.txt
+          grep -qx /usr/lib/systemd/system/ghostlink-mesh.service mesh-files.txt
+          rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-mesh-*.rpm > mesh-scripts.txt
+          grep -q 'posttrans scriptlet' mesh-scripts.txt
+          grep -q 'ghostlink-mesh leave' mesh-scripts.txt
       - name: Purge the server .deb
         run: |
           set -eu
@@ -222,7 +254,9 @@ jobs:
           docker run -d --name watchtower --restart always busybox:1.36 sleep infinity
           # --check installs Ghostlink next to Outline and only reports.
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline --check | tee check.txt
-          grep -q 'Check only' check.txt && grep -q '4 clients' check.txt && grep -q 'Old: it uses port 443' check.txt
+          grep -q 'Check only' check.txt
+          grep -q '4 clients' check.txt
+          grep -q 'Old: it uses port 443' check.txt
           test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
           sudo ghostlink-server users | grep -q 'No users yet'
           # A failed import (another program holds Router's port) puts Outline back as it was.
@@ -237,12 +271,15 @@ jobs:
           docker rm -f blocker
           # The migration: Outline stops for good, Ghostlink serves its ports and keys.
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline | tee migrate.txt
-          grep -q 'Imported from Outline' migrate.txt && grep -q 'To go back to Outline' migrate.txt
+          grep -q 'Imported from Outline' migrate.txt
+          grep -q 'To go back to Outline' migrate.txt
           grep -q '45679/udp  Shadowsocks (keys from Outline)' migrate.txt
           for name in shadowbox watchtower; do
             test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' "$name")" = "false no"
           done
-          ss -ltn | grep -q ':45678 ' && ss -ltn | grep -q ':45679 ' && ss -lun | grep -q ':45678 '
+          ss -ltn | grep -q ':45678 '
+          ss -ltn | grep -q ':45679 '
+          ss -lun | grep -q ':45678 '
           sudo ghostlink-server --json users | jq -e '[.[].name] == ["Phone", "Key 1", "Router", "Old"] and .[0].data_limit_bytes == 50000000000'
           credential() { printf '%s' "$1" | base64 -w0 | tr '+/' '-_' | tr -d '='; }
           sudo ghostlink-server keys Phone --show | grep -qF "ss://$(credential chacha20-ietf-poly1305:cGhvbmUtcGFzc3dvcmQ)@127.0.0.1:45678/"
@@ -255,7 +292,9 @@ jobs:
           if sudo ghostlink-server migrate-outline 2> again.txt; then echo "a second migration went through" >&2; exit 1; fi
           grep -q 'already has clients' again.txt
           # The rollback the migration printed brings Outline back.
-          sudo ghostlink-server stop && sudo docker update --restart=always shadowbox watchtower && sudo docker start shadowbox watchtower
+          sudo ghostlink-server stop
+          sudo docker update --restart=always shadowbox watchtower
+          sudo docker start shadowbox watchtower
           test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
           docker rm -f shadowbox watchtower
           sudo rm -rf /opt/outline
@@ -266,7 +305,8 @@ jobs:
         run: |
           rpm -qip artifacts/linux-$ARCH/ghostlink-server-*.rpm
           rpm -qlp artifacts/linux-$ARCH/ghostlink-server-*.rpm | tee server-files.txt
-          grep -qx /usr/sbin/ghostlink-server server-files.txt && grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
+          grep -qx /usr/sbin/ghostlink-server server-files.txt
+          grep -qx /usr/lib/ghostlink-server/image.tar.gz server-files.txt
           grep -qx /usr/lib/ghostlink-server/ipsec-image.tar.gz server-files.txt
           rpm -qp --scripts artifacts/linux-$ARCH/ghostlink-server-*.rpm | grep -q 'ghostlink-server setup'
       - name: IKEv2/IPsec interop (strongSwan client, all four sign-in methods)
