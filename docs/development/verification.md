@@ -2,6 +2,33 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## Second full review and a report from a running server (2026-11-08, pull request #3, not in the 0.8.0 packages)
+
+Every subsystem was read in full, reviewed again for new defects, checked by a skeptical verifier, fixed area by area in separate worktrees with tests, and merged. What changed is in the CHANGELOG under [Unreleased].
+
+| Check | Result actually observed |
+|---|---|
+| UDP reply crash (real binaries, Windows) | One Shadowsocks UDP exchange (an NTP request through the server) against a `main` build before this round (`7a0c560`) crashed the server for capped and uncapped clients: `panic: buffer overflow: capacity 16384, start 0, need 55` in the Shadowsocks UDP writer. The released v0.8.0 answered. The fixed build answered and stayed up. `TestUDPRepliesKeepTheWritersHeadroom` and `TestShadowsocksUDPThroughTheServer` fail with the same panic without the fix |
+| Online and idle (Go) | `TestOnlineFollowsWhatTheClientSends`: an open connection and a small write to the client do not count, an upload or a 16 KB download in a second does; online means seen within 60 s. `TestPeersSeenThroughTheirReceiveCounter`: a keepalive counts, an unchanged, new or reset counter does not, a handshake counts at its own time. `TestMonitoringEndToEnd` reads a real WireGuard client's receive counter |
+| Dashboard (WebView2 DevTools, isolated profile and endpoint, local server, real Shadowsocks traffic from Cloudflare's speed endpoint, Daylight) | The Island read `↓ 983 KB/s ↑ 0 B/s` during a capped 1 MB/s download; the off switches of IKEv2 and IPsec had the track `rgba(120, 120, 128, 0.24)`; the list said "Last seen". With one idle TCP connection held open through Shadowsocks (to an SSH server, which waits for the client), the client showed `active: 1, online: false` and **Idle** 70 s after its last traffic; a client that never connected showed Idle; no page errors |
+| UDP rules per packet (Go, `guard_test.go`) | Over Shadowsocks, VLESS and WireGuard, 5 of 5 later packets reached a blocked loopback port without the check and none with it |
+| TCP and UDP under one cap (Go) | `TestPacerSharesTheCapBetweenTCPAndUDP`: 0 of 146 UDP packets passed while TCP filled the cap before the fix, 80 % or more after |
+| IKEv2/IPsec (Go) | 14 new tests in `ipsec_review_test.go`: identities for any user name, a refused key left out without blocking the others, renames and pinning, no double counting after a restart or an ended session, settings written only when they change and one at a time, the profile identifier, certificate renewal at start and after a hostname change. Each fix was reverted in turn and its test failed |
+| WireGuard and AmneziaWG endpoints (Go, `internal/awg`) | One client UDP socket: an allowed port answered, a blocked port stayed silent, a further allowed port answered (before the fix the blocked port answered). The far side dialing an AmneziaWG client's tunnel address was dropped (before: it reached a loopback web server). Validate-only engines and start/close cycles left no goroutines (before: 160 and 5) |
+| Mesh (Go) | Coordinator, protocol, agent and firewall-helper tests pass, including consent, firewall order, routes, pacing of waiting nodes and the long-poll on disable |
+| Rust | `cargo fmt`, `clippy -D warnings`, 50 unit tests (CLI 1, contracts 6, engine 41, service 3). The new process tests failed 7 of 19 against the binaries before the Rust fixes |
+| Process suite | 19/19 with OpenVPN 2.7.8 and a real local Ghostlink server, none skipped |
+| Real-engine tests | 6/6 (`outline_traffic`, `worker_protocols`), including real WireGuard and AmneziaWG traffic with the new rule that refuses flows from the far side |
+| Python | 28 tests: the offline provisioning tools (the proxy against sing-box), the Linux maintainer scripts under `sh` and `dash`, the MSI owner logic |
+| UI and desktop app | Typecheck, 17 tests and both builds; the Tauri app builds and passes clippy |
+| Go suite at the final merge | All packages pass on Windows (the server package in 139 s); `GOOS=linux go vet` passes |
+
+### Not verified
+
+- A real Apple device, a real VPS, `--migrate-outline` on a real Outline, a reconnect after a real connected OpenVPN session, and a routed tunnel on Linux.
+- `dnf upgrade` of the client and mesh `.rpm` on Fedora/RHEL, and an MSI upgrade with a new `GHOSTLINK_OWNER_SID` (both were checked only by tests of the scripts and logic).
+- The host addresses that the server blocks, read from `net.InterfaceAddrs` inside the container on a real host; the mesh across real cloud servers; the race detector (no cgo toolchain on the development machine).
+
 ## Review of v0.8.0 after its release (2026-11-08, on `main`, not in the 0.8.0 packages)
 
 Two independent reviews (Go server code; scripts, CI and docs) were checked against the source before fixing. What was fixed is listed in the CHANGELOG under [Unreleased].
@@ -26,7 +53,7 @@ Two independent reviews (Go server code; scripts, CI and docs) were checked agai
 
 | Check | Result actually observed |
 |---|---|
-| Pacer (Go) | `TestPacerArithmetic`: the bucket starts full (250 KB at 1 MB/s), 500 KB over an empty bucket waits 0.5 s, a refill stops at the burst, one wait is capped at 5 s, unlimited never waits, small caps get 64 KB. `TestPacerHoldsTheRateAcrossConnections`: three connections sharing a 4 MB/s cap moved 6 MiB in the time the cap allows (±15 %) |
+| Pacer (Go) | `TestPacerArithmetic`: the bucket starts full (250 KB at 1 MB/s), 500 KB over an empty bucket waits 0.5 s, a refill stops at the burst, one wait is capped at 5 s, unlimited never waits, small caps get 64 KiB (65,536 bytes). `TestPacerHoldsTheRateAcrossConnections`: three connections sharing a 4 MB/s cap moved 6 MiB within -15 % to +30 % of the time the cap allows |
 | Speed limits with real clients (Go, `TestSpeedLimitsEndToEnd`, 13 s) | Real sing-box clients against the server. A client capped at 1 MB/s downloaded 3 MB at the cap through **Shadowsocks** and through **WireGuard** (the userspace stack's connections); an unlimited client took under 1.5 s. A 2 MB/s server default capped the others at once, and the capped client kept its own 1 MB/s. "No limit" (-1) overrode the default. The engine reload counter did not change through all of it. -2, 2,000,000,000 and a too-high default got `400` |
 | Outline import (Go) | `TestOutlineImportPlan` on 11 Outline keys: main port and cipher by majority; an `aes-256-gcm` key on another port kept its own listener (VLESS moved off that port); new keys, with reasons, for a port below 1024, a cipher mix on one port, the management API's port, an unknown cipher and a password with a newline; names "Key 1" and "alice (2)"; per-key and default data limits; a 0-byte limit imported as turned off; two keys sharing a password noted. Every kept key renders as the exact `ss://` its owner has. The report holds no password. Moving the main port onto an imported key's port is refused. `TestOutlineImportRefusals`: a server with clients, no keys and 501 keys are refused; when every key is below 1024, the import keeps the server's own port and gives everyone a new key |
 | Outline keys still work (Go, `TestOutlineImportEndToEnd`) | Outline's **original** `ss://` URLs (two on the main port with chacha20-ietf-poly1305, one on an extra port with aes-256-gcm) carried traffic through real sing-box clients after the import over the API, and the traffic was seen for the right clients. The dry run changed nothing. A second import got `400` |

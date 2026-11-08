@@ -12,7 +12,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 - **Other releases:**
   - v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. Only a maintainer publishes or deletes releases.
-- **`main` after 0.8.0:** fixes from two reviews of 0.8.0, listed under `[Unreleased]` in the CHANGELOG and in the verification ledger's top section. They are **not in the 0.8.0 packages**; releasing them as **0.8.1** is the maintainer's call, so ask before tagging.
+- **`main` after 0.8.0:** fixes from two reviews of 0.8.0 and from a report on a running server, listed under `[Unreleased]` in the CHANGELOG (with a *Changed* list of what behaves differently after an upgrade) and in the verification ledger's top section. They came through pull requests #2 and #3 and are **not in the 0.8.0 packages**; releasing them as **0.8.1** is the maintainer's call, so ask before tagging.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -27,13 +27,25 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 These came from the maintainer and shape the code. Keep them unless the maintainer changes them.
 
-- **Speed limits (0.8.0):** one cap per client, for download and upload alike, shared by all of the client's keys and devices, with an optional server default and a "no limit" override.
+- **Speed limits (0.8.0):** one cap per client, for download and upload alike, shared by all of the client's keys and devices, with an optional server default and a "no limit" override. IKEv2/IPsec sessions are policed by the IPsec component with a budget of their own, so a client on both kinds can reach about twice its cap.
 - **Moving from Outline (0.8.0):** an in-place takeover on the same machine that keeps existing `ss://` keys working (same password, port and cipher), rather than a new host with new keys.
 - **Units:** every speed is in bytes per second (B/s, KB/s, MB/s, GB/s, decimal like data sizes), never bits: in the UI, the CLI, server commands and docs. API fields named `*_bps` are bytes per second. If a doc must mention bits, give bytes first.
 - **Look (0.7.0):** the app and the dashboard share one frosted-glass design (see §10). Check new UI in all three finishes, Daylight included.
 - **Online state:** a client is online while it sends something at least once a minute; open connections alone don't count (see §13).
 - **Small servers:** with under 1 GB of memory and swap the installer stops unless it gets `--add-swap`. Before a real move from Outline, suggest `--migrate-outline --check`.
 - **First stable release:** v1.0.0, after the checks under *Next steps*. Launching with unsigned builds is acceptable.
+
+### The 0.8.1 review round (2026-11-08), in short
+
+A report on a running server and a second full review, reviewed area by area and fixed in parallel. What a maintainer of this code needs to know (details in the CHANGELOG, the ledger and the sections below):
+- **Online state** (`monitor.go`: `isOnline`, `seen`, `PeersSeen`): a client is online when it sent something in the last 60 s. Open connections don't count; WireGuard/AmneziaWG peers are polled every 5 s for their receive counters (issued keys send a keepalive every 25 s).
+- **UDP wrapper** (`policedPacketConn` in `monitor.go`): an unreleased change made the first Shadowsocks UDP reply crash the whole server, because the wrapper hid the writer's header room from sing. It now exposes `UpstreamWriter` (header room) and `Upstream` (handshake reports, NAT timeout) but must stay non-`ReaderReplaceable`, so every packet passes its `ReadPacket`: the policer and `udpGuard` (`guard.go`), which checks later UDP packets against the address and port rules. `udp_test.go` and `police_test.go` guard all of this.
+- **Server isolation:** every public address of the host and the dashboard port are always blocked; WireGuard/AmneziaWG server endpoints open one NAT session per UDP destination (`internal/awg/endpoint.go`); the engine log is off by default; an engine that cannot start no longer stops `serve` (`ensureEngine`, every 30 s).
+- **Clients:** WireGuard and AmneziaWG clients refuse flows the far side starts (a route rule in `worker_session.rs`, and `JudgeFlow` in the AmneziaWG endpoint); the TUN collision check accepts a wider network around 172.28.85.0/30 (Hyper-V, WSL, Docker).
+- **IKEv2/IPsec:** identities always start with a letter or digit, are stored with each key and pinned at start (`pinIdentities`), so renames change nothing; `desired.json` is written only when its fingerprint changes; the first report after a start only sets a baseline.
+- **Mesh:** forwarding and relaying need the node's local consent; the agent installs its firewall before the interface and re-checks its jumps every 30 s; relayed pairs probe for a direct path instead of switching blindly.
+- **Host scripts:** root never follows a symlink in the state (`in_state_dir`); `setup` stops the server before it changes the state; admin commands refuse words they don't take (`parseFlags`).
+- **Process lesson for agents:** workflow worktrees were created from `main`, not from the working branch; every fixer had to rebase onto the branch first. Check the base of a worktree before building on it.
 
 ### Next steps, in order
 
@@ -43,7 +55,7 @@ These came from the maintainer and shape the code. Keep them unless the maintain
    - follow the release flow below (tag `v0.8.1`), leaving the draft for a maintainer to publish.
 2. **v1.0.0, the "first launch":**
    - **Code and docs:**
-     - in `release.yml`, pass `--prerelease` only below 1.0 or for `-rc` tags;
+     - in `release.yml`, pass `--prerelease` only below 1.0 (an `-rc` tag would first need a numeric MSI `Product/@Version`, which candle requires, and package names that the installers expect, since nfpm writes `1.0.0~rc.1`);
      - change the first line of `.github/release-notes.md` ("Unsigned pre-release…");
      - change the CHANGELOG preamble ("pre-1.0 releases are unsigned pre-releases");
      - update the README *Status and roadmap*;
@@ -252,7 +264,7 @@ Paths are relative to the repository root (`github.com/winyannainghtut/GHOSTLINK
 | `scripts/collect-licenses.py` | Actual locked Rust / used Go dependency notice inventory |
 | `scripts/audit-lockfiles.py` | OSV scan of both Rust lockfiles, including other targets |
 | `tests/integration/control-plane.test.mjs` | 19 actual daemon/CLI/MCP process tests (`npm test` at the root) |
-| `tests/integration/test_provision.py` | 2 offline Outline/OpenVPN provisioning tests |
+| `tests/integration/test_provision.py`, `test_linux_packages.py`, `test_windows_installer.py` | 28 Python tests: the offline Outline/OpenVPN provisioning tools (the proxy run needs `GHOSTLINK_TEST_SING_BOX`, one test needs OpenVPN via `GHOSTLINK_TEST_ENGINE`), the Linux maintainer scripts under `sh`/`dash` with a stand-in `systemctl`, and the MSI's owner-SID logic |
 | `.github/workflows/desktop.yml` | Windows/Linux build and local verification, on every push and pull request |
 | `.github/workflows/ui.yml`, `ipsec.yml`, `mesh.yml` | The UI build must match the committed output; IKEv2/IPsec interop with strongSwan; the mesh end to end in network namespaces |
 | `.github/workflows/release.yml`, `linux-package.yml`, `.github/release-notes.md` | Windows x64 / Linux x64 / Linux arm64 packages, the server, IPsec and mesh package smoke tests (including the Outline migration), and a draft pre-release on `v*` tags (§14) |
@@ -345,7 +357,7 @@ Lifecycle:
 2. Worker `check` must validate it before native start.
 3. Parent keeps an inherited private stdin pipe open; stdout/stderr are controlled by the parent.
 4. Worker emits fixed credential-free JSON lifecycle events on stderr, suppressing upstream raw logs.
-5. Before starting, worker rejects an existing `Ghostlink` interface name or overlapping local address range.
+5. Before starting, worker rejects an existing `Ghostlink` interface name or any local address inside the TUN ranges. A wider local network that only contains them (a Hyper-V or WSL switch, a Docker bridge, a LAN) is accepted.
 6. Worker reports a started tunnel address only after observing it on the OS interface. Proxy-only test configurations omit `vpn_ip`.
 7. Daemon verifies that worker PID owns both loopback listeners before sending per-session proxy/controller credentials.
 8. A real HTTPS 204 health request through the authenticated proxy is required before connected state.
@@ -398,7 +410,7 @@ Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engi
 ### IPC and authorization
 
 - Newline-delimited UTF-8 JSON, one request/response per local connection, schema version 1, maximum frame 2 MiB.
-- Unknown actions, unsupported schema versions, unknown request fields and unknown fields on actions that take fields fail closed; framing/connection/time bounds are enforced. Caveat: serde ignores extra keys on the field-less variants of the internally tagged `Action` and `ServerOp` enums (for example `{"type":"status","x":1}`); see the pitfall in §13.
+- Unknown actions, unsupported schema versions and unknown fields fail closed, also on field-less actions (`{"type":"status","x":1}` is refused): those are empty struct variants (`Status {}`), because serde ignores extra keys on unit variants of internally tagged enums. Framing/connection/time bounds are enforced.
 - Windows server named pipe has a protected DACL for SYSTEM and the configured authorized owner SID; remote clients are rejected.
 - Windows clients use identification-only security QoS and refuse a pipe unless its **owner** is SYSTEM, BUILTIN\Administrators (the default owner of objects a SYSTEM service creates) or the client's own user. They do not inspect the server process: opening a SYSTEM process token fails for standard users (the v0.3.1 fix).
 - Linux socket code uses the configured owner UID, mode 0600 and peer-credential checks (root is always accepted). CI runs it: the process suite on Ubuntu, and release CI's `.deb` smoke test with `ghostlinkd` as root and the client as the owner. Refusal of another UID is not tested yet.
@@ -496,7 +508,7 @@ ghostlink agent grant --name assistant --token-file C:\private\ghostlink-assista
 ghostlink-mcp --token-file C:\private\ghostlink-assistant.token
 ```
 
-For control, the grant needs `--control`, and MCP launch additionally needs `--allow-control`. Both gates matter; the daemon enforces scope even if a client advertises a tool. Revoke using `ghostlink agent revoke --name assistant`. Re-granting the same agent name replaces its stored grant.
+For control, the grant needs `--control`, and MCP launch additionally needs `--allow-control`. Both gates matter; the daemon enforces scope even if a client advertises a tool. Revoke using `ghostlink agent revoke --name assistant`; a name without a grant fails with `not_found`. Re-granting the same agent name replaces its stored grant, but the CLI refuses a `--token-file` that already exists (or whose folder is missing) before it sends anything, so write the new token to a new file.
 
 - Tokens are random 64-hex-character secrets; only their hashes are persisted as grants.
 - Token issuance is an internal private IPC exception: CLI consumes the one-time secret into a protected file, strips it from printed JSON and reports `token_saved: true`.
@@ -748,7 +760,7 @@ Client side:
 
 Pitfalls found here:
 - **Fetch helper:** the test HTTP proxy uses the Host header as destination, so the server tests use CONNECT plus a Host header.
-- **Serde:** extra fields on unit variants of internally tagged enums are ignored.
+- **Serde:** extra fields on unit variants of internally tagged enums are ignored, so add field-less `Action`/`ServerOp` variants as empty struct variants (`Info {}`); the JSON stays the same.
 - **Close race:** amneziawg-go closes the TUN before its peers. See §17.
 
 ### Speed limits and the move from Outline (v0.8.0)
@@ -840,9 +852,9 @@ Administrator installation is a human step on an authorized test machine. No UAC
 
 Each Linux job also builds the server (`ghostlink-server_<v>-1_<arch>.deb`, `ghostlink-server-<v>-1.<arch>.rpm`), the mesh agent (`ghostlink-mesh_<v>-1_<arch>.deb`, `ghostlink-mesh-<v>-1.<arch>.rpm`) and `Ghostlink-<v>-ipsec-component-source-<arch>.tar.gz`; see `docs/development/releases.md`.
 
-Each job runs `node scripts/release-version.mjs` first. The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
+The Windows and Linux build jobs run `node scripts/release-version.mjs` first (the Linux step used to hide its exit code). The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
-Pushing a `v<version>` tag also runs `publish`, which collects all files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. A maintainer reviews and publishes the draft; agents never publish. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`) only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.0` exist; v0.5.0, v0.7.0 and v0.8.0 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
+Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents never publish. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.0` exist; v0.5.0, v0.7.0 and v0.8.0 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
 
 Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows and Linux x64 only), and `attach-linux-arm64` uploads its archive and checksum line afterwards. If no arm64 runner is available, cancel that job.
 
@@ -876,7 +888,7 @@ Recorded November 6; databases change, so rescan before release:
 - `govulncheck` **1.9.0**, Go **1.26.10**, worker `with_gvisor`: initial five reachable HTTP/2 advisories fixed. Final verbose scan: **No vulnerabilities found**.
 - Updated `golang.org/x/net` to **0.62.0**, Chi to **5.3.0**, `golang.org/x/crypto` to fixed revision **`v0.58.1-0.20261009181718-2f1f834330b2`**, plus compatible transitive dependencies. Engine protocol/library source remains unmodified.
 - `npm audit`: **zero known vulnerabilities** in verification tooling. `package.json` is private; Ajv is pinned at 8.20.0.
-- OSV queried **472 unique Rust registry package versions** across both Cargo locks. Eight OpenSSL advisory matches were cleared by root lock update to `openssl` **0.10.82** and `openssl-sys` **0.9.118**.
+- OSV queried **472 unique Rust registry package versions** across both Cargo locks at the first scan (501 since v0.3.0). Eight OpenSSL advisory matches were cleared by root lock update to `openssl` **0.10.82** and `openssl-sys` **0.9.118**.
 - Remaining **3 advisory IDs describe 2 Linux GUI/build dependencies**: `glib` 0.18.5 iterator unsoundness (**RUSTSEC-2024-0429**, alias **GHSA-wrw7-89jp-8q8g**), and unmaintained `proc-macro-error` 1.0.4 (**RUSTSEC-2024-0370**).
 - glib fix is in 0.20.0, while current GTK/Tauri chain uses 0.18. It cannot simply be replaced across that ABI/dependency chain. Ghostlink does not call the affected iterator directly; transitive Linux reachability has not been established. Linux GUI release needs a chain upgrade/reviewed backport and testing.
 - Those GTK components are not compiled into the Windows app. Do not hide their findings or claim the all-target Rust scan is clean; the script intentionally returns nonzero while matches remain.
@@ -896,7 +908,7 @@ Rust OSV scan sends only public dependency names/versions, no source or credenti
 
 - Original Rust control plane and original UI: repository **MIT** license.
 - Separate Go worker linking sing-box: **GPL-3.0-or-later**, including corresponding-source obligations and preserved upstream notices/naming terms. Process separation does not waive worker obligations.
-- Generated inventory covers **513 locked Rust packages / used Go modules** across targets. It is a review aid, not a legal guarantee. Thirty-eight Rust packages lacked top-level bundled license files; manually preserved WebView2 texts address some notices, not every target review.
+- Generated inventory (`LICENSES/dependency-inventory.json`) covers **569 entries: 501 locked Rust packages, 60 Go modules and 8 bundled npm packages** across targets; `collect-licenses.py` now also removes notices of versions no longer locked. It is a review aid, not a legal guarantee. 39 Rust entries (38 distinct crates) have no top-level bundled license file; manually preserved WebView2 texts address some notices, not every target review.
 - OpenVPN 2 is optional and separately installed, not bundled in the MSI. Its GPL/source/linking/driver obligations would need review before any future bundling. OpenVPN 3 license texts were inspected, not used as a blanket mobile distribution grant.
 - Outline Apache-2.0 texts are preserved as reference attribution; no official branding/affiliation claim.
 - Wintun source/wrapper and **prebuilt DLL** licenses differ. Preserve `LICENSES/Wintun-0.14.1.txt`; do not describe the DLL as MIT. Embedded amd64 bytes matched official archive, Authenticode was valid with WireGuard LLC signer. This establishes provenance, not successful installed routing.
@@ -1020,6 +1032,10 @@ Requires an authorized Windows test machine and human administrator installation
 - **Alpine sources:** `gitlab.alpinelinux.org` answers automated downloads with HTTP 418. Use the official GitHub mirror `alpinelinux/aports` (sparse, shallow clone). When sourcing an APKBUILD, use `set +u`, and give `abuild` `</dev/null` inside loops.
 - **License inventory:** `collect-licenses.py` must also list Go modules for `GOOS=linux`. Run on Windows, it previously missed the Linux-only dependencies of the server (netlink, nftables, nfqueue, dbus).
 - **Scripts with heredocs:** a node script written through a Bash heredoc ends at its first line that is exactly `EOF`, and the rest runs as shell. Write edit scripts with the Write tool.
+- **sing wrappers on UDP:** a wrapper around a client's packet connection must expose `UpstreamWriter` (sing sizes write buffers from the header room of the writer behind it) and may expose `Upstream`, but must not be `ReaderReplaceable` or offer a read waiter, or sing's copy loop reads past it. Test any such change with real Shadowsocks UDP through the server (`udp_test.go`); unit tests with fake connections missed the crash.
+- **AmneziaWG endpoint:** its gVisor stack is created in `Start` (initialize stage), not in `NewEndpoint`: sing-box closes only started components, and the server validates each new configuration without starting it, so moving it back leaks a stack per change. The TUN adapter must close its events channel, or amneziawg-go's reader keeps every closed device alive.
+- **Windows CI and PowerShell:** a multi-line `pwsh` step checks only its last native command, which hid failing process tests for a while; steps with several commands run under `shell: bash`. OpenSSL 3.4 and later refuse `-days -1`; tests set past dates with `-not_before`/`-not_after` when that fails.
+- **Windows Defender Firewall during tests:** each `go test` binary has a new path, so a listener on all addresses makes Windows ask every run. Package tests listen on loopback only (`listenAddress`, `apiListenHost`, and `portFree` checks only that address in tests); keep new test listeners on 127.0.0.1.
 
 ## 18. Definition of done and handover maintenance
 

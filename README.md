@@ -51,7 +51,7 @@
 - **One service, three front ends:** the desktop app, the `ghostlink` CLI and an optional restricted MCP bridge for AI agents all control the same local service.
 - **Your own server, Outline-style:** install one `.deb`/`.rpm` on a Linux machine with Docker (the image is inside the package), paste the management key it prints into the app, then create users and keys and set traffic rules from **Servers I run** or `ghostlink server`.
 - **Server traffic rules:** block sites, IP ranges, ports, BitTorrent or outgoing mail for everyone or per user; data limits and usage per user; local networks and the server itself are always off-limits to VPN users.
-- **Speed limits:** one cap per client in MB/s, download and upload alike, across all its devices, with an optional default for everyone. Changes apply live, on every protocol, without disconnecting anyone.
+- **Speed limits:** one cap per client in MB/s, download and upload alike, across all its devices (IKEv2/IPsec sessions have a budget of their own), with an optional default for everyone. Changes apply live, on every protocol, without disconnecting anyone.
 - **Move from Outline:** one command takes over an Outline server on the same machine; every access key becomes a client and the `ss://` keys people already have keep working.
 - **Server monitoring:** live speed per user, who is online, traffic types (web, video/QUIC, calls, BitTorrent…), protocols used, optional top services, connection addresses and server health. History rotates itself so it never fills the disk.
 - **iPhone, iPad and Mac with no app:** the server can also serve Apple's built-in IKEv2 and IPsec VPN, and hands each person a configuration profile (`.mobileconfig`) that installs it in Settings. Sign-in is by password or certificate.
@@ -79,7 +79,7 @@ Pre-release builds are attached to [GitHub Releases](https://github.com/winyanna
 | Source | `Ghostlink-<version>-worker-corresponding-source.zip` | GPL source of the tunnel worker, the server and the mesh agent |
 | Source | `Ghostlink-<version>-ipsec-component-source-<x64\|arm64>.tar.gz` | GPL source of strongSwan, iptables and the other copyleft packages in the server's IPsec image |
 
-**Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)). Open **Ghostlink** from the Start menu or the desktop shortcut. Windows SmartScreen warns about unsigned builds. Use v0.3.1 or later on Windows: in earlier installers, the app could not reach the installed service.
+**Windows.** Install [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it is not already present, then run the MSI. It needs administrator consent and installs a LocalSystem service that only your Windows account may control. For an unattended install, pass the intended user's SID as `GHOSTLINK_OWNER_SID` ([details](docs/development/windows.md)); installing a newer version with it later changes the owner. Open **Ghostlink** from the Start menu or the desktop shortcut. Windows SmartScreen warns about unsigned builds. Use v0.3.1 or later on Windows: in earlier installers, the app could not reach the installed service.
 
 **Linux.** Install the package for your distribution with `sudo`. It sets you as the owner and starts the `ghostlinkd` service:
 
@@ -89,7 +89,7 @@ sudo dnf install ./ghostlink-<version>-1.x86_64.rpm      # Fedora / RHEL family
 ghostlink status
 ```
 
-Full-tunnel routing is off on Linux until you add `GHOSTLINK_FLAGS=--allow-full-tunnel` to `/etc/ghostlink/ghostlinkd.env` and restart the service. Protect your SSH access first if the machine is remote. The `.tar.gz` contains the same files plus an `INSTALL.txt` for a manual install ([details](docs/development/linux.md)).
+Full-tunnel routing is off on Linux until you add `GHOSTLINK_FLAGS=--allow-full-tunnel` to `/etc/ghostlink/ghostlinkd.env` and restart the service. That covers Shadowsocks and VLESS keys, OpenVPN profiles that redirect the gateway, and WireGuard/AmneziaWG profiles whose `AllowedIPs` cover every public IPv4 address, also in pieces such as `0.0.0.0/1, 128.0.0.0/1`. Protect your SSH access first if the machine is remote. The `.tar.gz` contains the same files plus an `INSTALL.txt` for a manual install ([details](docs/development/linux.md)).
 
 ## Quick start
 
@@ -105,7 +105,7 @@ Closing the window keeps Ghostlink in the tray, and the VPN service keeps runnin
 |---|---|---|
 | Shadowsocks (Outline) | `ss://`, `ssconf://` | Modern AEAD ciphers only. Dynamic `ssconf://` keys are fetched over verified HTTPS from public hosts, with no redirects. |
 | VLESS | `vless://`, Amnezia XRay `vpn://` | REALITY (or TLS) over TCP, with XTLS Vision. Plaintext, insecure TLS, `xhttp` and mKCP are refused. |
-| WireGuard | `.conf`, Amnezia `vpn://` | One peer per file. Limited `AllowedIPs` become a split tunnel. |
+| WireGuard | `.conf`, Amnezia `vpn://` | One peer per file. Limited `AllowedIPs` become a split tunnel, but such a profile cannot pass the connection check through the tunnel yet, so it fails after the connection timeout (keys from a Ghostlink server route everything). |
 | AmneziaWG | `.conf`, Amnezia `vpn://` | Legacy and 2.0 parameters (junk packets, header ranges, I1–I5 signature packets, header protection). |
 | OpenVPN | `.ovpn` via CLI | Optional, using a separately installed OpenVPN Community. Inline certificates only, strict allowlist. |
 
@@ -147,7 +147,7 @@ ghostlink agent grant --name assistant --token-file C:\private\assistant.token
 ghostlink-mcp --token-file C:\private\assistant.token
 ```
 
-A grant is read-only: profiles, status and diagnostics. Add `--control` to the grant **and** `--allow-control` to the bridge to allow connect, disconnect and switch. Agents can never import keys, change split tunneling, manage servers or issue grants. Revoke with `ghostlink agent revoke --name assistant`. Tokens are written to a new private file and never printed. A token limits what an agent can ask the service to do; it is not a sandbox against other programs running as your user.
+A grant is read-only: profiles, status and diagnostics. Add `--control` to the grant **and** `--allow-control` to the bridge to allow connect, disconnect and switch. Agents can never import keys, change split tunneling, manage servers or issue grants. Revoke with `ghostlink agent revoke --name assistant` (a name with no grant is an error, so a typo cannot look like success). Tokens are written to a new private file and never printed; to change a grant, issue it again into a new token file. A token limits what an agent can ask the service to do; it is not a sandbox against other programs running as your user.
 
 ## How it works
 
@@ -168,7 +168,7 @@ flowchart LR
 - **Lifecycle.** The service generates each tunnel's configuration privately, verifies it, starts the worker and stops it gracefully. If the service dies, the worker shuts down on its own.
 - **Your server.** `ghostlink-server` runs the same unmodified engines in a hardened container, with an HTTPS management API. The service talks to it with the certificate pinned inside the TLS handshake, so the secret API path never reaches anyone else.
 
-More: [protocol design](docs/architecture/protocols.md) · [architecture record](docs/architecture/decision-record.md).
+More: [protocol design](docs/architecture/protocols.md) · [original architecture record (OpenVPN era)](docs/architecture/decision-record.md).
 
 ## Security and privacy
 
@@ -196,7 +196,7 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline
 ```
 
-Every access key becomes a client with the same password, port and cipher, plus its name and data limit. Keys on ports below 1024 (for example 443) can't be kept and get a new key, which the check lists. If anything fails, or the command is interrupted, Outline is put back as it was. On a server with under 1 GB of memory and swap, add `--add-swap`.
+Every access key becomes a client with the same password, port and cipher, plus its name and data limit. Keys on ports below 1024 (for example 443) can't be kept and get a new key, which the check lists. If anything fails, or the command is interrupted, Outline is put back as it was, unless the import was already saved: then Ghostlink keeps the clients and Outline stays stopped. On a server with under 900 MB of memory and swap, add `--add-swap`.
 
 The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
 
@@ -214,7 +214,7 @@ Upgrading the package keeps everything. Full guide: [Ghostlink server](docs/depl
 
 New in 0.6.0: your Ghostlink server can coordinate a **mesh**, a private network between your Linux servers. Each server you add gets a mesh address (`100.96.x.x`) and the name `<server>.mesh`, and reaches the others over kernel WireGuard wherever they run.
 
-- **Connections:** pairs connect directly. Servers behind NAT, which can't, go through a relay (your own server).
+- **Connections:** pairs connect directly. Two servers behind NAT usually go through a relay (your own server), and switch to a direct path as soon as one works.
 - **Access rules:** tags such as `web → db TCP 5432` limit what may connect.
 - **Shared subnets:** a server can share the private network behind it after you approve it.
 
@@ -229,7 +229,7 @@ The **Mesh** card in the **Network** view, in the app (**Servers I run → Manag
 
 Mesh nodes are Linux servers in this version; Windows servers and the Ghostlink app on Windows will follow. Guide: [Ghostlink mesh](docs/deployment/mesh.md).
 
-Also available: [an Outline-compatible Shadowsocks server](docs/deployment/outline-server.md) generated offline and deployed with systemd/Ansible, and an optional OpenVPN PKI tool.
+Also available: the earlier [offline Outline-compatible proxy](docs/deployment/outline-server.md), a plain Shadowsocks server with static keys deployed with systemd/Ansible (use the Ghostlink server for new servers), and an optional OpenVPN PKI tool.
 
 ## Building from source
 
@@ -294,7 +294,7 @@ Real-engine traffic tests are opt-in and need the built worker; see the [verific
 | Ghostlink server | [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) |
 | Move from Outline | [docs/deployment/migrate-from-outline.md](docs/deployment/migrate-from-outline.md) |
 | Mesh of Linux servers | [docs/deployment/mesh.md](docs/deployment/mesh.md) |
-| Offline Outline-compatible server | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
+| Earlier offline Outline-compatible proxy | [docs/deployment/outline-server.md](docs/deployment/outline-server.md) |
 | Web UI (dashboard and desktop) | [ui/README.md](ui/README.md) |
 | Developer / AI-agent handover | [agent.md](agent.md) |
 

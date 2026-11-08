@@ -101,14 +101,17 @@ Limits: OpenVPN profiles ignore the policy, and site rules cannot see names that
   2. hijack DNS (protocol DNS or port 53);
   3. `resolve`;
   4. always-on internal blocks;
-  5. API port and own-IP blocks;
+  5. the API, dashboard and (with the mesh on) mesh ports on any address, and the server itself: the hostname's IP and every public address on the host's interfaces;
   6. per-user blocks (`auth_user`);
   7. exempt users routed `direct`;
   8. global blocks;
   9. `final: direct`.
+- **UDP after the first packet:** sing-box judges a UDP session by its first packet. `guard.go` (`udpGuard`, applied in `policedPacketConn`) checks every later packet the client sends to another destination against the address and port parts of the same rules in the same order: DNS, the always-on blocks and the server's own addresses, the client's own blocks, exemption, the global blocks. Site-name blocks need the session's sniffed name and apply only to its first packet. WireGuard and AmneziaWG endpoints also open one NAT session per destination (see *AmneziaWG endpoint*).
 - **DNS rules:** per-user, then exempt, then global block rules answer `NXDOMAIN`.
-- **Usage:** `usage.go` is a router `ConnectionTracker`. It counts each user's bytes for connections, packet connections and pre-matched flows, and outlives engine reloads.
-- **Changes:** `service.go` applies each change to a copy of the state. It restarts the engine only if the rendered configuration differs, and saves only after the engine started. `engine.go` validates a new configuration fully before closing the running instance, because the ports must be free; if the new one fails, it restarts the last good one.
+- **Usage:** `Monitor` in `monitor.go` is the router `ConnectionTracker` (see *Monitoring*). It counts each user's bytes for connections, packet connections and pre-matched flows, and outlives engine reloads.
+- **Changes:** `service.go` applies each change to a copy of the state. It restarts the engine only if the rendered configuration differs, and saves only after the engine started. `engine.go` validates a new configuration fully before closing the running instance, because the ports must be free; if the new one fails, it restarts the last good one. A protocol's new port, and a new dashboard port, are tried before they are saved.
+- **Engine that cannot start:** `Start` reports it and carries on, so the management API, the dashboard and the server commands come up and can fix it (usually a port another program holds). `ensureEngine` tries again every 30 s, and also restarts the engine when the host's addresses change; `GET /live` reports `health.engine_error` meanwhile.
+- **Engine log:** off by default (`serve --log-level`), because sing-box logs the names users look up and the addresses they reach. The container log holds the server's own warnings and errors.
 - **Keys:** `keys.go` renders them. `ss://` uses SIP002 userinfo plus `outline=1`. `vless://` carries `pbk`, `sid`, `sni` and `fp=chrome`. `vpn://` uses Amnezia's qCompress layout, with no SSH fields.
 
 The client service manages servers through `core/vpn-engine/src/server_admin.rs`:
@@ -124,12 +127,12 @@ The client service manages servers through `core/vpn-engine/src/server_admin.rs`
 - `Protocol`, the sniffed traffic type;
 - `Domain` or the FQDN destination, only when site stats are on. Domains map through a small service table or else `publicsuffix`, and are capped at 500 labels per user per day.
 
-Open connections are counted by wrappers that embed sing's counter conns, so upstream and zero-copy interfaces are kept, and they decrement once on `Close`/`CloseFlow`.
+Open connections are counted by wrappers that embed sing's counter conns and decrement once on `Close`/`CloseFlow`. For TCP they keep the upstream and zero-copy interfaces. For UDP, `policedPacketConn` is deliberately not `ReaderReplaceable` and has no read waiter or batch path, so every packet the client sends goes through its `ReadPacket` (policing and `udpGuard`). It does expose `Upstream`, which sing follows to find the WireGuard stack's handshake reports and NAT timeout, and `UpstreamWriter`, from which sing sizes the header room of the buffers it writes to the client; without it the first Shadowsocks UDP reply overflowed its buffer and crashed the server (an unreleased build only).
 
 Periodic work in `service.go`:
 - **Every second:** a sampler turns totals into per-user rates and a 120-sample server series.
 - **Every 5 s:** a WireGuard/AmneziaWG peer poll, and the IPsec component's session report.
-- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, another peer poll, and a disk check.
+- **Every 30 s:** data-limit accounting, `Flush` into `history.go`, another peer poll, a disk check, and `ensureEngine` (start the engine again if it is down, or if the host's addresses changed).
 - **Every 5 min:** a save with rotation.
 
 The peer poll (`awg.Endpoint.PeerStatus`: UAPI `endpoint=`, `last_handshake_time_*` and `rx_bytes`) supplies real client addresses for WireGuard-family users, whose routed source is only a tunnel address, and shows whether each peer is still sending.
