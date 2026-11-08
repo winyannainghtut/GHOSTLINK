@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import random
 import re
 import shutil
 from pathlib import Path
@@ -54,15 +55,16 @@ def error_of(result):
 
 
 def free_port():
-    """A loopback port free for TCP and UDP alike, as a Shadowsocks listener takes both. The UDP
-    port comes from the system first: on Windows, Hyper-V and WinNAT reserve many UDP blocks in
-    the dynamic range, so a port free on TCP is often refused for UDP."""
-    for _ in range(100):
+    """A loopback port free for TCP and UDP alike, as a Shadowsocks listener takes both. It comes
+    from 10000-32000, where the Ghostlink server picks its own ports: on Windows, Hyper-V and
+    WinNAT reserve many TCP and UDP blocks of the dynamic range (49152-65535), so a port the
+    system hands out for one protocol is often refused for the other."""
+    for _ in range(200):
+        port = random.randint(10_000, 32_000)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-            udp.bind(("127.0.0.1", 0))
-            port = udp.getsockname()[1]
             try:
                 tcp.bind(("127.0.0.1", port))
+                udp.bind(("127.0.0.1", port))
             except OSError:
                 continue
             return port
