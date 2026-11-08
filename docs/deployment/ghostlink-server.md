@@ -111,7 +111,7 @@ ghostlink server rules set --server home --block-site ads.example --block-bittor
 ghostlink server usage --server home
 ```
 
-In the app, **Servers I run → Manage** has the same actions. **Keys** lets you copy a key or a `.conf`, or **Use on this device**.
+In the app, **Servers I run → Manage** has the same actions. **Keys** shows a key's QR code, copies the key, saves a `.conf` (WireGuard and AmneziaWG) or an Apple profile to Downloads, saves a connection kit, or adds the key to this device with **Use on this device**.
 
 ## Manage on the server
 

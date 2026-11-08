@@ -8,13 +8,13 @@ React, TypeScript, Tailwind CSS and Lucide icons, built with Vite.
 | `admin/` | The server-administration views (overview, clients, network, mesh, settings, new client) and their parts, such as the speed limit control (`admin/SpeedLimit.tsx`). They are used by both apps through a transport (`admin/api.ts`) |
 | `dashboard/` | The server dashboard shell. Its transport is this server's `/api` |
 | `desktop/` | The desktop app: My servers, Servers I run (the admin views over the local service) and Settings. `desktop/src/routes.ts` maps the admin views' requests onto the service's `server_call` operations |
-| `tests/` | `npm test`: the desktop mapping against the Rust `ServerOp` contract |
+| `tests/` | `npm test`: the desktop mapping against the Rust `ServerOp` contract, the formatting (`shared/format.ts`), speed and data limits (`admin/limits.ts`), and the desktop app's local IDs and failure messages. Tests import plain `.ts` modules without imports, so pure logic lives in such modules rather than in `.tsx` files |
 
 ```sh
 cd ui
 npm ci --ignore-scripts      # exact versions from package-lock.json
 npm run build                # typecheck, then build the dashboard and the desktop UI
-npm test                     # the desktop request mapping
+npm test                     # the request mapping, formatting, limits and desktop helpers
 GHOSTLINK_DASHBOARD=http://127.0.0.1:8080 npm run dev:dashboard   # live reload against a real dashboard
 ```
 
@@ -23,10 +23,10 @@ GHOSTLINK_DASHBOARD=http://127.0.0.1:8080 npm run dev:dashboard   # live reload 
 - The **Web UI** workflow rebuilds both and fails if the committed files differ.
 - Don't edit the files there; change `ui/` and rebuild.
 
-**Content-Security-Policy.** The dashboard's CSP allows only its own origin, with no inline scripts or style attributes. So:
+**Content-Security-Policy.** The dashboard's CSP allows scripts, styles and connections only from its own origin, with no inline scripts or style attributes. Images may also be `data:` or `blob:` URLs: QR codes are shown as `data:image/svg+xml` (`svgURL` in `admin/api.ts`). The desktop app's CSP (`apps/desktop/src-tauri/tauri.conf.json`) allows `data:` images for the same reason. So:
 - style with classes, not `style="…"`. React's `style` prop is applied through the CSSOM, which the CSP allows; use it only for computed positions.
 - keep fonts and icons bundled. The fonts are Plus Jakarta Sans and JetBrains Mono (SIL OFL 1.1, Latin subsets), self-hosted from `@fontsource-variable`. Apple devices use San Francisco first.
-- `assetsInlineLimit` is 0, so nothing becomes a `data:` URI.
+- `assetsInlineLimit` is 0, so no bundled file becomes a `data:` URI.
 
 `internal/server/dashboard_test.go` checks the embedded build: a single script and stylesheet, flat file names, and no inline code.
 
@@ -38,3 +38,7 @@ GHOSTLINK_DASHBOARD=http://127.0.0.1:8080 npm run dev:dashboard   # live reload 
 - Tabular figures (`.num`) for every live number.
 - Layouts use the whole window, up to 2400 px. On wide screens the card grids add columns. Use rem breakpoints (`min-[112.5rem]:`), because Tailwind sorts px breakpoints before its rem ones.
 - A frosted element can't blur through a frosted parent. Render floating panels that must blur the page (such as the Island's) in a portal.
+
+**Kit notes.**
+- `cx()` only joins class names, and a kit component's own utilities often come later in the stylesheet than the caller's. To override one (a card's padding, a radius), add `!`: `p-0!`, `sm:p-5!`.
+- Sheets are modal `<dialog>`s. Mark the field to focus first with `data-autofocus`: React's `autoFocus` runs before the dialog opens. Toasts are shown inside the topmost open sheet, above its backdrop.
