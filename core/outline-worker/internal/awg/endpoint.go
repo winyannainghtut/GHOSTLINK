@@ -121,6 +121,16 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	if options.UDPTimeout != 0 {
 		udpTimeout = time.Duration(options.UDPTimeout)
 	}
+	var udpMapping tun.NATMapping
+	var udpFiltering tun.NATFiltering
+	if !ep.isClient() {
+		// Route rules judge a UDP flow once, when its NAT session opens. The default mapping keeps
+		// one session per peer socket, so after one allowed datagram the same socket could reach
+		// any other destination unchecked, the internal blocks included. One session per
+		// destination makes every destination pass the rules.
+		udpMapping = tun.NATMappingAddressAndPortDependent
+		udpFiltering = tun.NATFilteringAddressAndPortDependent
+	}
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)
 	ep.tunDevice, err = wireguard.NewDevice(wireguard.DeviceOptions{
 		Context:         ctx,
@@ -128,6 +138,8 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		System:          false,
 		Handler:         ep,
 		UDPTimeout:      udpTimeout,
+		UDPMapping:      udpMapping,
+		UDPFiltering:    udpFiltering,
 		ICMPTimeout:     C.ICMPTimeout,
 		InterfaceFinder: networkManager.InterfaceFinder(),
 		CreateDialer: func(interfaceName string) N.Dialer {

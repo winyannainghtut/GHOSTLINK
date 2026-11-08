@@ -354,6 +354,99 @@ func TestServerRulesMatchPeerUser(t *testing.T) {
 	}
 }
 
+// upstreamClient runs an unmodified, unobfuscated amneziawg-go client with the tunnel address
+// 10.88.0.2 against a server endpoint on serverPort.
+func upstreamClient(t *testing.T, server, client keyPair, serverPort uint16) *netstack.Net {
+	t.Helper()
+	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.88.0.2")}, nil, 1376)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := updevice.NewDevice(tunDevice, upconn.NewStdNetBind(), updevice.NewLogger(updevice.LogLevelSilent, ""))
+	config := fmt.Sprintf("private_key=%s\npublic_key=%s\nendpoint=127.0.0.1:%d\nallowed_ip=0.0.0.0/0\npersistent_keepalive_interval=1",
+		hexKey(t, client.private), hexKey(t, server.public), serverPort)
+	if err := upstream.IpcSet(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstream.Up(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(upstream.Close)
+	return tnet
+}
+
+// udpEcho answers each datagram sent to it on 127.0.0.1 with "echo " and the datagram.
+func udpEcho(t *testing.T) uint16 {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buffer := make([]byte, 2048)
+		for {
+			n, from, err := conn.ReadFrom(buffer)
+			if err != nil {
+				return
+			}
+			conn.WriteTo(append([]byte("echo "), buffer[:n]...), from)
+		}
+	}()
+	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
+}
+
+// udpExchange sends a datagram from socket to the server's tunnel address on port and returns the
+// reply that comes back from there, or false if none arrives within about attempts seconds.
+func udpExchange(socket net.PacketConn, port uint16, attempts int) (string, bool) {
+	target := &net.UDPAddr{IP: net.IPv4(10, 88, 0, 1), Port: int(port)}
+	buffer := make([]byte, 2048)
+	for attempt := 0; attempt < attempts; attempt++ {
+		if _, err := socket.WriteTo([]byte(fmt.Sprint("to ", port)), target); err != nil {
+			return "", false
+		}
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			socket.SetReadDeadline(deadline)
+			n, from, err := socket.ReadFrom(buffer)
+			if err != nil {
+				continue
+			}
+			// Ignore a late reply to an earlier exchange on the same socket.
+			if address, ok := from.(*net.UDPAddr); ok && address.Port == int(port) {
+				return string(buffer[:n]), true
+			}
+		}
+	}
+	return "", false
+}
+
+// The route rules see every UDP destination, not only the first one a socket sends to. Otherwise
+// a client could send one allowed datagram and then reach blocked destinations, the server's
+// internal ranges included, from the same socket.
+func TestServerJudgesEveryUDPDestination(t *testing.T) {
+	server, client := newKeyPair(t), newKeyPair(t)
+	serverPort := freePort(t, "udp")
+	allowed, blocked, other := udpEcho(t), udpEcho(t), udpEcho(t)
+	rules := fmt.Sprintf(`{"port":[%d],"action":"reject"}`, blocked)
+	startBox(t, serverConfig(server, serverPort, rules, []string{peerJSON("alice", client, "10.88.0.2/32")}, nil))
+	tnet := upstreamClient(t, server, client, serverPort)
+	socket, err := tnet.ListenUDPAddrPort(netip.AddrPortFrom(netip.MustParseAddr("10.88.0.2"), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	if reply, ok := udpExchange(socket, allowed, 6); reply != fmt.Sprint("echo to ", allowed) {
+		t.Fatalf("no UDP through the server: %q %v", reply, ok)
+	}
+	if reply, ok := udpExchange(socket, blocked, 2); ok {
+		t.Fatalf("a datagram to a blocked port passed after an allowed one from the same socket: %q", reply)
+	}
+	if reply, ok := udpExchange(socket, other, 3); reply != fmt.Sprint("echo to ", other) {
+		t.Fatalf("a second allowed destination from the same socket got no answer: %q %v", reply, ok)
+	}
+}
+
 func TestUAPIInjectionIsRejected(t *testing.T) {
 	keys := newKeyPair(t)
 	for _, bad := range []map[string]string{
