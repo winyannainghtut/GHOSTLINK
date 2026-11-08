@@ -61,7 +61,12 @@ resource "aws_instance" "vpn" {
   key_name               = var.key_name
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.vpn.id]
-  metadata_options { http_tokens = "required" }
+  # Hop limit 1: metadata token replies end at the instance, so VPN clients whose traffic it
+  # forwards never get one, whatever the AMI or account default says.
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
   root_block_device {
     encrypted   = true
     volume_type = "gp3"

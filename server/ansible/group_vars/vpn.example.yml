@@ -3,3 +3,6 @@ ghostlink_public_interface: eth0
 ghostlink_server_bundle: /secure/offline-generated/server-bundle.tar.gz
 # This playbook does not replace host input firewall rules or SSH rules.
 # Allow inbound UDP 1194 in the host firewall and cloud security group separately.
+# If the host firewall drops forwarded traffic (ufw enabled, or Docker installed), clients connect
+# but reach nothing. Allow forwarding from tun0 to this interface there too, replies included,
+# for example `ufw route allow in on tun0 out on eth0`. The playbook's own rules can only drop.

@@ -94,4 +94,4 @@ These mechanisms reduce specific failures; they do not certify the platform defi
 - **Rotation:** age limits, a hard size cap with a documented trimming order, and a low-disk guard that pauses detail recording below 500 MB or 5 % free.
 - **Exposure:** the history file is 0600 in the 0700 state directory. Connection addresses identify people's networks: share the dashboard login link and management key only with administrators.
 
-Do not commit state, PKI, access keys, token files or build tools. Keep offline CA backups encrypted and separate from server backups. The optional OpenVPN PKI bundle explicitly excludes CA and client private keys. Update CRLs on the server after revocation and before their expiry.
+Do not commit state, PKI, access keys, token files or build tools. Keep offline CA backups encrypted and separate from server backups. The optional OpenVPN PKI bundle explicitly excludes CA and client private keys. Deploy a new bundle after each revocation. Its CRL is valid for 10 years; one made by an earlier version lasts 30 days, after which the OpenVPN server refuses every client, so run `pki.py crl` and deploy a new bundle once.
