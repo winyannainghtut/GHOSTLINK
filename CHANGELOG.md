@@ -4,6 +4,10 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-09
+
+New servers run only Shadowsocks (Outline-compatible), with the other protocols a switch away, and turning a protocol on now checks its port and says which port to allow. Existing servers keep their settings.
+
 ### Changed
 
 - **New servers run only Shadowsocks:** a new Ghostlink server turns on only Shadowsocks (Outline-compatible). AmneziaWG, WireGuard and VLESS-REALITY still get their ports and keys when the server is created, but they are off until you turn them on: their switch in the app or the dashboard, or `sudo ghostlink-server set --enable amneziawg` (also `wireguard`, `vless`). Turning one on prints the port to allow in the firewall. A key for a protocol that is off is refused, and the message says how to turn the protocol on. A protocol without keys never started, so the switches alone save no memory: what changes is that new clients, the hints and the installer now create Shadowsocks keys, so a new server starts no AmneziaWG, WireGuard or VLESS-REALITY engine until you choose one. A server that already has only Shadowsocks keys uses the same memory as before.
@@ -475,7 +479,8 @@ What behaves differently after an upgrade:
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.7.0...v0.8.0
