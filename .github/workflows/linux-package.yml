@@ -115,8 +115,23 @@ jobs:
           docker inspect ghostlink-server --format '{{.State.Running}} readonly={{.HostConfig.ReadonlyRootfs}} capdrop={{.HostConfig.CapDrop}} user={{.Config.User}} net={{.HostConfig.NetworkMode}}' | tee container.txt
           grep -q '^true readonly=true capdrop=\[ALL\] user=[0-9]*:[0-9]* net=host$' container.txt
           sudo stat -c '%a %U' /var/lib/ghostlink-server | grep -qx '700 ghostlink-server'
+          # Root never follows a symlink in the state, which the container account controls:
+          # "ipsec enable" refuses one in place of the ipsec directory and changes nothing.
+          sudo mkdir -m 0755 /tmp/not-ipsec
+          sudo ln -sT /tmp/not-ipsec /var/lib/ghostlink-server/ipsec
+          if sudo ghostlink-server ipsec enable 2> refused.txt; then echo "ipsec enable followed a symlink" >&2; exit 1; fi
+          cat refused.txt
+          grep -q 'not a plain directory' refused.txt
+          test "$(stat -c '%U %a' /tmp/not-ipsec)" = 'root 755' && test ! -e /etc/sysctl.d/90-ghostlink-ipsec.conf
+          sudo rm /var/lib/ghostlink-server/ipsec && sudo rmdir /tmp/not-ipsec
           # An upgrade (here: reinstall) keeps users and keys.
           sudo apt-get install -y --reinstall "./$deb"
+          curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
+          # The installer's --reinstall really reinstalls: the post-install recreates the server.
+          before=$(docker inspect --format '{{.Id}}' ghostlink-server)
+          cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --reinstall | tee reinstall.txt
+          grep -q 'Reinstalling Ghostlink server' reinstall.txt
+          test "$(docker inspect --format '{{.Id}}' ghostlink-server)" != "$before"
           curl -sk --fail "$url/users" | jq -e 'length == 1 and (.[0].keys | length) == 4'
           # Server-side admin commands (inside the container, through the local API).
           sudo ghostlink-server user add smoke --limit 1GB
