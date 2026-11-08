@@ -8,6 +8,12 @@
     <Property Id="GHOSTLINK_OWNER_SID" Secure="yes">
       <RegistrySearch Id="ExistingOwner" Root="HKLM" Key="Software\Ghostlink" Name="OwnerSID" Type="raw" Win64="yes" />
     </Property>
+    <!-- AppSearch replaces a GHOSTLINK_OWNER_SID given on the command line with the owner the
+         previous installation saved, so an upgrade could never change the owner. Save the
+         command-line value before the search and put it back afterwards; without one, the
+         previous owner is kept. AppSearch runs only in the first sequence, and so do these. -->
+    <SetProperty Id="GhostlinkOwnerFromCommandLine" Value="[GHOSTLINK_OWNER_SID]" Before="AppSearch" Sequence="first" />
+    <SetProperty Id="GHOSTLINK_OWNER_SID" Action="RestoreGhostlinkOwnerFromCommandLine" Value="[GhostlinkOwnerFromCommandLine]" After="AppSearch" Sequence="first">GhostlinkOwnerFromCommandLine</SetProperty>
     <SetProperty Id="GHOSTLINK_OWNER_SID" Value="[UserSID]" Before="LaunchConditions" Sequence="both">NOT GHOSTLINK_OWNER_SID</SetProperty>
     <Property Id="WINDOWS_BUILD"><RegistrySearch Id="WindowsBuildSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Win64="yes" /></Property>
     <Condition Message="Ghostlink supports Windows 10/11 x64."><![CDATA[Installed OR (VersionNT64 AND WINDOWS_BUILD >= 10240)]]></Condition>
