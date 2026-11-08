@@ -39,10 +39,17 @@ type InitOptions struct {
 	PortFree func(network string, port uint16) bool
 }
 
-// portFree tries the dual-stack wildcard and the IPv4 one: Windows reserves port ranges per
-// IP version, so a port free on [::] can still be refused on 0.0.0.0 or 127.0.0.1.
+// portFree reports whether a port can be bound where the server will listen. In production
+// that is every address, so it tries the dual-stack wildcard and the IPv4 one: Windows reserves
+// port ranges per IP version, so a port free on [::] can still be refused on 0.0.0.0 or
+// 127.0.0.1. Tests listen on loopback only, so they check just that address, which also keeps
+// Windows Defender Firewall from asking about every freshly built test binary.
 func portFree(network string, port uint16) bool {
-	for _, address := range []string{fmt.Sprintf(":%d", port), fmt.Sprintf("0.0.0.0:%d", port)} {
+	addresses := []string{fmt.Sprintf(":%d", port), fmt.Sprintf("0.0.0.0:%d", port)}
+	if ip := net.ParseIP(listenAddress); ip != nil && ip.IsLoopback() {
+		addresses = []string{net.JoinHostPort(listenAddress, fmt.Sprint(port))}
+	}
+	for _, address := range addresses {
 		switch network {
 		case "tcp":
 			listener, err := net.Listen("tcp", address)
