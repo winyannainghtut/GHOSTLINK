@@ -84,7 +84,7 @@ cat > "$work/pkg/doc/README.md" <<EOF
 A self-hosted VPN server in a Docker container: AmneziaWG, WireGuard, VLESS-REALITY and
 Shadowsocks (Outline-compatible), plus optional IKEv2/IPsec for the built-in VPN of iPhone, iPad
 and Mac (\`sudo ghostlink-server ipsec enable\`). Installing the package loads the bundled image, creates the
-server and prints a **management key**. Paste it into the Ghostlink app (Servers I manage) or
+server and prints a **management key**. Paste it into the Ghostlink app (Servers I run) or
 \`ghostlink server add\` to create users and keys and set traffic rules.
 
     sudo ghostlink-server show-key            # print the management key again
@@ -104,7 +104,10 @@ chmod -R u=rwX,go=rX "$work/pkg"
 
 sed -e "s|@VERSION@|$version|" -e "s|@GOARCH@|$goarch|" -e "s|@PKG@|$work/pkg|g" \
   packages/linux/server/ghostlink-server.nfpm.yaml > "$work/nfpm.yaml"
-for packager in deb rpm; do
-  nfpm package --config "$work/nfpm.yaml" --packager "$packager" --target "$out/"
-done
+# The file names carry the version as released (0.9.0-rc.1), which is what install-server.sh
+# downloads. nfpm's own names write a pre-release as 0.9.0~rc.1, which GitHub may rename on
+# upload. Inside the packages it stays 0.9.0~rc.1, so that it sorts before 0.9.0.
+case "$goarch" in amd64) rpm_arch=x86_64 ;; arm64) rpm_arch=aarch64 ;; esac
+nfpm package --config "$work/nfpm.yaml" --packager deb --target "$out/ghostlink-server_${version}-1_${goarch}.deb"
+nfpm package --config "$work/nfpm.yaml" --packager rpm --target "$out/ghostlink-server-${version}-1.${rpm_arch}.rpm"
 ls -l "$out"/ghostlink-server[_-]*
