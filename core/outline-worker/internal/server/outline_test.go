@@ -47,17 +47,16 @@ func decodeOutline(t *testing.T, serverJSON, keysJSON json.RawMessage) (outlineS
 	return server, keys.AccessKeys
 }
 
-// freeSharedPort is a port free on TCP and UDP alike, as Shadowsocks needs.
+// freeSharedPort is a port free on TCP and UDP alike, as Shadowsocks needs. It is picked as the
+// server picks its own (10000-32000): Windows reserves blocks of UDP ports in the dynamic
+// range that free TCP ports come from, so a free TCP port is often not free for UDP.
 func freeSharedPort(t *testing.T) int {
 	t.Helper()
-	for range 50 {
-		port := freeTCPPort(t)
-		if portFree("udp", port) && portFree("tcp", port) {
-			return int(port)
-		}
+	port, err := pickPort(map[uint16]bool{}, portFree, "tcp", "udp")
+	if err != nil {
+		t.Fatal("no port is free on both TCP and UDP")
 	}
-	t.Fatal("no port is free on both TCP and UDP")
-	return 0
+	return int(port)
 }
 
 // outlineURL is the key an Outline client already has.

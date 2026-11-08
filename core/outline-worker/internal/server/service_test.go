@@ -19,12 +19,12 @@ import (
 // held by another program.
 func busyServer(t *testing.T) (*testServer, net.Listener, uint16) {
 	t.Helper()
-	busy, err := net.Listen("tcp4", "127.0.0.1:0")
+	port := uint16(freeSharedPort(t))
+	busy, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { busy.Close() })
-	port := uint16(busy.Addr().(*net.TCPAddr).Port)
 	server := newTestServer(t, func(s *State) {
 		s.Shadowsocks.Port = port
 		u := &User{ID: s.newID(), Name: "Early", Enabled: true, Keys: []*Key{}}
@@ -74,7 +74,7 @@ func TestEngineThatCannotStartLeavesTheAPIUp(t *testing.T) {
 // The busy port can be moved with the server's own API, which brings the engine up at once.
 func TestABusyPortCanBeMovedAway(t *testing.T) {
 	server, _, _ := busyServer(t)
-	move := map[string]any{"protocols": map[string]any{Shadowsocks: map[string]any{"port": freeTCPPort(t)}}}
+	move := map[string]any{"protocols": map[string]any{Shadowsocks: map[string]any{"port": freeSharedPort(t)}}}
 	server.must(t, http.StatusOK, "PATCH", "/server", move, nil)
 	if running, _ := server.service.engine.Running(); !running || server.service.Health().EngineError != "" {
 		t.Fatalf("the engine is not up after the port moved: %s", server.service.Health().EngineError)
