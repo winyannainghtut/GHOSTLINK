@@ -223,7 +223,8 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 	if s.Dashboard.Port != 0 {
 		fixed[s.Dashboard.Port] = "the dashboard"
 	}
-	if s.meshEnabled() {
+	if s.Mesh != nil && s.Mesh.Port != 0 {
+		// Kept while the mesh is off too: turning it on again reuses its port.
 		fixed[s.Mesh.Port] = "the mesh"
 	}
 	if s.IPsec.DNSPort != 0 {
@@ -284,7 +285,7 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 
 	// Ghostlink's other protocols make way for Outline's ports.
 	used := map[uint16]bool{s.API.Port: true, s.Dashboard.Port: true, s.IPsec.DNSPort: true}
-	if s.meshEnabled() {
+	if s.Mesh != nil && s.Mesh.Port != 0 {
 		used[s.Mesh.Port] = true
 	}
 	for _, port := range ports {
@@ -336,6 +337,7 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 	// One client per key, in Outline's order.
 	defaultLimit, hasDefault := server.AccessKeyDataLimit.bytes()
 	passwords := map[string]string{}
+	limited := 0
 	for i, k := range keys {
 		u := &User{ID: s.newID(), Name: s.uniqueName(outlineKeyName(k, i)), CreatedUnix: now.Unix(), Enabled: true, Keys: []*Key{},
 			Rules: Rules{BlockedDomains: []string{}, BlockedIPs: []string{}, BlockedPorts: []string{}}}
@@ -348,6 +350,8 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 				// Outline's way to pause a key; Ghostlink's limit of 0 means "no limit".
 				u.Enabled = false
 				report.Disabled = append(report.Disabled, u.Name)
+			} else {
+				limited++
 			}
 			u.DataLimitBytes = limit
 		}
@@ -377,6 +381,14 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 		}
 		u.refreshLimit()
 		s.Users = append(s.Users, u)
+	}
+	if limited > 0 {
+		// The same number means something else here: say so, or clients are cut off weeks later.
+		who := fmt.Sprintf("%d clients keep their", limited)
+		if limited == 1 {
+			who = "1 client keeps its"
+		}
+		report.Notes = append(report.Notes, who+" Outline data limit. Outline counts only the last 30 days; here usage counts from now on and is not reset on its own, so a client that reaches its limit stays off until you reset its usage or raise the limit")
 	}
 	report.Clients = len(s.Users)
 	report.ExtraPorts = s.shadowsocksPorts()[1:]

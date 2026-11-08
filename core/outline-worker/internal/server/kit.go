@@ -93,9 +93,12 @@ func (s *State) Kit(user *User) (string, error) {
 			entry.ConfName = "ghostlink-" + key.Protocol + ".conf"
 			entry.QRNote = "This code carries the .conf for the WireGuard or AmneziaWG app."
 		}
-		content, _ := qrContent(issued, "auto")
-		if svg, err := QRSVG(content); err == nil {
-			entry.QR = template.HTML(svg) // generated here from module data only
+		// IKEv2/IPsec keys have no QR code (they install with a profile); an empty one would
+		// still render, as a code that scans to nothing.
+		if content, err := qrContent(issued, "auto"); err == nil {
+			if svg, err := QRSVG(content); err == nil {
+				entry.QR = template.HTML(svg) // generated here from module data only
+			}
 		}
 		data.Keys = append(data.Keys, entry)
 	}

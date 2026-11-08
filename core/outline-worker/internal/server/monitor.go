@@ -50,6 +50,8 @@ type Monitor struct {
 	flushedUp   map[string]int64
 	flushedDn   map[string]int64
 	flushedDet  map[detailKey]int64
+	// siteMark is each site counter's value at the last daily check (see pruneSites).
+	siteMark map[detailKey]int64
 	// speedLimits are the clients' caps in bytes per second (absent: none), applied to their
 	// pacers, also for clients whose counters are created later.
 	speedLimits map[string]int64
@@ -131,6 +133,7 @@ func NewMonitor() *Monitor {
 		flushedUp:  map[string]int64{},
 		flushedDn:  map[string]int64{},
 		flushedDet: map[detailKey]int64{},
+		siteMark:   map[detailKey]int64{},
 		peerRx:     map[string]uint64{},
 	}
 }
@@ -181,7 +184,7 @@ func (m *Monitor) detailCounter(key detailKey) *atomic.Int64 {
 			m.sites[key.user] = seen
 		}
 		if !seen[key.label] && len(seen) >= maxSitesPerUserDay {
-			key.label = "Other sites"
+			key.label = otherSites
 		}
 		seen[key.label] = true
 	}
@@ -280,13 +283,30 @@ func (m *Monitor) RoutedConnection(_ context.Context, conn net.Conn, metadata ad
 }
 
 func (m *Monitor) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+	return m.routedPacketConnection(conn, metadata, nil)
+}
+
+// noLimit is the pacer of sessions that have no client to hold to a limit.
+var noLimit pacer
+
+// routedPacketConnection counts a UDP session and polices what the client sends in it: each
+// packet to another destination than the routed one against guard (when given), and every
+// packet against the client's speed limit.
+func (m *Monitor) routedPacketConnection(conn N.PacketConn, metadata adapter.InboundContext, guard *udpGuard) N.PacketConn {
+	routed := metadata.Destination.Unwrap()
 	if metadata.User == "" {
-		return conn
+		if guard == nil {
+			return conn
+		}
+		// Every routed session has a user today (the IPsec DNS listener's are answered as DNS),
+		// but one without would still be held to the rules.
+		return &policedPacketConn{PacketConn: conn, pace: &noLimit, guard: guard, routed: routed}
 	}
 	u, up, down := m.counters(metadata)
 	u.active.Add(1)
 	// What the client sends over UDP is policed (dropped above the rate), not delayed.
-	paced := bufio.NewCounterPacketConn(&policedPacketConn{PacketConn: conn, pace: &u.upPace}, nil, []N.CountFunc{u.downPace.Wait})
+	policed := &policedPacketConn{PacketConn: conn, pace: &u.upPace, guard: guard, user: metadata.User, routed: routed}
+	paced := bufio.NewCounterPacketConn(policed, nil, []N.CountFunc{u.downPace.Wait})
 	return &trackedPacketConn{CounterPacketConn: bufio.NewInt64CounterPacketConn(paced, up, nil, down, nil), user: u}
 }
 
@@ -322,14 +342,20 @@ func (c *trackedPacketConn) Close() error {
 	return c.CounterPacketConn.Close()
 }
 
-// policedPacketConn drops the UDP packets a capped client sends above its rate. Waiting would
-// be wrong here: the Shadowsocks inbound hands every client's UDP sessions their packets from
-// one read loop, through a small blocking queue per session, so one session that waited would
-// hold up all the others. Its reads must stay opaque to sing's unwrapping (no Upstream,
-// UpstreamReader, ReaderReplaceable or read waiter), so the copy loops call its ReadPacket.
+// policedPacketConn drops the UDP packets a client sends to a destination the routing rules
+// refuse (see udpGuard), and those a capped client sends above its rate. Waiting would be
+// wrong here: the Shadowsocks inbound hands every client's UDP sessions their packets from one
+// read loop, through a small blocking queue per session, so one session that waited would hold
+// up all the others. Its reads must stay opaque to sing's unwrapping (no UpstreamReader,
+// ReaderReplaceable or read waiter), so the copy loops call its ReadPacket.
 type policedPacketConn struct {
 	N.PacketConn
 	pace *pacer
+	// guard checks each packet to anywhere but routed, the destination the session was routed
+	// for, which the routing rules already allowed.
+	guard  *udpGuard
+	user   string
+	routed M.Socksaddr
 }
 
 // UpstreamWriter shows sing the writer behind it, which writes the client's downloads. sing
@@ -339,15 +365,28 @@ type policedPacketConn struct {
 // connection (it is not WriterReplaceable), and reads are unaffected.
 func (c *policedPacketConn) UpstreamWriter() any { return c.PacketConn }
 
+// Upstream lets sing find what it looks up through wrappers on the connection inside: the
+// WireGuard stack's handshake reports (they release the session's first packet and send ICMP
+// errors) and its NAT timeout. Reads still stop here: sing follows Upstream for reads only
+// through connections that are ReaderReplaceable, and this one is not.
+func (c *policedPacketConn) Upstream() any { return c.PacketConn }
+
 func (c *policedPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
 	start := buffer.Start()
 	for {
 		destination, err := c.PacketConn.ReadPacket(buffer)
-		if err != nil || c.pace.Allow(int64(buffer.Len())) {
+		if err != nil {
 			return destination, err
+		}
+		if c.permitted(destination.Unwrap(), buffer.Bytes()) && c.pace.Allow(int64(buffer.Len())) {
+			return destination, nil
 		}
 		buffer.Resize(start, 0)
 	}
+}
+
+func (c *policedPacketConn) permitted(destination M.Socksaddr, packet []byte) bool {
+	return c.guard == nil || destination == c.routed || c.guard.allows(c.user, destination, packet)
 }
 
 type flowCounter struct {
@@ -385,6 +424,18 @@ func (m *Monitor) Drain() map[string]uint64 {
 	return result
 }
 
+// Undrain gives back what Drain returned when it could not be accounted (the change failed),
+// so the next accounting counts it.
+func (m *Monitor) Undrain(counted map[string]uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tag, n := range counted {
+		if u, ok := m.users[tag]; ok {
+			u.pending.Add(int64(n))
+		}
+	}
+}
+
 // Sample records one per-second rate point. Run it once a second.
 func (m *Monitor) Sample(now time.Time) {
 	m.mu.Lock()
@@ -411,6 +462,27 @@ func (m *Monitor) Sample(now time.Time) {
 	if day := dayStart(now); day != m.sampleDay {
 		m.sampleDay = day
 		m.sites = map[string]map[string]bool{}
+		m.pruneSites()
+	}
+}
+
+// pruneSites forgets the site counters that counted nothing for a whole day and have nothing
+// left to flush, so a server with site statistics on does not keep every site its clients ever
+// visited in memory. A connection still open on a forgotten site loses only its site total.
+// Called locked, once a day.
+func (m *Monitor) pruneSites() {
+	for key, c := range m.detail {
+		if key.kind != "site" {
+			continue
+		}
+		n := c.Load()
+		if mark, marked := m.siteMark[key]; marked && n == mark && n == m.flushedDet[key] {
+			delete(m.detail, key)
+			delete(m.flushedDet, key)
+			delete(m.siteMark, key)
+		} else {
+			m.siteMark[key] = n
+		}
 	}
 }
 
@@ -475,6 +547,7 @@ func (m *Monitor) SetSiteStats(on bool) {
 		if key.kind == "site" {
 			delete(m.detail, key)
 			delete(m.flushedDet, key)
+			delete(m.siteMark, key)
 		}
 	}
 	m.sites = map[string]map[string]bool{}
@@ -486,8 +559,8 @@ func (m *Monitor) SetSiteStats(on bool) {
 
 // AddExternal records traffic counted outside sing-box (the IPsec component's SAs). It is not
 // inspected, so it has no traffic type beyond "IPsec (not inspected)" and no site statistics.
-// The component reports only sessions that are up, so each report also counts as the client
-// being seen.
+// Each call also counts as the client being seen, so callers report only sessions that are up,
+// or that ended after moving data since the last report (see recordIPsec).
 func (m *Monitor) AddExternal(tag, protocol string, up, down uint64, remote string, at time.Time) {
 	u := m.user(tag)
 	u.up.Add(int64(up))
@@ -582,6 +655,9 @@ func siteLabel(metadata adapter.InboundContext) string {
 	return labelFor(domain)
 }
 
+// otherSites holds what has no site label of its own: past the daily cap, or not a site name.
+const otherSites = "Other sites"
+
 func labelFor(domain string) string {
 	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
 	if domain == "" {
@@ -589,6 +665,11 @@ func labelFor(domain string) string {
 	}
 	if _, err := netip.ParseAddr(domain); err == nil {
 		return ""
+	}
+	// Names come from what the client sends (TLS SNI, HTTP Host), unchecked and up to tens of
+	// kilobytes long: only a real DNS name may become a label kept in memory and the history.
+	if normalized, err := normalizeDomain(domain); err != nil || normalized != domain {
+		return otherSites
 	}
 	for _, service := range services {
 		for _, suffix := range service.suffixes {

@@ -228,7 +228,7 @@ func (a *API) serverInfo(s *State) serverInfo {
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
 		ShadowsocksExtraPorts: s.shadowsocksPorts()[1:],
 		SiteStats:             s.Monitor.SiteStats, DefaultSpeedLimitBps: s.DefaultSpeedLimitBps, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
-		HistoryMaxMB: s.Monitor.historyMaxBytes() >> 20, DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
+		HistoryMaxMB: s.Monitor.historyMaxMB(), DashboardPort: s.Dashboard.Port, DashboardPublic: s.Dashboard.Public,
 	}
 }
 
@@ -338,7 +338,13 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 			}
 			s.Monitor.HistoryMaxMB = *patch.HistoryMaxMB
 		}
+		// New ports to try binding, and the ports this server used before the change.
+		var tryPorts []portTry
+		ours := s.usedPorts()
 		if patch.DashboardPort != nil {
+			if *patch.DashboardPort != s.Dashboard.Port {
+				tryPorts = append(tryPorts, portTry{"the dashboard", *patch.DashboardPort, []string{"tcp"}})
+			}
 			s.Dashboard.Port = *patch.DashboardPort
 		}
 		if patch.DashboardPublic != nil {
@@ -351,6 +357,10 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 			enabled, port := s.protocolSettings(protocol)
 			if enabled == nil {
 				return InputError{fmt.Errorf("unknown protocol %q", protocol)}
+			}
+			wasEnabled, oldPort := *enabled, uint16(0)
+			if port != nil {
+				oldPort = *port
 			}
 			if change.Enabled != nil {
 				if *change.Enabled && !*enabled && (protocol == IKEv2 || protocol == IPsec) {
@@ -371,6 +381,26 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 					return InputError{errors.New("port must be 1-65535")}
 				}
 				*port = *change.Port
+			}
+			if port != nil && *enabled && (!wasEnabled || *port != oldPort) {
+				tryPorts = append(tryPorts, portTry{protocol, *port, protocolNetworks[protocol]})
+			}
+		}
+		// The engine binds a protocol's port only once the protocol has keys, and the dashboard
+		// moves only after the change is saved, so a port that cannot be bound (another program
+		// holds it, or it is below 1024) is tried here and refused now rather than failing later.
+		if len(tryPorts) > 0 {
+			if err := s.CheckPorts(); err != nil {
+				return InputError{err}
+			}
+		}
+		for _, try := range tryPorts {
+			for _, network := range try.networks {
+				// A port this server held before the change (two services swapping ports) is
+				// busy now, but free once the engine restarts.
+				if !ours[try.port] && !portFree(network, try.port) {
+					return InputError{fmt.Errorf("%s cannot use %s port %d: another program uses it, or it is below 1024", try.service, strings.ToUpper(network), try.port)}
+				}
 			}
 		}
 		if patch.RotateIPsecPSK {
@@ -393,11 +423,22 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 		err = a.service.store.WriteManagementKey()
 		a.service.store.Unlock()
 		if err != nil {
-			return 0, nil, err
+			// The change is saved: failing now would tell the client it did not happen.
+			a.service.report("management key", fmt.Errorf("the file could not be rewritten for the new address (%w); write it again with: sudo ghostlink-server setup", err))
 		}
 	}
 	return http.StatusOK, info, nil
 }
+
+// portTry is a port a change moves a service to, with the transports it listens on.
+type portTry struct {
+	service  string
+	port     uint16
+	networks []string
+}
+
+// protocolNetworks are the transports each VPN protocol listens on.
+var protocolNetworks = map[string][]string{Shadowsocks: {"tcp", "udp"}, VLESS: {"tcp"}, WireGuard: {"udp"}, AmneziaWG: {"udp"}}
 
 // --- users ---
 
@@ -490,7 +531,15 @@ func (c userChange) apply(s *State, u *User) error {
 		if other := s.UserByName(*c.Name); other != nil && other != u {
 			return InputError{fmt.Errorf("another user is already called %q", other.Name)}
 		}
-		u.Name = strings.TrimSpace(*c.Name)
+		name := strings.TrimSpace(*c.Name)
+		// An IKEv2/IPsec key without an identifier of its own takes one from the client's name.
+		// A rename keeps it: installed profiles and issued certificates carry the old one.
+		for _, k := range u.Keys {
+			if k.isApple() && k.LocalID == "" && name != u.Name {
+				k.LocalID = k.localIdentity(u)
+			}
+		}
+		u.Name = name
 	}
 	if c.Enabled != nil {
 		u.Enabled = *c.Enabled

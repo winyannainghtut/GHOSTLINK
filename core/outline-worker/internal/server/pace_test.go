@@ -5,6 +5,7 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -95,6 +96,46 @@ func TestPacerHoldsTheRateAcrossConnections(t *testing.T) {
 	}
 	if time.Since(quick) > 50*time.Millisecond {
 		t.Fatal("an unlimited pacer should not slow anything down")
+	}
+}
+
+// A client's TCP upload that saturates its cap does not starve its UDP (a call, QUIC): while
+// TCP waits off its debt, UDP still passes, and the two together stay near the cap.
+func TestPacerSharesTheCapBetweenTCPAndUDP(t *testing.T) {
+	var p pacer
+	const rate = 1_000_000 // 1 MB/s
+	p.SetRate(rate)
+	stop := make(chan struct{})
+	var tcp atomic.Int64
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p.Wait(16 << 10)
+			tcp.Add(16 << 10)
+		}
+	}()
+	time.Sleep(400 * time.Millisecond) // the upload empties the bucket
+	sent, passed := 0, 0
+	tcpBefore, start := tcp.Load(), time.Now()
+	for time.Since(start) < 1500*time.Millisecond {
+		sent++
+		if p.Allow(1200) {
+			passed++
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	elapsed := time.Since(start).Seconds()
+	close(stop)
+	if passed < sent*8/10 {
+		t.Fatalf("%d of %d UDP packets passed next to a saturating TCP upload", passed, sent)
+	}
+	total := float64(tcp.Load()-tcpBefore+int64(passed*1200)) / elapsed
+	if total > rate*1.3 {
+		t.Fatalf("TCP and UDP together moved %.0f B/s at a cap of %d B/s", total, rate)
 	}
 }
 

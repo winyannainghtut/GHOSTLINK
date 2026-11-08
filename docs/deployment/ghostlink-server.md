@@ -11,7 +11,7 @@ A self-hosted VPN server in one Docker container, in the style of Outline: insta
 - **Users and keys:** create users, then issue keys per protocol. A key works in Ghostlink and is meant for other clients too: `ss://` for Outline apps, `vless://` for Xray-based apps, `.conf` for WireGuard/AmneziaWG apps, and an Amnezia-format `vpn://` for AmneziaWG/WireGuard.
 - **Traffic rules:** block sites, IP ranges, ports, BitTorrent and outgoing mail, for everyone or one user. A user can be exempted from the rules for everyone.
 - **Usage and limits:** per-user data counters and data limits; users who reach their limit are cut off until the limit is raised or the counter is reset.
-- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by all of the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
+- **Speed limits:** one cap per user in bytes per second (for example 2 MB/s), download and upload alike, shared by the user's keys and devices; plus an optional default for everyone. See [Speed limits](#speed-limits).
 - **Moving from Outline:** take over an Outline server on the same machine, and its `ss://` keys keep working. See [Move from Outline](migrate-from-outline.md).
 - **Monitoring:**
   - live speed per user, open connections and who is online;
@@ -248,12 +248,12 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 
 ## Speed limits
 
-A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by all of the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s.
+A speed limit caps a user's speed in **bytes per second**, like the live rates the server shows (2 MB/s = 2,000,000 bytes per second). One value covers download and upload alike, and it is shared by the user's keys and devices: two phones of a user capped at 2 MB/s share 2 MB/s. IKEv2/IPsec sessions share a budget of their own, so a user with one device on IKEv2 and another on WireGuard can reach about twice the cap.
 
 - **Per user:** a speed (`user speed Alice 2MB` on the server, the client's Settings in the app or dashboard, `--speed-limit 2` in the CLI); **none**, meaning no limit even when there is a default; or **default**, which follows the server's default (the setting for new users).
 - **Default for everyone:** `set --speed-limit 5MB` (Server settings in the app or dashboard), or none.
 - **Live:** a change applies within a second to every open connection, without restarting the engine or disconnecting anyone.
-- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
+- **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KiB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. While the user's TCP upload fills the cap, UDP still gets a share of it, so a large upload does not cut off a call. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
 - **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5MB` (optionally with `/s`, or `ps` as in `2MBps`), up to `1.25GB`. A bare number is refused, and so are bits, written with a lower-case b: `10Mbps`, `10Mb/s` or `10 mb`.
 
 ## Monitoring and privacy
@@ -264,9 +264,9 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 |---|---|---|
 | Live | Speed per user (each second), open connections, online state, when the client was last seen | In memory, last 2 minutes |
 | Usage over time | Bytes up/down per user per hour, and per day | Hourly 7 days; daily 90 days (`set --history-days`, 7–365) |
-| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), DNS, Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, other TCP/UDP | With the daily records |
+| Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, Time (NTP), other TCP/UDP, and "IPsec (not inspected)" for IKEv2/IPsec. DNS is answered by the server itself and is not counted | With the daily records |
 | Protocols used | Bytes per protocol a user connected with | With the daily records |
-| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times | 30 days (`set --site-days`, 1–90); turning it off deletes them at once |
+| Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times. A name that is not a valid DNS name counts as "Other sites" | 30 days (`set --site-days`, 1–90), and never longer than the daily records; turning it off deletes them at once |
 | Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint | 30 days |
 
 **Online and idle.** A client is online when it was seen in the last minute: it opened a connection or sent data, its WireGuard/AmneziaWG peer received anything (the keys the server issues send a keepalive every 25 s, so an idle but connected client stays online), or one of its IKEv2/IPsec sessions is up. A download to it counts only while it is substantial, because a client that has gone cannot acknowledge one. Open connections alone don't count: a client that leaves without closing them, for example by switching WireGuard off, can leave them open on the server for many minutes. A client that disconnects shows as idle within about a minute.
@@ -276,8 +276,8 @@ What it can't see: VPN traffic is encrypted, so the server never sees page conte
 **Rotation, so the disk never fills:**
 - **By age:** every save (every 5 minutes, and whenever the server stops, also for an upgrade) drops records past their retention.
 - **By size:** the file has a hard size limit (default 20 MB; `set --history-max-mb`). Over it, the oldest site totals go first, then the oldest breakdowns, then hourly records; daily totals go last.
-- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed.
-- **Container log:** Docker caps it at 10 MB × 3, and it holds only warnings and errors, never traffic.
+- **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed. Usage that cannot be saved, for example on a full disk, is kept and saved later.
+- **Container log:** Docker caps it at 10 MB × 3, and it holds only the server's own warnings and errors, never traffic. The VPN engine's own messages are off, because they name the sites and addresses users try.
 
 ## Administer the container
 
@@ -308,7 +308,7 @@ Every port is random on first install (10000–32000, all different) and shown b
 | IKEv2/IPsec (optional component) | UDP 500 and 4500, fixed |
 | Mesh coordinator (when the mesh is on) | TCP, for mesh agents; VPN users cannot reach it. A host that is also a mesh node needs UDP 51820 too ([mesh ports](mesh.md#ports)) |
 
-Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities.
+Open them in the host firewall and any cloud security group. Ports below 1024 (for example 443 for VLESS) are not supported in this version, because the container runs without capabilities: moving a service to one is refused, as is a port another program uses.
 
 ## Upgrade and remove
 
@@ -319,7 +319,8 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 ## How it is built
 
 - One Go program, `ghostlink-server` (GPL-3.0-or-later, from `core/outline-worker/cmd/ghostlink-server`), runs the management API and one unmodified sing-box 1.14.4 instance. Shadowsocks and VLESS are sing-box inbounds. WireGuard and AmneziaWG are both served by Ghostlink's `amneziawg` endpoint on unmodified amneziawg-go (zero obfuscation for plain WireGuard), on a userspace network stack. So every user's traffic, whatever the protocol, passes the same router and rules.
-- **Changes:** each change is applied to a copy of the state and started in a new engine instance, and only then saved. A change the engine refuses, such as a port already in use, leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own.
+- **Changes:** each change is applied to a copy of the state and saved only if it worked. A change to what the engine serves (protocols, ports, keys, rules, users) starts a new engine instance first, so a change the engine refuses leaves the server as it was. Restarting the engine briefly disconnects users, and their clients reconnect on their own. Names, monitoring, speed limits and the dashboard change without a restart. A new port for a protocol or the dashboard is tried before the change is saved, also for a protocol without keys yet, so a port below 1024 or one another program uses is refused at once.
+- **Starting:** if the engine cannot start, usually because another program holds one of its ports, the management API, the dashboard and the server commands still start, so the port can be changed with `set --port`. The log says why, `GET /live` reports it as `health.engine_error`, and the engine is tried again every 30 seconds.
 - **Container:**
   - image: `gcr.io/distroless/static-debian12:nonroot`, pinned by digest, plus the static binary and its notices;
   - user: the host account `ghostlink-server`;
@@ -329,20 +330,23 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 
 ### Traffic rules, in order
 
-1. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
-2. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
-3. Names are resolved on the server, so the next blocks also catch names that point inside.
-4. **Always blocked:**
-   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`) and cloud metadata (`169.254.169.254`);
-   - multicast, and NAT64/IPv4-mapped forms of all of these;
-   - the management API port;
-   - the server's own address, when its hostname is an IP address.
+1. With IKEv2/IPsec on, the IPsec DNS listener answers DNS from the IPsec pools only.
+2. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
+3. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
+4. Names are resolved on the server, so the next blocks also catch names that point inside.
+5. **Always blocked:**
+   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`), cloud metadata (`169.254.169.254`), `0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`, multicast and the reserved `240.0.0.0/4`, and the IPv6 unspecified, unique-local, link-local and multicast ranges;
+   - every IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) address;
+   - the management API port, the dashboard port and, while the mesh is on, the mesh port, on any address;
+   - the server's own addresses: its hostname when that is an IP address, and every public address on the host's interfaces.
 
-   With host networking, this keeps VPN users away from services on the host and its network.
-5. Each user's own blocks.
-6. Users exempt from the rules for everyone go out directly.
-7. The rules for everyone.
-8. Everything else goes out directly.
+   With host networking, this keeps VPN users away from services on the host and its network. A connection to the host's own address would arrive over loopback, past host firewall allowlists.
+6. Each user's own blocks.
+7. Users exempt from the rules for everyone go out directly.
+8. The rules for everyone.
+9. Everything else goes out directly.
+
+The engine routes a UDP session by its first packet, but Shadowsocks, VLESS and WireGuard clients can address each later packet somewhere else. So every later packet to another address is checked again against the address and port rules above (DNS, always blocked, the user's own blocks, then, unless the user is exempt, the rules for everyone, including BitTorrent), and dropped if they refuse it. Site names cannot be checked per packet: a later packet to a name rather than an address is dropped.
 
 Disabled users and users over their limit are removed from the engine entirely, which also ends their open connections. Usage counts each user's payload bytes in both directions (not protocol overhead) and is saved every 30 seconds.
 
@@ -371,7 +375,7 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET /mesh/topology` | Nodes and links for the map: online state, path (`direct`, `relay`, `down`), latency, traffic |
 | `POST /import/outline` | Take over an Outline server's access keys on a server with no users: `{"access_keys": …, "server": …, "dry_run": true}` with Outline's two files; answers with a report and no passwords ([details](migrate-from-outline.md#over-the-api)) |
 
-`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour.
+`GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour, and `health.engine_error` while the VPN engine cannot start.
 
 `PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
 
@@ -381,7 +385,7 @@ The Ghostlink service is the only intended client. It pins the certificate durin
 
 ## Limits and notes
 
-- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server.
+- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server. A DNS name must start with a letter or digit and have at most 128 characters, because it is also the server's IKEv2/IPsec identity.
 - **REALITY site:** VLESS-REALITY borrows the TLS 1.3 handshake of a public site, `www.googletagmanager.com` by default. Choose a site that is reachable from the server and not blocked where your users are.
 - **Amnezia apps:** the `vpn://` keys follow Amnezia's export format for AmneziaWG and WireGuard, with no SSH credentials. Importing them into Amnezia's own apps has not been verified yet.
 - **IKEv2/IPsec:** see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users). Apple-device behaviour is checked by hand.

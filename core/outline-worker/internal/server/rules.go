@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"ghostlink.local/outline-worker/internal/ipsecproto"
 )
 
 const maxRuleEntries = 512
@@ -144,7 +146,9 @@ func ValidName(name string) error {
 	return nil
 }
 
-// ValidHostname accepts the address clients use to reach the server: an IP or a DNS name.
+// ValidHostname accepts the address clients use to reach the server: an IP or a DNS name. A
+// name must also do as the server's IKEv2/IPsec identity (it starts with a letter or digit and
+// has at most 128 characters), or the IPsec component would get no settings at all.
 func ValidHostname(host string) error {
 	if addr, err := netip.ParseAddr(host); err == nil {
 		if addr.Zone() != "" || !addr.IsValid() || addr.IsUnspecified() {
@@ -152,7 +156,7 @@ func ValidHostname(host string) error {
 		}
 		return nil
 	}
-	if normalized, err := normalizeDomain(host); err != nil || normalized != host {
+	if normalized, err := normalizeDomain(host); err != nil || normalized != host || !ipsecproto.ValidServerID(host) {
 		return fmt.Errorf("invalid server address %q", host)
 	}
 	return nil

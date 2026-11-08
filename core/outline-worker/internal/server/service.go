@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -16,8 +17,10 @@ import (
 )
 
 // Service ties stored state, the running engine and monitoring together. Every change is
-// applied to a copy, started in the engine and only then saved, so a change the engine refuses
-// (for example a port already in use) leaves the server as it was.
+// applied to a copy and saved only if it worked. A change that alters the engine's
+// configuration starts a new engine instance first, so a port the engine cannot bind leaves
+// the server as it was; other changes (names, monitoring, speed limits, the dashboard) never
+// restart the engine.
 type Service struct {
 	store        *Store
 	engine       *Engine
@@ -37,6 +40,10 @@ type Service struct {
 	ipsecWritten string
 	// startup is the work Start left running in the background.
 	startup sync.WaitGroup
+	// engineErr is why the engine last failed to start ("" while it runs); see ensureEngine.
+	engineMu     sync.Mutex
+	engineErr    string
+	engineFailed []byte
 	// meshLive is what mesh agents last reported, and which pairs are relayed.
 	meshLive *mesh.Live
 }
@@ -92,7 +99,9 @@ func clone(state *State) (*State, error) {
 	return &copied, json.Unmarshal(data, &copied)
 }
 
-// Start loads recorded history and runs the engine for the stored state.
+// Start loads recorded history and runs the engine for the stored state. An engine that cannot
+// start (usually a port another program holds) is reported and tried again by Run, while the
+// management API, the dashboard and the server commands come up, so it can be fixed with them.
 func (s *Service) Start() error {
 	if err := s.monitor.LoadHistory(s.historyPath()); err != nil {
 		s.report("history", err)
@@ -101,9 +110,10 @@ func (s *Service) Start() error {
 	defer s.store.Unlock()
 	s.monitor.SetSiteStats(s.store.State.Monitor.SiteStats)
 	s.monitor.SetSpeedLimits(s.store.State.speedLimits())
-	if err := s.engine.Apply(s.store.State); err != nil {
-		return err
+	if err := s.store.State.CheckPorts(); err != nil {
+		s.report("ports", fmt.Errorf("%w; changes are refused until a port is changed", err))
 	}
+	s.startEngine(s.store.State)
 	if s.store.State.appleEnabled() {
 		// Also checks the server certificate now, not only a day from now: a server restarted
 		// more often than that would never renew it, and one started with a new address needs
@@ -115,6 +125,63 @@ func (s *Service) Start() error {
 		}()
 	}
 	return nil
+}
+
+// startEngine applies state to an engine that is not running, or that runs another
+// configuration than state's (the host's own addresses changed), and records the outcome.
+// A configuration that failed is not tried again while the engine runs, so a running engine is
+// not restarted for nothing. Called with the store locked.
+func (s *Service) startEngine(state *State) {
+	config, err := state.EngineConfig(s.engine.logLevel)
+	if err != nil {
+		return
+	}
+	s.engineMu.Lock()
+	defer s.engineMu.Unlock()
+	running, current := s.engine.Running()
+	if running && (bytes.Equal(config, current) || bytes.Equal(config, s.engineFailed)) {
+		s.engineUp()
+		return
+	}
+	if err := s.engine.Apply(state); err != nil {
+		s.engineFailed = config
+		if running, _ := s.engine.Running(); running {
+			// The previous configuration runs again; say once why the new one did not.
+			s.report("engine", fmt.Errorf("the VPN engine kept its previous configuration: %w", err))
+			return
+		}
+		if message := err.Error(); message != s.engineErr {
+			s.engineErr = message
+			s.report("engine", fmt.Errorf("the VPN engine could not start; it is tried again every 30 s: %w", err))
+		}
+		return
+	}
+	s.engineFailed = nil
+	s.engineUp()
+}
+
+// engineUp records that the engine runs, and says so once if it had been down. Called with
+// engineMu held.
+func (s *Service) engineUp() {
+	if s.engineErr != "" {
+		s.engineErr = ""
+		s.report("engine", nil)
+	}
+}
+
+// engineError is why the engine is down, or "" while it runs.
+func (s *Service) engineError() string {
+	s.engineMu.Lock()
+	defer s.engineMu.Unlock()
+	return s.engineErr
+}
+
+// ensureEngine starts the engine again when it is down, for example after a port that another
+// program held at start became free, or when a restart failed.
+func (s *Service) ensureEngine() {
+	s.store.Lock()
+	defer s.store.Unlock()
+	s.startEngine(s.store.State)
 }
 
 // RenewIPsec reissues the server certificate when it nears expiry or the address changed, and
@@ -143,17 +210,26 @@ func (s *Service) Read(fn func(*State)) {
 // Change applies fn to a copy of the state. If the engine configuration changes, the engine
 // restarts with it first; the state is saved only if that worked.
 func (s *Service) Change(fn func(*State) error) error {
-	previous, next, err := s.change(fn)
+	return s.changeWith(fn, true)
+}
+
+// changeWith is Change; with checkPorts false it skips the port check, for changes that
+// cannot move a port (usage accounting) and must go on even if a hand-edited state already
+// has a port problem.
+func (s *Service) changeWith(fn func(*State) error, checkPorts bool) error {
+	previous, next, err := s.change(fn, checkPorts)
 	if err != nil || previous == nil {
 		return err
 	}
-	if previous.Monitor.SiteStats != next.Monitor.SiteStats {
-		s.monitor.SetSiteStats(next.Monitor.SiteStats)
-	}
-	// Speed limits are not part of the engine configuration: they change live, with no reload.
-	// They are read from the current state under its lock, so two changes at once cannot leave
-	// the older one in force.
-	s.Read(func(current *State) { s.monitor.SetSpeedLimits(current.speedLimits()) })
+	// Site statistics and speed limits are not part of the engine configuration: they change
+	// live, with no reload. They are read from the current state under its lock, so two changes
+	// at once cannot leave the older one in force.
+	s.Read(func(current *State) {
+		if current.Monitor.SiteStats != s.monitor.siteStats.Load() {
+			s.monitor.SetSiteStats(current.Monitor.SiteStats)
+		}
+		s.monitor.SetSpeedLimits(current.speedLimits())
+	})
 	for _, u := range previous.Users {
 		if next.User(u.ID) == nil {
 			s.monitor.Forget(u.Tag())
@@ -168,7 +244,7 @@ func (s *Service) Change(fn func(*State) error) error {
 	return nil
 }
 
-func (s *Service) change(fn func(*State) error) (*State, *State, error) {
+func (s *Service) change(fn func(*State) error, checkPorts bool) (*State, *State, error) {
 	s.store.Lock()
 	defer s.store.Unlock()
 	next, err := clone(s.store.State)
@@ -178,8 +254,10 @@ func (s *Service) change(fn func(*State) error) (*State, *State, error) {
 	if err := fn(next); err != nil {
 		return nil, nil, err
 	}
-	if err := next.CheckPorts(); err != nil {
-		return nil, nil, InputError{err}
+	if checkPorts {
+		if err := next.CheckPorts(); err != nil {
+			return nil, nil, InputError{err}
+		}
 	}
 	before, err := s.store.State.EngineConfig(s.engine.logLevel)
 	if err != nil {
@@ -194,6 +272,11 @@ func (s *Service) change(fn func(*State) error) (*State, *State, error) {
 		if err := s.engine.Apply(next); err != nil {
 			return nil, nil, err
 		}
+		// A change can also bring up an engine that could not start (a busy port moved).
+		s.engineMu.Lock()
+		s.engineFailed = nil
+		s.engineUp()
+		s.engineMu.Unlock()
 	}
 	previous := s.store.State
 	s.store.State = next
@@ -212,13 +295,14 @@ func (s *Service) change(fn func(*State) error) (*State, *State, error) {
 }
 
 // Account adds counted traffic to each user; users who reach their data limit are removed
-// from the engine, which also ends their open connections.
+// from the engine, which also ends their open connections. Traffic that cannot be saved (a
+// full disk, an engine that would not restart) is kept for the next accounting.
 func (s *Service) Account() error {
 	counted := s.monitor.Drain()
 	if len(counted) == 0 {
 		return nil
 	}
-	return s.Change(func(state *State) error {
+	err := s.changeWith(func(state *State) error {
 		for _, u := range state.Users {
 			if n, ok := counted[u.Tag()]; ok {
 				u.UsageBytes += n
@@ -226,7 +310,11 @@ func (s *Service) Account() error {
 			}
 		}
 		return nil
-	})
+	}, false)
+	if err != nil {
+		s.monitor.Undrain(counted)
+	}
+	return err
 }
 
 // pollPeers maps WireGuard/AmneziaWG peers back to users for their addresses, handshakes and
@@ -287,6 +375,7 @@ func (s *Service) SaveHistory(now time.Time) {
 func (s *Service) Health() Health {
 	health := s.health.Snapshot(s.store.Dir())
 	health.EngineReloads = s.engine.Reloads()
+	health.EngineError = s.engineError()
 	health.DetailPaused = s.monitor.detailPaused.Load()
 	health.HistoryBytes = int(s.historyBytes.Load())
 	return health
@@ -327,6 +416,7 @@ func (s *Service) Run(ctx context.Context) {
 				s.RenewIPsec(now)
 			}
 			if ticks%30 == 0 {
+				s.ensureEngine()
 				if err := s.Account(); err != nil {
 					s.report("usage", err)
 				}

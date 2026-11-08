@@ -248,7 +248,10 @@ func (s *State) pinIdentities(now time.Time) bool {
 	return changed
 }
 
-// identityLabel keeps the characters IKE identities and file names tolerate.
+// identityLabel keeps the characters IKE identities and file names tolerate. The label starts
+// with a letter or digit, as the IPsec component requires of identities: a name such as
+// "📱 Phone" or one in another script would otherwise start with "-", and the component
+// refuses its whole configuration for one such identity.
 func identityLabel(name string) string {
 	var b strings.Builder
 	for _, r := range name {
@@ -259,10 +262,10 @@ func identityLabel(name string) string {
 			b.WriteRune('-')
 		}
 	}
-	if b.Len() == 0 {
+	out := strings.TrimLeft(b.String(), "-_.")
+	if out == "" {
 		return "user"
 	}
-	out := b.String()
 	if len(out) > 40 {
 		out = out[:40]
 	}
