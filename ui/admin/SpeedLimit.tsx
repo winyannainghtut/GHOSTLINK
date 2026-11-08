@@ -1,27 +1,11 @@
 // A client's speed limit, entered in megabytes per second (bytes, like every speed shown): the
 // server's default, no limit, or a cap of its own. One cap covers download and upload alike, across all of the
 // client's keys and devices.
-import { Field, Segmented } from '@shared/glass';
+import { Segmented } from '@shared/glass';
 import { speed } from '@shared/format';
+import type { SpeedChoice } from './limits';
 
-export type SpeedMode = 'default' | 'none' | 'custom';
-export type SpeedChoice = { mode: SpeedMode; mb: string };
-
-// The API's speed_limit_bps: 0 follows the server's default, -1 means no limit.
-export function speedChoice(bps: number | undefined): SpeedChoice {
-  if (!bps) return { mode: 'default', mb: '' };
-  if (bps < 0) return { mode: 'none', mb: '' };
-  return { mode: 'custom', mb: String(bps / 1e6) };
-}
-
-// The value to send, or an error to show.
-export function speedValue(choice: SpeedChoice): number | Error {
-  if (choice.mode === 'default') return 0;
-  if (choice.mode === 'none') return -1;
-  const mb = Number(choice.mb);
-  if (!choice.mb.trim() || !Number.isFinite(mb) || mb < 0.001 || mb > 1250) return new Error('A speed limit is 0.001 to 1250 MB/s.');
-  return Math.round(mb * 1e6);
-}
+export { speedChange, speedChoice, speedValue, type SpeedChoice, type SpeedMode } from './limits';
 
 // What a limit reads as on cards and in lists ("" for none).
 export function speedLabel(effectiveBps: number): string {
@@ -32,7 +16,11 @@ export function SpeedLimitField({ value, onChange, defaultBps }: { value: SpeedC
   const fallback = defaultBps > 0 ? speed(defaultBps) : 'none';
   return (
     <div className="grid gap-2">
-      <Field label="Speed limit" hint="download and upload alike, for all of this client's devices">
+      {/* Not a Field: its <label> would pass a click on the caption to the first choice, Server default. */}
+      <div className="grid gap-1.5">
+        <span className="text-[12.5px] font-medium text-fg-2">
+          Speed limit<span className="font-normal text-fg-3"> · download and upload alike, for all of this client's devices</span>
+        </span>
         <Segmented
           label="Speed limit"
           size="sm"
@@ -45,7 +33,7 @@ export function SpeedLimitField({ value, onChange, defaultBps }: { value: SpeedC
             { value: 'custom', label: 'Custom' },
           ]}
         />
-      </Field>
+      </div>
       {value.mode === 'custom' && (
         <label className="flex items-center gap-2">
           <input

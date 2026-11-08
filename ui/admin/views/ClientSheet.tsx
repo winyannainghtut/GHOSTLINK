@@ -1,17 +1,21 @@
 // One client: keys (create, share, revoke), usage history, own rules and settings.
 import { Copy, FileDown, KeyRound, QrCode, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BarChart, fillBuckets } from '@shared/BarChart';
 import { Bars } from '@shared/Bars';
 import { ago, bytes, dateTime, plural, speed } from '@shared/format';
 import { Button, Check, Field, Inner, Note, Segmented, Sheet, StatusDot, useUI } from '@shared/glass';
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type Client, type Key, type ProtocolId, type Stats, type User } from '../api';
 import { hasConf, isApple, tunnelAddress, useKeyTools } from '../keys';
+import { dataLimitValue } from '../limits';
 import { RulesEditor } from '../RulesEditor';
-import { SpeedLimitField, speedChoice, speedValue } from '../SpeedLimit';
+import { SpeedLimitField, speedChange, speedChoice } from '../SpeedLimit';
 import { clientStatus, statusLabel, useStore } from '../store';
 
 type Tab = 'keys' | 'usage' | 'rules' | 'settings';
+
+// An IKEv2/IPsec key's sign-in method, named as in the New key form.
+const authName = (key: Key) => AUTH[key.protocol as 'ikev2' | 'ipsec']?.find(([value]) => value === key.auth)?.[1] ?? key.auth;
 
 export function ClientSheet({ user, onClose }: { user: User | null; onClose: () => void }) {
   const { liveById } = useStore();
@@ -26,7 +30,7 @@ export function ClientSheet({ user, onClose }: { user: User | null; onClose: () 
       title={user?.name ?? ''}
       subtitle={
         user && (
-          <span className="inline-flex items-center gap-1.5">
+          <span className="num inline-flex items-center gap-1.5">
             <StatusDot status={status} /> {statusLabel[status]} · {plural(user.keys.length, 'key')} · {bytes(user.usage_bytes)} used
           </span>
         )
@@ -121,7 +125,7 @@ function KeysTab({ user }: { user: User }) {
                         <span className="mono">{summary.address}/32</span>
                       </>
                     )}
-                    {isApple(key.protocol) && ` · ${key.auth} · `}
+                    {isApple(key.protocol) && ` · ${authName(key)} · `}
                     {isApple(key.protocol) && <span className="mono">{key.identity}</span>}
                   </div>
                 </div>
@@ -320,18 +324,35 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
   const [limit, setLimit] = useState(user.data_limit_bytes ? String(user.data_limit_bytes / 1e9) : '');
   const [speedLimit, setSpeedLimit] = useState(speedChoice(user.speed_limit_bps));
   const [exempt, setExempt] = useState(user.exempt_from_global_rules);
-  const save = async (extra: Record<string, unknown> = {}) => {
-    const bps = speedValue(speedLimit);
+  const limitField = useRef<HTMLInputElement>(null);
+  const save = async () => {
+    // Sent only when changed: servers before 0.8.0 refuse fields they don't know.
+    const bps = speedChange(speedLimit, user.speed_limit_bps ?? 0);
     if (bps instanceof Error) {
       toast(bps.message, 'bad');
       return;
     }
-    const body: Record<string, unknown> = { name: name.trim(), data_limit_bytes: Math.round(Number(limit || 0) * 1e9), exempt_from_global_rules: exempt, ...extra };
-    // Sent only when changed: servers before 0.8.0 refuse fields they don't know.
-    if (bps !== (user.speed_limit_bps ?? 0)) body.speed_limit_bps = bps;
+    const dataLimit = dataLimitValue(limit, limitField.current?.validity.badInput);
+    if (dataLimit instanceof Error) {
+      toast(dataLimit.message, 'bad');
+      return;
+    }
+    const body: Record<string, unknown> = { name: name.trim(), data_limit_bytes: dataLimit, exempt_from_global_rules: exempt };
+    if (bps !== undefined) body.speed_limit_bps = bps;
     try {
       await api('PATCH', `/users/${user.id}`, body);
-      toast(extra.reset_usage ? 'Usage reset to zero.' : 'Client saved.');
+      toast('Client saved.');
+      await reloadUsers();
+    } catch (error) {
+      toast((error as Error).message, 'bad');
+    }
+  };
+  // Only the usage: edits not yet saved stay as they are, and cannot block the reset.
+  const resetUsage = async () => {
+    if (!(await confirm({ title: `Reset ${user.name}'s usage?`, text: `Data used goes back to zero${user.data_limit_bytes ? ', and a client stopped at its data limit can connect again' : ''}. This cannot be undone.`, action: 'Reset usage' }))) return;
+    try {
+      await api('PATCH', `/users/${user.id}`, { reset_usage: true });
+      toast('Usage reset to zero.');
       await reloadUsers();
     } catch (error) {
       toast((error as Error).message, 'bad');
@@ -345,7 +366,7 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
           <input className="field" value={name} maxLength={64} onChange={e => setName(e.target.value)} />
         </Field>
         <Field label="Data limit" hint="GB, empty for no limit">
-          <input className="field num" type="number" min="0" step="any" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} />
+          <input ref={limitField} className="field num" type="number" min="0" step="any" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} />
         </Field>
       </div>
       <SpeedLimitField value={speedLimit} onChange={setSpeedLimit} defaultBps={server.default_speed_limit_bps ?? 0} />
@@ -389,7 +410,7 @@ function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void })
           >
             Remove client
           </Button>
-          <Button variant="ghost" onClick={() => save({ reset_usage: true })}>
+          <Button variant="ghost" onClick={resetUsage}>
             Reset usage
           </Button>
         </div>

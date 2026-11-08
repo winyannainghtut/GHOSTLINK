@@ -1,12 +1,16 @@
 import { Activity, ArrowDown, ArrowUp, Clock, Gauge, Network as NetworkIcon, UserPlus } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { AreaChart, type RatePoint } from '@shared/AreaChart';
 import { fillBuckets } from '@shared/BarChart';
 import { Bars } from '@shared/Bars';
 import { byteRate, bytes, duration, plural, speed } from '@shared/format';
 import { Button, Card, CardTitle, Facts, Meter, Note, Segmented, cx } from '@shared/glass';
+import { usePoll } from '@shared/hooks';
 import { api, protocolName, type Stats } from '../api';
 import { useStore } from '../store';
+
+// The day and week totals change as traffic is recorded: fetch them again while the page is open.
+const STATS_MS = 60_000;
 
 type Range = 'live' | 'hour' | 'day';
 
@@ -33,20 +37,16 @@ function BigNumber({ value, unit }: { value: ReactNode; unit?: string }) {
 }
 
 export function Overview({ onNewClient }: { onNewClient: () => void }) {
-  const { server, users, live } = useStore();
+  const { server, users, live, stale } = useStore();
   const [range, setRange] = useState<Range>('live');
   const [day, setDay] = useState<Stats | null>(null);
   const [week, setWeek] = useState<Stats | null>(null);
 
-  useEffect(() => {
-    let current = true;
-    Promise.all([api<Stats>('GET', '/stats?range=24h'), api<Stats>('GET', '/stats?range=7d')])
-      .then(([d, w]) => current && (setDay(d), setWeek(w)))
-      .catch(() => {});
-    return () => {
-      current = false;
-    };
-  }, []);
+  usePoll(async () => {
+    const [d, w] = await Promise.all([api<Stats>('GET', '/stats?range=24h'), api<Stats>('GET', '/stats?range=7d')]);
+    setDay(d);
+    setWeek(w);
+  }, STATS_MS);
 
   const total = byteRate((live?.down_bps ?? 0) + (live?.up_bps ?? 0));
   const health = live?.health;
@@ -56,7 +56,12 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
   const points: RatePoint[] = useMemo(() => {
     if (range === 'live') return (live?.series ?? []).slice(-60).map(s => ({ t: s.t, down: s.down, up: s.up }));
     if (range === 'hour') return (live?.minutes ?? []).map(s => ({ t: s.t, down: s.down, up: s.up }));
-    return fillBuckets((day?.series ?? []).map(s => ({ t: s.t, down: s.down, up: s.up })), 3600, 24).map(s => ({ t: s.t, down: s.down / 3600, up: s.up / 3600 }));
+    // The current hour is still filling up: average it over the time gone so far, not a full hour.
+    const now = Date.now() / 1000;
+    return fillBuckets((day?.series ?? []).map(s => ({ t: s.t, down: s.down, up: s.up })), 3600, 24, now).map(s => {
+      const seconds = Math.min(3600, Math.max(60, now - s.t));
+      return { t: s.t, down: s.down / seconds, up: s.up / seconds };
+    });
   }, [range, live, day]);
 
   const timeLabel = (t: number) => {
@@ -69,26 +74,33 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
 
   return (
     <div className="grid gap-4">
+      {stale && (
+        <Card className="border-bad/40">
+          <Note tone="bad">The server is not answering, so live data is paused. It continues when the server answers again.</Note>
+        </Card>
+      )}
       {health?.detail_paused && (
         <Card className="border-idle/40">
           <Note tone="warn">The disk is nearly full, so detailed traffic recording is paused until space is freed. Live data and totals continue.</Note>
         </Card>
       )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Active tunnels" icon={<Activity size={17} />} detail={`of ${plural(users.length, 'client')} · ${plural(live?.active ?? 0, 'open connection')}`}>
+        <Kpi label="Active tunnels" icon={<Activity size={17} />} detail={<span className="num">{`of ${plural(users.length, 'client')}${live ? ` · ${plural(live.active, 'open connection')}` : ''}`}</span>}>
           <BigNumber value={live?.online_users ?? '—'} unit="online" />
         </Kpi>
         <Kpi
           label="Live throughput"
           icon={<Gauge size={17} />}
           detail={
-            <span className="num flex gap-3">
-              <span className="text-down">↓ {speed(live?.down_bps ?? 0)}</span>
-              <span className="text-up">↑ {speed(live?.up_bps ?? 0)}</span>
-            </span>
+            live && (
+              <span className="num flex gap-3">
+                <span className="text-down">↓ {speed(live.down_bps)}</span>
+                <span className="text-up">↑ {speed(live.up_bps)}</span>
+              </span>
+            )
           }
         >
-          <BigNumber value={total.value} unit={total.unit} />
+          <BigNumber value={live ? total.value : '—'} unit={live ? total.unit : undefined} />
         </Kpi>
         <Kpi
           label="Server uptime"
@@ -144,10 +156,14 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
           }
         />
         <div className="mb-3 flex flex-wrap gap-2">
-          <Legend tone="down" icon={<ArrowDown size={13} />} label="Download" value={speed(live?.down_bps ?? 0)} />
-          <Legend tone="up" icon={<ArrowUp size={13} />} label="Upload" value={speed(live?.up_bps ?? 0)} />
+          <Legend tone="down" icon={<ArrowDown size={13} />} label="Download" value={live ? speed(live.down_bps) : '—'} />
+          <Legend tone="up" icon={<ArrowUp size={13} />} label="Upload" value={live ? speed(live.up_bps) : '—'} />
         </div>
-        <AreaChart points={points} timeLabel={timeLabel} empty={range === 'live' ? 'No traffic in the last minute' : 'No traffic in this period'} />
+        <AreaChart
+          points={points}
+          timeLabel={timeLabel}
+          empty={stale && range !== 'day' ? 'Waiting for the server to answer' : range === 'live' ? 'No traffic in the last minute' : 'No traffic in this period'}
+        />
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">

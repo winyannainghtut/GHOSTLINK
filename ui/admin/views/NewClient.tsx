@@ -2,10 +2,11 @@
 // key (WireGuard-family keys get the next free /32 and a fresh Curve25519 key pair), then the
 // sheet shows the QR code, the .conf and the share options.
 import { Check as CheckIcon, Copy, FileDown, KeyRound, MonitorDown } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Field, Inner, Note, Sheet, cx, useUI } from '@shared/glass';
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, canUseHere, useHere, type Key, type ProtocolId, type User } from '../api';
 import { hasConf, isApple, qrFor, saveConf, saveKit, saveProfile } from '../keys';
+import { dataLimitValue } from '../limits';
 import { SpeedLimitField, speedValue, type SpeedChoice } from '../SpeedLimit';
 import { useStore } from '../store';
 
@@ -23,6 +24,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<Created | null>(null);
+  const limitField = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -48,10 +50,18 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
     }
   };
 
+  // Enter in the form and the Create button follow the same rules.
+  const ready = !busy && !!name.trim() && available.includes(protocol);
   const create = async () => {
+    if (!ready) return;
     const bps = speedValue(speedLimit);
     if (bps instanceof Error) {
       setError(bps.message);
+      return;
+    }
+    const dataLimit = dataLimitValue(limit, limitField.current?.validity.badInput);
+    if (dataLimit instanceof Error) {
+      setError(dataLimit.message);
       return;
     }
     setBusy(true);
@@ -59,7 +69,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
     let user: User | null = null;
     try {
       const body: Record<string, unknown> = { name: name.trim() };
-      if (limit.trim()) body.data_limit_bytes = Math.round(Number(limit) * 1e9);
+      if (dataLimit) body.data_limit_bytes = dataLimit;
       if (bps) body.speed_limit_bps = bps;
       user = await api<User>('POST', '/users', body);
       const key = await api<Key>('POST', `/users/${user.id}/keys`, isApple(protocol) ? { protocol, auth } : { protocol });
@@ -152,7 +162,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="cta" icon={<KeyRound size={15} />} disabled={busy || !name.trim() || !available.includes(protocol)} onClick={create}>
+          <Button variant="cta" icon={<KeyRound size={15} />} disabled={!ready} onClick={create}>
             {busy ? 'Creating…' : 'Create client'}
           </Button>
         </>
@@ -162,11 +172,11 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
         className="grid gap-5"
         onSubmit={event => {
           event.preventDefault();
-          if (name.trim()) create();
+          create();
         }}
       >
         <Field label="Name">
-          <input className="field" autoFocus maxLength={64} value={name} onChange={e => setName(e.target.value)} placeholder="For example Maya's phone" />
+          <input className="field" data-autofocus maxLength={64} value={name} onChange={e => setName(e.target.value)} placeholder="For example Maya's phone" />
         </Field>
         <div className="grid gap-2">
           <span className="text-[12.5px] font-medium text-fg-2">Protocol</span>
@@ -208,9 +218,9 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Data limit" hint="GB, optional">
-            <input className="field num" type="number" min="0" step="any" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} placeholder="No limit" />
+            <input ref={limitField} className="field num" type="number" min="0" step="any" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} placeholder="No limit" />
           </Field>
-          <Inner className="grid content-center gap-0.5 rounded-[20px] px-4 py-2.5">
+          <Inner className="grid content-center gap-0.5 rounded-[20px]! px-4 py-2.5">
             <span className="text-[12px] text-fg-3">Tunnel address</span>
             {pool ? (
               <span className="mono text-[14px]">{pool.next ? `${pool.next}/32` : 'Pool full'}</span>
