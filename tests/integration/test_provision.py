@@ -54,13 +54,15 @@ def error_of(result):
 
 
 def free_port():
-    """A loopback port free for TCP and UDP alike, as a Shadowsocks listener takes both."""
+    """A loopback port free for TCP and UDP alike, as a Shadowsocks listener takes both. The UDP
+    port comes from the system first: on Windows, Hyper-V and WinNAT reserve many UDP blocks in
+    the dynamic range, so a port free on TCP is often refused for UDP."""
     for _ in range(100):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-            tcp.bind(("127.0.0.1", 0))
-            port = tcp.getsockname()[1]
+            udp.bind(("127.0.0.1", 0))
+            port = udp.getsockname()[1]
             try:
-                udp.bind(("127.0.0.1", port))
+                tcp.bind(("127.0.0.1", port))
             except OSError:
                 continue
             return port
@@ -408,8 +410,10 @@ class ProvisioningTests(unittest.TestCase):
             pki.server("openvpn-is-not-needed")
             profile = pki.issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "out" / "laptop.ovpn", 30)
             pki.bundle(root / "out" / "server.tar.gz")
+            # SDDL names the built-in Administrator account (RID 500), which CI runners use, "LA".
+            me = {sid, "LA"} if sid.endswith("-500") else {sid}
             # Outside the root, a profile or bundle would otherwise take the folder's permissions.
-            for path, allowed in [(pki.root, {sid, "SY", "BA", "OW"}), (profile, {sid, "SY"}), (root / "out" / "server.tar.gz", {sid, "SY"})]:
+            for path, allowed in [(pki.root, {*me, "SY", "BA", "OW"}), (profile, {*me, "SY"}), (root / "out" / "server.tar.gz", {*me, "SY"})]:
                 sddl = security(path)
                 flags = re.search(r"D:([A-Z]*)", sddl).group(1)
                 self.assertIn("P", flags, f"{path.name} still inherits permissions")
