@@ -490,7 +490,15 @@ func (c userChange) apply(s *State, u *User) error {
 		if other := s.UserByName(*c.Name); other != nil && other != u {
 			return InputError{fmt.Errorf("another user is already called %q", other.Name)}
 		}
-		u.Name = strings.TrimSpace(*c.Name)
+		name := strings.TrimSpace(*c.Name)
+		// An IKEv2/IPsec key without an identifier of its own takes one from the client's name.
+		// A rename keeps it: installed profiles and issued certificates carry the old one.
+		for _, k := range u.Keys {
+			if k.isApple() && k.LocalID == "" && name != u.Name {
+				k.LocalID = k.localIdentity(u)
+			}
+		}
+		u.Name = name
 	}
 	if c.Enabled != nil {
 		u.Enabled = *c.Enabled

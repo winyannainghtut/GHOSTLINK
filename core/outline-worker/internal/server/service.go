@@ -27,15 +27,22 @@ type Service struct {
 	hooks        []func(previous, next *State)
 	historyBytes atomic.Int64
 	report       func(string, error)
-	// ipsecSeen holds the agent's last byte counters per SA child (touched by Run only).
-	ipsecSeen map[string][2]uint64
+	started      time.Time
+	// ipsecSeen holds the agent's last byte counters per SA child, and ipsecReported whether a
+	// report was read since the server started (both touched by Run only).
+	ipsecSeen     map[string]ipsecCounters
+	ipsecReported bool
+	// engineErr is why the engine last failed to start ("" while it runs); see ensureEngine.
+	engineMu     sync.Mutex
+	engineErr    string
+	engineFailed []byte
 	// meshLive is what mesh agents last reported, and which pairs are relayed.
 	meshLive *mesh.Live
 }
 
 func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
-	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
-		report: func(string, error) {}, ipsecSeen: map[string][2]uint64{}, meshLive: mesh.NewLive()}
+	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(), started: time.Now(),
+		report: func(string, error) {}, ipsecSeen: map[string]ipsecCounters{}, meshLive: mesh.NewLive()}
 	// Mesh agents waiting for a new configuration wake on every change to the mesh.
 	service.OnChange(func(previous, next *State) {
 		before, _ := json.Marshal(previous.Mesh)
@@ -52,12 +59,20 @@ func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
 		}
 		service.meshLive.Notify()
 	})
-	// The IPsec agent follows every saved change.
+	// The IPsec agent follows every saved change that alters its settings. Usage accounting
+	// saves a change every 30 s, and the agent reapplies everything when the file changes.
 	service.OnChange(func(previous, next *State) {
-		if previous.appleEnabled() || next.appleEnabled() {
-			if err := service.WriteIPsecDesired(time.Now()); err != nil {
-				service.report("ipsec", err)
-			}
+		if !previous.appleEnabled() && !next.appleEnabled() {
+			return
+		}
+		now := time.Now()
+		before, errBefore := previous.ipsecFingerprint(now)
+		after, errAfter := next.ipsecFingerprint(now)
+		if errBefore == nil && errAfter == nil && bytes.Equal(before, after) {
+			return
+		}
+		if err := service.WriteIPsecDesired(now); err != nil {
+			service.report("ipsec", err)
 		}
 	})
 	return service

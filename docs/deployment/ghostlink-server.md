@@ -173,7 +173,7 @@ Apple devices have IKEv2 and IPsec built in (`NEVPNProtocolIKEv2` and `NEVPNProt
 | **IPsec** (IKEv1, "Cisco IPsec"; older) | Certificate + XAuth password, the default | For devices or tools that only offer IPsec |
 | | Shared group key + XAuth password | **Weak** (see below); the API returns a warning |
 
-Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`).
+Every key can override the **server address** the device connects to, the **remote identifier** (the server identity the device expects; IKEv2 only, and it is added to the server certificate) and the **local identifier** (the device's identity and user name; default `name-ID@ghostlink`, from the user's name in Latin letters and digits, or `user-ID@ghostlink`). Renaming the user keeps the identifiers of keys it already has, so installed profiles and certificates go on working.
 
 ### Turn it on
 
@@ -381,7 +381,7 @@ The Ghostlink service is the only intended client. It pins the certificate durin
 
 ## Limits and notes
 
-- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server.
+- **Changing the hostname:** new keys use the new address, but keys you already shared keep the old one. The management key also changes (`show-key` prints the new one). Ghostlink keeps working through the old address for as long as it still reaches the server. A DNS name must start with a letter or digit and have at most 128 characters, because it is also the server's IKEv2/IPsec identity.
 - **REALITY site:** VLESS-REALITY borrows the TLS 1.3 handshake of a public site, `www.googletagmanager.com` by default. Choose a site that is reachable from the server and not blocked where your users are.
 - **Amnezia apps:** the `vpn://` keys follow Amnezia's export format for AmneziaWG and WireGuard, with no SSH credentials. Importing them into Amnezia's own apps has not been verified yet.
 - **IKEv2/IPsec:** see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users). Apple-device behaviour is checked by hand.

@@ -51,6 +51,12 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 	for _, u := range s.activeUsers() {
 		for _, k := range u.Keys {
 			identity := k.localIdentity(u)
+			// The agent refuses the whole file for one identity it cannot use, which would stop
+			// every later change from reaching it; such a key (from a hand-edited state) is left
+			// out instead.
+			if k.isApple() && !ipsecproto.ValidIdentity(identity) {
+				continue
+			}
 			switch {
 			case k.Protocol == IKEv2 && desired.IKEv2 != nil:
 				desired.Allowed = append(desired.Allowed, identity)
@@ -79,7 +85,9 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 		limit := ipsecproto.SpeedLimit{Name: u.Tag(), BytesPerSecond: bps}
 		for _, k := range u.Keys {
 			if (k.Protocol == IKEv2 && desired.IKEv2 != nil) || (k.Protocol == IPsec && desired.IKEv1 != nil) {
-				limit.Identities = append(limit.Identities, k.localIdentity(u))
+				if identity := k.localIdentity(u); ipsecproto.ValidIdentity(identity) {
+					limit.Identities = append(limit.Identities, identity)
+				}
 			}
 		}
 		if len(limit.Identities) > 0 {
@@ -98,6 +106,30 @@ func (s *State) IPsecDesired(now time.Time) (ipsecproto.Desired, error) {
 	}
 	desired.Firewall = firewall
 	return desired, desired.Validate()
+}
+
+// ipsecFingerprint is what the agent's configuration says, without what changes on every
+// write: the generation, and the CRL's dates and signature. The CRL's entries are kept as what
+// they come from: the revoked certificates and those on hold (see CRL).
+func (s *State) ipsecFingerprint(now time.Time) ([]byte, error) {
+	desired, err := s.IPsecDesired(now)
+	if err != nil {
+		return nil, err
+	}
+	desired.Generation, desired.CRL = 0, ""
+	var held []int64
+	for _, u := range s.Users {
+		for _, k := range u.Keys {
+			if k.CertSerial != 0 && !u.Active() {
+				held = append(held, k.CertSerial)
+			}
+		}
+	}
+	return json.Marshal(struct {
+		Desired ipsecproto.Desired
+		Revoked []RevokedSerial
+		Held    []int64
+	}{desired, s.IPsec.Revoked, held})
 }
 
 // WriteIPsecDesired gives the agent the current configuration (also refreshing the CRL).
@@ -150,13 +182,19 @@ func (svc *Service) recordIPsec(now time.Time) {
 			}
 		}
 	})
+	// After a restart there are no counters to compare with. A session that was up before this
+	// server started was counted until the restart, so its counters in the first report are
+	// only the starting point; counting them again would charge that traffic twice.
+	first := !svc.ipsecReported
+	svc.ipsecReported = true
+	uptime := int64(now.Sub(svc.started).Seconds())
 	// Counters are per CHILD_SA (its unique ID survives an IKE rekey). A child is counted
 	// against its last known counters once per report, whether still up or just closed.
-	seen := map[string][2]uint64{}
-	for _, sa := range append(append([]ipsecproto.SA{}, status.SAs...), status.Closed...) {
+	seen := map[string]ipsecCounters{}
+	record := func(sa ipsecproto.SA, closed bool) {
 		tag, ok := users[strings.ToLower(sa.Identity)]
 		if !ok {
-			continue
+			return
 		}
 		protocol := IKEv2
 		if sa.Version == 1 {
@@ -168,23 +206,52 @@ func (svc *Service) recordIPsec(now time.Time) {
 			if _, done := seen[key]; done || key == "" {
 				continue
 			}
-			previous := svc.ipsecSeen[key]
-			seen[key] = [2]uint64{child.BytesIn, child.BytesOut}
-			var up, down uint64
-			if child.BytesIn >= previous[0] {
-				up = child.BytesIn - previous[0]
+			previous, known := svc.ipsecSeen[key]
+			if !known && first && sa.Established > uptime {
+				previous = ipsecCounters{In: child.BytesIn, Out: child.BytesOut}
 			}
-			if child.BytesOut >= previous[1] {
-				down = child.BytesOut - previous[1]
+			seen[key] = ipsecCounters{In: child.BytesIn, Out: child.BytesOut, At: now.Unix()}
+			// Counters that went back belong to a new child with a reused ID (strongSwan
+			// restarted), so all of it is new.
+			up, down := child.BytesIn, child.BytesOut
+			if child.BytesIn >= previous.In && child.BytesOut >= previous.Out {
+				up, down = child.BytesIn-previous.In, child.BytesOut-previous.Out
 			}
-			svc.monitor.AddExternal(tag, protocol, up, down, remote, now)
+			// Each report counts as the client being seen, so a session that ended counts only
+			// for the data it still moved.
+			if !closed || up+down > 0 {
+				svc.monitor.AddExternal(tag, protocol, up, down, remote, now)
+			}
 		}
-		if len(sa.Children) == 0 {
+		if len(sa.Children) == 0 && !closed {
 			svc.monitor.AddExternal(tag, protocol, 0, 0, remote, now)
+		}
+	}
+	for _, sa := range status.SAs {
+		record(sa, false)
+	}
+	for _, sa := range status.Closed {
+		record(sa, true)
+	}
+	// A child missing from a report (the agent could not list its sessions this time) keeps its
+	// counters for a while, so it is not counted again from zero when it is listed next.
+	for key, child := range svc.ipsecSeen {
+		if _, ok := seen[key]; !ok && now.Unix()-child.At < ipsecKeepSeconds {
+			seen[key] = child
 		}
 	}
 	svc.ipsecSeen = seen
 }
+
+// ipsecCounters are a CHILD_SA's byte counters in the agent's last report that listed it.
+type ipsecCounters struct {
+	In, Out uint64
+	At      int64 // unix seconds
+}
+
+// ipsecKeepSeconds is how long a child's counters are kept after the last report that listed
+// it; the agent lists a closed child for a minute.
+const ipsecKeepSeconds = 10 * 60
 
 // ipsecComponent describes the component for the API and the app.
 type ipsecComponent struct {

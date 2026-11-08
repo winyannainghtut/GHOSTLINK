@@ -547,8 +547,8 @@ func (m *Monitor) SetSiteStats(on bool) {
 
 // AddExternal records traffic counted outside sing-box (the IPsec component's SAs). It is not
 // inspected, so it has no traffic type beyond "IPsec (not inspected)" and no site statistics.
-// The component reports only sessions that are up, so each report also counts as the client
-// being seen.
+// Each call also counts as the client being seen, so callers report only sessions that are up,
+// or that ended after moving data since the last report (see recordIPsec).
 func (m *Monitor) AddExternal(tag, protocol string, up, down uint64, remote string, at time.Time) {
 	u := m.user(tag)
 	u.up.Add(int64(up))
