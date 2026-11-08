@@ -7,6 +7,7 @@ import { Button, Field, Inner, Note, Sheet, cx, useUI } from '@shared/glass';
 import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, canUseHere, useHere, type Key, type ProtocolId, type User } from '../api';
 import { hasConf, isApple, qrFor, saveConf, saveKit, saveProfile } from '../keys';
 import { dataLimitValue } from '../limits';
+import { firstKeyProtocol } from '../protocols';
 import { SpeedLimitField, speedValue, type SpeedChoice } from '../SpeedLimit';
 import { useStore } from '../store';
 
@@ -17,7 +18,10 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
   const { toast } = useUI();
   const available = KEY_PROTOCOLS.filter(p => server.protocols[p]?.enabled);
   const [name, setName] = useState('');
-  const [protocol, setProtocol] = useState<ProtocolId>('amneziawg');
+  // New clients start on Shadowsocks, the one protocol a new server has on. While the protocol
+  // picked is off, the form uses Shadowsocks, or else the first protocol that is on.
+  const [picked, setPicked] = useState<ProtocolId>('shadowsocks');
+  const protocol = available.includes(picked) ? picked : (firstKeyProtocol(available, 'shadowsocks') ?? 'shadowsocks');
   const [auth, setAuth] = useState('eap');
   const [limit, setLimit] = useState('');
   const [speedLimit, setSpeedLimit] = useState<SpeedChoice>({ mode: 'default', mb: '' });
@@ -33,7 +37,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
     setSpeedLimit({ mode: 'default', mb: '' });
     setError('');
     setCreated(null);
-    setProtocol(available.includes('amneziawg') ? 'amneziawg' : available[0] ?? 'amneziawg');
+    setPicked('shadowsocks');
     reloadServer().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -188,7 +192,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                   key={p}
                   type="button"
                   disabled={!on}
-                  onClick={() => setProtocol(p)}
+                  onClick={() => setPicked(p)}
                   aria-pressed={protocol === p}
                   className={cx(
                     'rounded-[20px] border px-4 py-3 text-left transition',
@@ -199,7 +203,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                     {PROTOCOLS[p]}
                     {protocol === p && <CheckIcon size={15} />}
                   </div>
-                  <div className="mt-0.5 text-[12px] text-fg-3">{on ? PROTOCOL_HINTS[p] : 'Off on this server'}</div>
+                  <div className="mt-0.5 text-[12px] text-fg-3">{on ? PROTOCOL_HINTS[p] : isApple(p) && !server.ipsec_component?.running ? 'Needs the IPsec component' : 'Off: turn it on in Network'}</div>
                 </button>
               );
             })}

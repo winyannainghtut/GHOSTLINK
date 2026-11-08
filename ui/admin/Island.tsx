@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LiveRates, Switch, cx, useUI } from '@shared/glass';
 import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, type ProtocolId, type Server } from './api';
+import { turnedOn } from './protocols';
 import { useStore } from './store';
 
 const ORDER: ProtocolId[] = ['amneziawg', 'wireguard', 'vless', 'shadowsocks', 'ikev2', 'ipsec'];
@@ -60,8 +61,9 @@ export function Island() {
     }
     try {
       await api('PATCH', '/server', { protocols: { [protocol]: { enabled: on } } });
-      setServer(await api<Server>('GET', '/server'));
-      toast(`${PROTOCOLS[protocol]} ${on ? 'is on' : 'paused'}.`);
+      const next = await api<Server>('GET', '/server');
+      setServer(next);
+      toast(on ? turnedOn(PROTOCOLS[protocol], protocol, next.protocols[protocol]?.port ?? 0) : `${PROTOCOLS[protocol]} paused.`);
     } catch (error) {
       toast((error as Error).message, 'bad');
     }
