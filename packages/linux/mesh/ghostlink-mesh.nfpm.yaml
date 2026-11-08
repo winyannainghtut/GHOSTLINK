@@ -38,6 +38,10 @@ scripts:
   postinstall: packages/linux/mesh/postinstall.sh
   preremove: packages/linux/mesh/preremove.sh
   postremove: packages/linux/mesh/postremove.sh
+rpm:
+  scripts:
+    # In an rpm upgrade the old package's pre-remove runs after the new post-install.
+    posttrans: packages/linux/mesh/posttrans.sh
 
 overrides:
   deb:

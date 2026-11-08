@@ -14,9 +14,13 @@ if (-not $SkipCompile) {
     Assert-Success 'Rust release build'
     & "$PSScriptRoot\cargo.ps1" build --release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
     Assert-Success 'Desktop release build'
+    # CGO_ENABLED=0 as in CI's tests and the published BUILD.txt; with a C compiler on PATH, Go
+    # would otherwise build the worker with cgo.
+    $previousCgo = $env:CGO_ENABLED
+    $env:CGO_ENABLED = '0'
     Push-Location core/outline-worker
     try { & go build -mod=readonly -trimpath -buildvcs=false -tags with_gvisor,with_utls,with_wireguard -ldflags '-s -w' -o '..\..\target\release\ghostlink-tunnel.exe' .; Assert-Success 'Managed tunnel worker build' }
-    finally { Pop-Location }
+    finally { Pop-Location; $env:CGO_ENABLED = $previousCgo }
 }
 $stage = Join-Path $repository 'artifacts\windows-x64\Ghostlink'
 New-Item -ItemType Directory -Force -Path $stage,(Join-Path $stage 'engine'),(Join-Path $stage 'licenses') | Out-Null

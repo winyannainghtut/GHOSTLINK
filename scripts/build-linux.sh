@@ -56,6 +56,8 @@ that install to /usr/bin and start the service for the user who ran sudo.
 The tunnel worker is GPL-3.0-or-later. Its corresponding source is published with this
 release as Ghostlink-$version-worker-corresponding-source.zip. Notices are in licenses/.
 EOF
+# The archive must not inherit group-writable modes from the checkout either.
+chmod -R u=rwX,go=rX "$stage"
 tar -C "$out" --owner=0 --group=0 -czf "$out/$name.tar.gz" "$name"
 echo "$out/$name.tar.gz"
 
@@ -65,6 +67,8 @@ rm -rf -- "$pkg"
 mkdir -p "$pkg"
 sed -e 's#/usr/local/bin/#/usr/bin/#' -e 's#/usr/local/lib/ghostlink/#/usr/lib/ghostlink/#' \
   packages/linux/ghostlinkd.service > "$pkg/ghostlinkd.service"
+# A conffile. The post-install fills in the owner, so dpkg treats an installed copy as changed:
+# editing this text makes every later upgrade of such a machine ask what to do with the file.
 cat > "$pkg/ghostlinkd.env" <<'EOF'
 # Ghostlink service settings, read by ghostlinkd.service. Restart after editing:
 #   sudo systemctl restart ghostlinkd
