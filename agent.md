@@ -59,7 +59,7 @@ A report on a running server and a second full review, reviewed area by area and
      - bump the version to 1.0.0 and follow the usual flow.
    - **Checks that need real devices** (a maintainer, or anyone with the hardware):
      - the MSI on a real Windows PC with a real connection;
-     - the server on a real VPS with a phone (Outline or WireGuard app);
+     - the server on a real VPS with a phone (Outline or WireGuard app). A real VPS was tested on 2026-11-08 (AWS Lightsail, 0.8.2): all four protocols with real traffic, from a PC and, for AmneziaWG, by the maintainer by hand; see the verification ledger. A phone is still to do;
      - `--migrate-outline` on a real Outline server;
      - an IKEv2 profile on an iPhone or Mac.
    - **Code signing is the maintainer's decision:** the Windows builds are unsigned, so SmartScreen says "Unknown publisher" (Azure Trusted Signing costs about $10 a month).
@@ -217,7 +217,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | Client protocols (v0.2.0) | Shadowsocks (Outline), VLESS-REALITY, WireGuard and AmneziaWG in the managed worker; `ss://`/`ssconf://`/`vless://`/`vpn://`/`.conf` import; split tunneling | Real encrypted traffic for every protocol through the worker; AmneziaWG interop against upstream amneziawg-go; REALITY against sing-box; split routing in the real engine. Full-TUN sessions still need an administrator |
 | OpenVPN transport | External Community engine adapter, strict inline profile validation | Real executable unavailable-server test and management parsing pass; no successful routed OpenVPN server session verified |
 | Linux (updated) | Headless client `.deb`/`.rpm`/archives (x64, arm64) since v0.2.1 | Release CI installs the `.deb` as a systemd service; a routed VPN session on a real host and the Linux GUI are unverified |
-| Self-hosted server (updated) | The **Ghostlink server** (§13): Docker image inside `.deb`/`.rpm`, four protocols, users, keys, rules, data and speed limits, monitoring, dashboard, IKEv2/IPsec component, mesh, Outline import; plus the older offline Outline generator, OpenVPN PKI, Ansible and a Terraform draft | Go end-to-end tests with real clients; release CI installs and exercises the packages on Docker runners. No internet-facing VPS deployment has been verified |
+| Self-hosted server (updated) | The **Ghostlink server** (§13): Docker image inside `.deb`/`.rpm`, four protocols, users, keys, rules, data and speed limits, monitoring, dashboard, IKEv2/IPsec component, mesh, Outline import; plus the older offline Outline generator, OpenVPN PKI, Ansible and a Terraform draft | Go end-to-end tests with real clients; release CI installs and exercises the packages on Docker runners. On 2026-11-08 an internet-facing test VPS (AWS Lightsail, Ubuntu 24.04) passed 83 checks with real traffic (traffic, isolation, limits, rules, online state, commands, statistics, restart, dashboard; see the ledger). IKEv2/IPsec, the mesh and the move from Outline were not tested there |
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
@@ -999,7 +999,7 @@ Requires an authorized Windows test machine and human administrator installation
 | GUI completeness | Native narrow-window, service outage/recovery, tray actions, install/uninstall interaction checks |
 | Linux client/packages | `.deb`/`.rpm` since v0.2.1 (installed as a service in CI). Remaining: GUI (GTK advisory), resolver/SSH safety and a real routed session |
 | Android and iOS | Native implementations, projects/toolchains, signing/entitlements, device tests |
-| Real self-hosted server deployment | Ghostlink server (v0.3.0): packaged with its image, management key, users/keys per protocol, global and per-user rules, limits, managed from the app/CLI; tested end to end locally and by release CI on Docker runners. Remaining: an authorized internet-facing host, firewall/cloud rules, backup/restore and long-running operation |
+| Real self-hosted server deployment | Ghostlink server (v0.3.0): packaged with its image, management key, users/keys per protocol, global and per-user rules, limits, managed from the app/CLI; tested end to end locally, by release CI on Docker runners and, on 2026-11-08, on an internet-facing test VPS behind a cloud firewall (AWS Lightsail). Remaining: backup/restore and long-running operation |
 | Agent end-to-end VPN workflow | Authorized control through real installed service and measured routing; optional daemon approval queue if required |
 | Public release | Licensing/source review, signing, target packages, verified update/rollback/troubleshooting and release workflow |
 
