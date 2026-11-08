@@ -6,10 +6,13 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
+
+	N "github.com/sagernet/sing/common/network"
 )
 
 // Destinations no VPN user may reach, whatever the rules say. The server runs with host
@@ -229,8 +232,12 @@ func (s *State) routeRules() ([]any, []any) {
 		internalBlock(object{"ip_cidr": internalRanges}),
 		object{"port": s.privatePorts(), "action": "reject"},
 	)
-	if addr, err := netip.ParseAddr(s.Hostname); err == nil {
-		rules = append(rules, internalBlock(object{"ip_cidr": []string{netip.PrefixFrom(addr, addr.BitLen()).String()}}))
+	if addrs := s.serverAddresses(); len(addrs) > 0 {
+		var own []string
+		for _, addr := range addrs {
+			own = append(own, netip.PrefixFrom(addr, addr.BitLen()).String())
+		}
+		rules = append(rules, internalBlock(object{"ip_cidr": own}))
 	}
 	var dnsRules []any
 	var exempt []string
@@ -251,13 +258,55 @@ func (s *State) routeRules() ([]any, []any) {
 	return rules, dnsRules
 }
 
-// privatePorts are this server's own service ports, which VPN users must never reach.
+// privatePorts are this server's own service ports, which VPN users must never reach, on any
+// address: the server may be reachable through addresses it does not know about.
 func (s *State) privatePorts() []uint16 {
 	ports := []uint16{s.API.Port}
+	if s.Dashboard.Port != 0 {
+		ports = append(ports, s.Dashboard.Port)
+	}
 	if s.meshEnabled() {
 		ports = append(ports, s.Mesh.Port)
 	}
 	return ports
+}
+
+// hostAddresses lists the addresses on this host's interfaces. The server runs with host
+// networking, so a VPN user's connection to one of them is delivered over loopback, past host
+// firewall allowlists, to every service on the host. Tests replace it.
+var hostAddresses = func() []netip.Addr {
+	interfaceAddrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var addrs []netip.Addr
+	for _, a := range interfaceAddrs {
+		network, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if addr, ok := netip.AddrFromSlice(network.IP); ok {
+			addrs = append(addrs, addr.Unmap())
+		}
+	}
+	return addrs
+}
+
+// serverAddresses are the addresses VPN users must not reach the server itself at: its
+// hostname when that is an address, and every public address of the host (private and
+// reserved ones are blocked anyway).
+func (s *State) serverAddresses() []netip.Addr {
+	var addrs []netip.Addr
+	if addr, err := netip.ParseAddr(s.Hostname); err == nil {
+		addrs = append(addrs, addr)
+	}
+	for _, addr := range hostAddresses() {
+		if N.IsPublicAddr(addr) && !slices.Contains(addrs, addr) {
+			addrs = append(addrs, addr)
+		}
+	}
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	return addrs
 }
 
 // EngineConfig renders the sing-box configuration for the current state.

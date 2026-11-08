@@ -326,20 +326,23 @@ Open them in the host firewall and any cloud security group. Ports below 1024 (f
 
 ### Traffic rules, in order
 
-1. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
-2. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
-3. Names are resolved on the server, so the next blocks also catch names that point inside.
-4. **Always blocked:**
-   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`) and cloud metadata (`169.254.169.254`);
-   - multicast, and NAT64/IPv4-mapped forms of all of these;
-   - the management API port;
-   - the server's own address, when its hostname is an IP address.
+1. With IKEv2/IPsec on, the IPsec DNS listener answers DNS from the IPsec pools only.
+2. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
+3. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
+4. Names are resolved on the server, so the next blocks also catch names that point inside.
+5. **Always blocked:**
+   - loopback, private and link-local ranges, CGNAT (`100.64.0.0/10`), cloud metadata (`169.254.169.254`), `0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`, multicast and the reserved `240.0.0.0/4`, and the IPv6 unspecified, unique-local, link-local and multicast ranges;
+   - every IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) address;
+   - the management API port, the dashboard port and, while the mesh is on, the mesh port, on any address;
+   - the server's own addresses: its hostname when that is an IP address, and every public address on the host's interfaces.
 
-   With host networking, this keeps VPN users away from services on the host and its network.
-5. Each user's own blocks.
-6. Users exempt from the rules for everyone go out directly.
-7. The rules for everyone.
-8. Everything else goes out directly.
+   With host networking, this keeps VPN users away from services on the host and its network. A connection to the host's own address would arrive over loopback, past host firewall allowlists.
+6. Each user's own blocks.
+7. Users exempt from the rules for everyone go out directly.
+8. The rules for everyone.
+9. Everything else goes out directly.
+
+The engine routes a UDP session by its first packet, but Shadowsocks, VLESS and WireGuard clients can address each later packet somewhere else. So every later packet to another address is checked again against the address and port rules above (DNS, always blocked, the user's own blocks, then, unless the user is exempt, the rules for everyone, including BitTorrent), and dropped if they refuse it. Site names cannot be checked per packet: a later packet to a name rather than an address is dropped.
 
 Disabled users and users over their limit are removed from the engine entirely, which also ends their open connections. Usage counts each user's payload bytes in both directions (not protocol overhead) and is saved every 30 seconds.
 
