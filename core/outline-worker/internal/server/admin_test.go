@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,27 +42,33 @@ func TestParseSpeed(t *testing.T) {
 	}
 }
 
+// adminCommands serves the test server's API on its real listener, as on a server, and returns
+// a runner for the server-side commands.
+func adminCommands(t *testing.T, server *testServer) func(args ...string) (string, error) {
+	t.Helper()
+	if err := server.store.WriteManagementKey(); err != nil {
+		t.Fatal(err)
+	}
+	httpServer, listener, err := NewAPI(server.service, "test").Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go httpServer.ServeTLS(listener, "", "")
+	t.Cleanup(func() { httpServer.Close() })
+	return func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := RunAdmin(server.store.Dir(), args, &out)
+		return out.String(), err
+	}
+}
+
 // The server-side commands run against the real API listener, as on a server.
 func TestAdminCommands(t *testing.T) {
 	server := newTestServer(t, func(s *State) {
 		s.API.Port = freeTCPPort(t)
 		s.Dashboard = DashboardConfig{Port: freeTCPPort(t), Token: "dashboard-token-for-test"}
 	})
-	if err := server.store.WriteManagementKey(); err != nil {
-		t.Fatal(err)
-	}
-	api := NewAPI(server.service, "test")
-	httpServer, listener, err := api.Listen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	go httpServer.ServeTLS(listener, "", "")
-	t.Cleanup(func() { httpServer.Close() })
-	run := func(args ...string) (string, error) {
-		var out bytes.Buffer
-		err := RunAdmin(server.store.Dir(), args, &out)
-		return out.String(), err
-	}
+	run := adminCommands(t, server)
 	must := func(want string, args ...string) string {
 		t.Helper()
 		out, err := run(args...)
@@ -235,4 +242,66 @@ func TestAdminCommands(t *testing.T) {
 		t.Fatalf("import-outline touched its input: %v", err)
 	}
 	refused("already has clients", "import-outline", "--dir", dir)
+}
+
+// On a new server the commands point at Shadowsocks, and turning a protocol on, or moving one,
+// says which port to allow.
+func TestAdminCommandsOnANewServer(t *testing.T) {
+	server := newTestServer(t, func(s *State) {
+		onlyShadowsocks(s)
+		s.API.Port = freeTCPPort(t)
+	})
+	run := adminCommands(t, server)
+	if out, err := run("user", "add", "Alice"); err != nil || !strings.Contains(out, "Added Alice (id 1). Next: sudo ghostlink-server key add Alice shadowsocks\n") {
+		t.Fatalf("user add: %v %s", err, out)
+	}
+	if out, err := run("keys", "Alice"); err != nil || !strings.Contains(out, "Create one: sudo ghostlink-server key add Alice shadowsocks\n") {
+		t.Fatalf("keys of a user without any: %v %s", err, out)
+	}
+	if out, err := run("settings"); err != nil || !strings.Contains(out, "Off: amneziawg, wireguard, vless. Turn one on (it prints the port to allow): sudo ghostlink-server set --enable PROTOCOL\n") {
+		t.Fatalf("settings on a new server: %v\n%s", err, out)
+	}
+	if _, err := run("key", "add", "Alice", "amneziawg"); err == nil ||
+		!strings.Contains(err.Error(), "amneziawg is turned off on this server; turn it on first (its switch in the app or dashboard, or sudo ghostlink-server set --enable amneziawg)") {
+		t.Fatalf("key add for a protocol that is off: %v", err)
+	}
+	if out, err := run("key", "add", "Alice", "shadowsocks", "--no-qr"); err != nil || !strings.Contains(out, "ss://") {
+		t.Fatalf("key add shadowsocks: %v %s", err, out)
+	}
+
+	out, err := run("set", "--enable", "amneziawg")
+	var port uint16
+	server.service.Read(func(s *State) { port = s.AmneziaWG.Port })
+	want := fmt.Sprintf("AmneziaWG is on, on UDP %d (it listens once it has a key): allow %d/udp in this server's firewall and your cloud security group (for example: sudo ufw allow %d/udp).\n", port, port, port)
+	if err != nil || !strings.HasPrefix(out, "Saved.") || !strings.Contains(out, want) || strings.Count(out, " is on, on ") != 1 {
+		t.Fatalf("set --enable amneziawg: %v\n%s", err, out)
+	}
+	// Shadowsocks listens on TCP and UDP; its new port is one the server would pick itself.
+	server.service.Read(func(s *State) { port, err = pickPort(s.usedPorts(), portFree, "tcp", "udp") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = run("set", "--port", fmt.Sprintf("shadowsocks=%d", port))
+	want = fmt.Sprintf("Shadowsocks (Outline) is on, on TCP and UDP %d (it listens once it has a key): allow %d/tcp and %d/udp in this server's firewall and your cloud security group (for example: sudo ufw allow %d/tcp && sudo ufw allow %d/udp).\n", port, port, port, port, port)
+	if err != nil || !strings.Contains(out, want) || strings.Count(out, " is on, on ") != 1 {
+		t.Fatalf("set --port shadowsocks: %v\n%s", err, out)
+	}
+	// Other changes, and turning a protocol off, name no port.
+	for _, args := range [][]string{{"set", "--speed-limit", "none"}, {"set", "--disable", "vless"}} {
+		if out, err := run(args...); err != nil || strings.Contains(out, " is on, on ") {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	if out, err := run("key", "add", "Alice", "amneziawg", "--no-qr"); err != nil || !strings.Contains(out, "[Interface]") {
+		t.Fatalf("key add amneziawg once it is on: %v %s", err, out)
+	}
+	var settings serverInfo
+	if out, err := run("--json", "settings"); err != nil || json.Unmarshal([]byte(out), &settings) != nil ||
+		!settings.Protocols[AmneziaWG].Enabled || settings.Protocols[VLESS].Enabled || settings.Protocols[WireGuard].Enabled {
+		t.Fatalf("--json settings: %v %s", err, out)
+	}
+	if out, err := run("settings"); err != nil || !strings.Contains(out, "Off: wireguard, vless. Turn one on") {
+		t.Fatalf("settings with AmneziaWG on: %v\n%s", err, out)
+	}
 }

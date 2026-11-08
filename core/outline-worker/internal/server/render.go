@@ -450,3 +450,39 @@ func (s *State) CheckPorts() error {
 	}
 	return nil
 }
+
+// checkReservedPorts is CheckPorts with every VPN protocol counted, on or off: a protocol that
+// is off keeps its port for when it is turned on, so no other service may take it.
+func (s *State) checkReservedPorts() error {
+	if err := s.CheckPorts(); err != nil {
+		return err
+	}
+	all := *s
+	all.Shadowsocks.Enabled, all.VLESS.Enabled, all.WireGuard.Enabled, all.AmneziaWG.Enabled = true, true, true, true
+	if err := all.CheckPorts(); err != nil {
+		return fmt.Errorf("%w (a protocol that is off keeps its port for when it is turned on)", err)
+	}
+	return nil
+}
+
+// heldPorts are the ports this server's own listeners hold now: the API, the dashboard, the mesh
+// while it is on, and what the engine binds (the protocols that are on and have keys, and the
+// IKEv2/IPsec DNS listener while IKEv2 or IPsec is on). A change may move a service onto one of
+// them, as when two services swap ports. A protocol that is off, or has no keys yet, holds no
+// port, so turning it on tries its port: another program may have taken it since the server was
+// created. Every listen_port in inbounds and endpoints is a uint16.
+func (s *State) heldPorts() map[uint16]bool {
+	held := map[uint16]bool{s.API.Port: true}
+	if s.Dashboard.Port != 0 {
+		held[s.Dashboard.Port] = true
+	}
+	if s.meshEnabled() {
+		held[s.Mesh.Port] = true
+	}
+	for _, listener := range append(s.inbounds(), s.endpoints()...) {
+		if port, ok := listener.(object)["listen_port"].(uint16); ok {
+			held[port] = true
+		}
+	}
+	return held
+}

@@ -313,7 +313,8 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
   user speed NAME 2MB|none|default     speed limit in bytes per second, download and
                                        upload alike, shared by all of NAME's keys
   user exempt NAME on|off              skip the rules for everyone
-  key add NAME PROTOCOL [--no-qr]      amneziawg, wireguard, vless or shadowsocks
+  key add NAME PROTOCOL [--no-qr]      shadowsocks, or amneziawg, wireguard or vless once
+                                       turned on (set --enable P)
   key add NAME ikev2|ipsec [--auth eap|certificate|psk] [--address HOST]
           [--remote-id ID] [--local-id ID]
                                        built-in VPN of iPhone, iPad and Mac (needs the
@@ -335,6 +336,9 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
   set [--name N] [--hostname H] [--reality-site S] [--enable P] [--disable P] [--port P=N]
       [--history-days N] [--site-days N] [--history-max-mb N] [--rotate-ipsec-psk]
       [--speed-limit 2MB|none]         default speed limit for clients without their own
+  set --enable amneziawg|wireguard|vless
+                                       turn a protocol on (a new server runs only
+                                       Shadowsocks); prints the port to allow
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
   mesh ...                             private network between your servers (mesh help)
@@ -432,7 +436,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		}
 		return print(keys, func() {
 			if len(keys) == 0 {
-				fmt.Fprintf(out, "%s has no keys. Create one: sudo ghostlink-server key add %s amneziawg\n", u.Name, u.Name)
+				fmt.Fprintf(out, "%s has no keys. Create one: sudo ghostlink-server key add %s shadowsocks\n", u.Name, u.Name)
 				return
 			}
 			for _, k := range keys {
@@ -591,6 +595,16 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 			}
 			rows = append(rows, []string{"Dashboard", mode, strconv.Itoa(int(info.DashboardPort))})
 			table("SERVICE\tSTATE\tPORT", rows)
+			var off []string
+			for _, p := range Protocols {
+				if !info.Protocols[p].Enabled {
+					off = append(off, p)
+				}
+			}
+			if len(off) > 0 {
+				// A placeholder, not "a|b": a pasted "|" would run the command for the first one.
+				fmt.Fprintf(out, "Off: %s. Turn one on (it prints the port to allow): sudo ghostlink-server set --enable PROTOCOL\n", strings.Join(off, ", "))
+			}
 			component := info.IPsecComponent
 			switch {
 			case component.Running && component.Error != "":
@@ -672,7 +686,7 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 			return err
 		}
 		return print(created, func() {
-			fmt.Fprintf(out, "Added %s (id %s). Next: sudo ghostlink-server key add %s amneziawg\n", created.Name, created.ID, created.Name)
+			fmt.Fprintf(out, "Added %s (id %s). Next: sudo ghostlink-server key add %s shadowsocks\n", created.Name, created.ID, created.Name)
 		})
 	}
 	switch action {
@@ -761,7 +775,7 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 	switch action {
 	case "add":
 		if len(rest) < 1 {
-			return errors.New("usage: key add NAME amneziawg|wireguard|vless|shadowsocks|ikev2|ipsec [--no-qr]")
+			return errors.New("usage: key add NAME shadowsocks|amneziawg|wireguard|vless|ikev2|ipsec [--no-qr]")
 		}
 		flags := flag.NewFlagSet("key add", flag.ContinueOnError)
 		noQR := flags.Bool("no-qr", false, "")
@@ -1120,6 +1134,18 @@ func (c *AdminClient) setCommand(args []string, out io.Writer, print func(any, f
 	}
 	return print(info, func() {
 		fmt.Fprintln(out, "Saved. Users reconnect automatically.")
+		// A protocol turned on or moved listens on a port the firewall may not allow yet.
+		for _, p := range Protocols {
+			if v := info.Protocols[p]; protocols[p] != nil && v.Enabled {
+				var transports, allow []string
+				for _, network := range protocolNetworks[p] {
+					transports = append(transports, strings.ToUpper(network))
+					allow = append(allow, fmt.Sprintf("%d/%s", v.Port, network))
+				}
+				fmt.Fprintf(out, "%s is on, on %s %d (it listens once it has a key): allow %s in this server's firewall and your cloud security group (for example: sudo ufw allow %s).\n",
+					protocolTitles[p], strings.Join(transports, " and "), v.Port, strings.Join(allow, " and "), strings.Join(allow, " && sudo ufw allow "))
+			}
+		}
 		if *rotatePSK {
 			fmt.Fprintln(out, "The IPsec group key changed: export and reinstall every IPsec PSK profile (sudo ghostlink-server profile NAME ID --output FILE).")
 		}
