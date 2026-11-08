@@ -2,6 +2,26 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## A real internet-facing server (2026-11-08, Ghostlink 0.8.2)
+
+The maintainer's test VPS: AWS Lightsail in Singapore, Ubuntu 24.04.4 LTS x86_64, 2 vCPU, 412 MB of memory and 1 GB of swap, behind Lightsail's firewall (ufw off). Clients: a Windows PC with a standalone sing-box 1.14.4 (SOCKS on 127.0.0.1), and the maintainer's own device for AmneziaWG. Server-side steps ran over SSH (`sudo ghostlink-server --json …`, and the management API on the server's own loopback, so the management key never left the server). A temporary client was created and removed, and every changed setting was saved first, restored and compared at the end (`%TEMP%\gl-gui\fulltest.mjs`, `udp-later.mjs` and `dash-real.mjs`, kept outside the repository). 83 checks; the one failure was the test's own (a later UDP packet sent to a name, which is dropped by design) and passed when sent to an address.
+
+| Check | Result actually observed |
+|---|---|
+| Install and ports | `ghostlink-server` 0.8.2 (package `0.8.2-1`) running. A protocol listens only once a key for it exists: VLESS, WireGuard and AmneziaWG opened their ports with the first key. The dashboard listens on 127.0.0.1 only; the management API answers `404` without its secret |
+| Traffic, no limit | Shadowsocks, VLESS-REALITY and WireGuard: the exit address was the server's; 10 MB downloads at 38–53 MB/s, 4 MB uploads at 20–21 MB/s; Shadowsocks UDP (an NTP request) answered. AmneziaWG: checked by the maintainer by hand, works |
+| What VPN users can reach (0.8.1) | Through Shadowsocks, VLESS and WireGuard, refused: the dashboard and the management API on the server's loopback, SSH and the management API on its public address, SSH on its private address, the AWS metadata endpoint (169.254.169.254); the last two also for an exempt client. Controls: ordinary sites work, and SSH answers from outside the VPN |
+| UDP, packet by packet (0.8.1) | In one Shadowsocks UDP session opened by an NTP request: later packets to other NTP servers by address were answered; to a DNS server (8.8.8.8:53) or the host's resolver (127.0.0.53:53) dropped; to a host name instead of an address dropped (the check needs an address). A session opened by a DNS query was answered by the server's resolver |
+| Speed limits (0.8.0) | At 1 MB/s: downloads 1.01–1.02 MB/s and uploads 1.04 MB/s on all three protocols. A change from 1 to 5 MB/s during a 30 MB download applied at once (10.6 s, about 30 s otherwise). The server default (2 MB/s) applied to a client without its own (2.09 MB/s); "no limit" overrides it (45 MB/s) |
+| Data limit | With a 20 MB limit at 2 MB/s, a 30 MB download stopped at 24.6 MB and new connections were refused; `user reset` restored access |
+| Rules | The client's own: a blocked site and its subdomain, a blocked address and a blocked port refused, other sites, addresses and ports work. A site blocked for everyone refused, but not for an exempt client |
+| Online and idle (0.8.1) | Online right after traffic; idle 75 s later with one idle connection still open (an SSH server waiting for the client); an idle WireGuard tunnel stayed online through its keepalives |
+| Server commands | Refused: a word an option does not take, a port another program uses (22) or below 1024 (80), a name that differs only in capitals, `10Mbps` and `10Mb/s`. `2MBps` read as 2,000,000 B/s. `key qr` prints a QR code and fails for an unknown key; `kit` writes a 62 KB HTML page; `keys` without `--show` holds no key text |
+| Statistics | `stats --range 24h`, `usage` and `clients` (with this PC's public address) report the test client |
+| Restart | After `restart`: every client still there, usage saved, keys work, no error in the log |
+| Dashboard (SSH tunnel, WebView2 DevTools with an isolated profile) | Signs in with the login link and shows `v0.8.2`. Overview, Clients, Network and the Island at 1280, 1000 and 390 px, in Daylight and Obsidian: nothing outside its box, no page wider than the screen |
+| Not tested there | IKEv2/IPsec (the component is not enabled), the mesh (needs more Linux machines), the move from Outline (no Outline on the host), a hostname change, a busy port at start, the BitTorrent and SMTP blocks |
+
 ## v0.8.2 Layout fixes (2026-11-08, pull request #5)
 
 Reported on the published 0.8.1: the switches of the Island's protocol list stuck out of its box. An independent review of the fix found the same fault in more places and a few other layout faults, and a skeptic checked each finding again (8 of 10 held). Every check below rendered the real UI in the debug app's WebView2 over DevTools (isolated profile, dummy service endpoint) against a local `ghostlink-server` (`%TEMP%\gl-gui\layout081.mjs` and `layout082.mjs`, kept outside the repository).
@@ -39,9 +59,9 @@ Before the release, five reviewers checked every claim of the CHANGELOG section 
 
 ### Not verified
 
-- A real Apple device, a real VPS, `--migrate-outline` on a real Outline, a reconnect after a real connected OpenVPN session, and a routed tunnel on Linux.
+- A real Apple device, `--migrate-outline` on a real Outline, a reconnect after a real connected OpenVPN session, and a routed tunnel on Linux. (A real VPS was tested later; see the section above.)
 - `dnf upgrade` of the client and mesh `.rpm` on Fedora/RHEL, and an MSI upgrade with a new `GHOSTLINK_OWNER_SID` (both were checked only by tests of the scripts and logic).
-- The host addresses that the server blocks, read from `net.InterfaceAddrs` inside the container on a real host; the mesh across real cloud servers; the race detector (no cgo toolchain on the development machine).
+- The mesh across real cloud servers; the race detector (no cgo toolchain on the development machine). (The host addresses the server blocks were checked later on a real host: its public, private and loopback addresses; see the section above.)
 
 ## v0.8.1 Review of v0.8.0 after its release (2026-11-08, pull request #2)
 
