@@ -187,21 +187,36 @@ func parseLimit(text string) (uint64, error) {
 	return 0, fmt.Errorf("data limits look like 50GB, 500MB, 1TB or none (got %q)", text)
 }
 
-// parseSpeed reads a speed such as "2MB", "500KB/s" or "1.5MB" as bytes per second (decimal
-// units, like data). "none" and "default" are returned as keywords for the caller to map.
+// parseSpeed reads a speed such as "2MB", "500KB/s", "2MBps" or "1.5MB" as bytes per second
+// (decimal units, like data). "none" and "default" are returned as keywords for the caller to map.
 func parseSpeed(text string) (int64, string, error) {
-	t := strings.ToUpper(strings.TrimSpace(text))
+	unit := strings.TrimSpace(text)
+	t := strings.ToUpper(unit)
 	switch t {
 	case "NONE", "OFF", "UNLIMITED":
 		return 0, "none", nil
 	case "DEFAULT":
 		return 0, "default", nil
 	}
-	if strings.HasSuffix(t, "PS") || strings.Contains(t, "BIT") {
-		// "10Mbps" means bits; reading it as 10 MB/s would allow eight times as much.
-		return 0, "", fmt.Errorf("speed limits are in bytes per second, like 2MB or 500KB (got %q)", text)
+	// A lower-case b is a bit: "10Mbps", "10Mb/s" or "10 mb" read as bytes would allow eight
+	// times as much. So the case matters here, unlike in the rest of the unit. "ps" counts as
+	// "per second" only after a B, as in 2MBps; "2Mps" says nothing about bits or bytes.
+	bits := fmt.Errorf("speed limits are in bytes per second, like 2MB or 500KB (got %q)", text)
+	if strings.Contains(t, "BIT") {
+		return 0, "", bits
 	}
-	t = strings.TrimSuffix(t, "/S")
+	if n := len(unit); n > 2 && strings.EqualFold(unit[n-2:], "/s") {
+		unit = unit[:n-2]
+	} else if n > 2 && strings.EqualFold(unit[n-2:], "ps") {
+		if unit[n-3] != 'B' {
+			return 0, "", bits
+		}
+		unit = unit[:n-2]
+	}
+	if strings.HasSuffix(unit, "b") {
+		return 0, "", bits
+	}
+	t = strings.ToUpper(unit)
 	units := []struct {
 		suffix string
 		scale  float64
@@ -239,6 +254,19 @@ type stringList []string
 
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
 func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
+// parseFlags parses a command's options and refuses anything left over. The flag package stops
+// at the first word that is not an option, without an error, so "user add Alice --exempt false
+// --limit 5GB" would turn --exempt on (a switch takes no value) and drop --limit unnoticed.
+func parseFlags(flags *flag.FlagSet, args []string) error {
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("unexpected %q: switches take no value (leave one out to turn it off), and each value needs its own option", flags.Arg(0))
+	}
+	return nil
+}
 
 // adminUser is the subset of a user view the commands need.
 type adminUser struct {
@@ -386,7 +414,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		if len(rest) == 0 {
 			return errors.New("usage: keys NAME [--show]")
 		}
-		if err := flags.Parse(rest[1:]); err != nil {
+		if err := parseFlags(flags, rest[1:]); err != nil {
 			return err
 		}
 		u, err := c.findUser(rest[0])
@@ -448,7 +476,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		if len(rest) < 2 {
 			return errors.New("usage: profile NAME ID [--output FILE] [--prompt-password] [--on-demand]")
 		}
-		if err := flags.Parse(rest[2:]); err != nil {
+		if err := parseFlags(flags, rest[2:]); err != nil {
 			return err
 		}
 		u, err := c.findUser(rest[0])
@@ -521,7 +549,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 	case "top":
 		flags := flag.NewFlagSet("top", flag.ContinueOnError)
 		once := flags.Bool("once", false, "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		return c.top(out, *once)
@@ -584,23 +612,25 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 			}
 		})
 	case "set":
-		return c.setCommand(rest, out)
+		return c.setCommand(rest, out, print)
 	case "site-stats":
 		if len(rest) != 1 || (rest[0] != "on" && rest[0] != "off") {
 			return errors.New("usage: site-stats on|off")
 		}
 		on := rest[0] == "on"
-		if err := c.Do(http.MethodPatch, "/server", map[string]any{"site_stats": on}, nil); err != nil {
+		var info serverInfo
+		if err := c.Do(http.MethodPatch, "/server", map[string]any{"site_stats": on}, &info); err != nil {
 			return err
 		}
-		if on {
-			fmt.Fprintln(out, "Top sites per user are now recorded (totals only, kept for the site retention).")
-		} else {
-			fmt.Fprintln(out, "Top sites are off, and every recorded site has been deleted.")
-		}
-		return nil
+		return print(info, func() {
+			if on {
+				fmt.Fprintln(out, "Top sites per user are now recorded (totals only, kept for the site retention).")
+			} else {
+				fmt.Fprintln(out, "Top sites are off, and every recorded site has been deleted.")
+			}
+		})
 	case "dashboard":
-		return c.dashboardCommand(rest, out)
+		return c.dashboardCommand(rest, out, print)
 	case "mesh":
 		return c.meshCommand(rest, out, asJSON)
 	case "import-outline":
@@ -619,7 +649,7 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 		limit := flags.String("limit", "", "")
 		speed := flags.String("speed", "", "")
 		exempt := flags.Bool("exempt", false, "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		change := map[string]any{"name": ref, "exempt_from_global_rules": *exempt}
@@ -644,6 +674,13 @@ func (c *AdminClient) userCommand(args []string, out io.Writer, print func(any, 
 		return print(created, func() {
 			fmt.Fprintf(out, "Added %s (id %s). Next: sudo ghostlink-server key add %s amneziawg\n", created.Name, created.ID, created.Name)
 		})
+	}
+	switch action {
+	case "enable", "disable", "reset", "remove":
+		// One user at a time: "user remove Alice Bob" must not quietly remove only Alice.
+		if len(rest) > 0 {
+			return fmt.Errorf("usage: user %s NAME (one user at a time; got %q too)", action, rest[0])
+		}
 	}
 	u, err := c.findUser(ref)
 	if err != nil {
@@ -732,7 +769,7 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 		address := flags.String("address", "", "")
 		remoteID := flags.String("remote-id", "", "")
 		localID := flags.String("local-id", "", "")
-		if err := flags.Parse(rest[1:]); err != nil {
+		if err := parseFlags(flags, rest[1:]); err != nil {
 			return err
 		}
 		request := map[string]string{"protocol": rest[0]}
@@ -769,7 +806,10 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 			fmt.Fprintf(out, "\n.conf for the WireGuard/AmneziaWG app:\n\n%s", key.Config)
 		}
 		if !*noQR {
-			c.printQR(out, u.ID, key.ID, "auto", key.Protocol, key.Config != "")
+			// The key exists already, so a missing QR code is only noted here.
+			if err := c.printQR(out, u.ID, key.ID, "auto", key.Protocol, key.Config != ""); err != nil {
+				fmt.Fprintf(out, "\n(No QR code: %v)\n", err)
+			}
 		}
 		fmt.Fprintf(out, "\nShare it only with %s. All keys and app help in one page: sudo ghostlink-server kit %s --output %s.html\n", u.Name, u.Name, strings.ToLower(u.Name))
 		return nil
@@ -779,10 +819,13 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 		}
 		flags := flag.NewFlagSet("key qr", flag.ContinueOnError)
 		content := flags.String("content", "auto", "")
-		if err := flags.Parse(rest[1:]); err != nil {
+		if err := parseFlags(flags, rest[1:]); err != nil {
 			return err
 		}
-		c.printQR(out, u.ID, rest[0], *content, "", false)
+		// Here the QR code is the whole job, so a failure fails the command.
+		if err := c.printQR(out, u.ID, rest[0], *content, "", false); err != nil {
+			return fmt.Errorf("no QR code: %w", err)
+		}
 		return nil
 	case "remove":
 		if len(rest) != 1 {
@@ -797,11 +840,10 @@ func (c *AdminClient) keyCommand(args []string, out io.Writer, asJSON bool) erro
 	return fmt.Errorf("unknown key action %q", action)
 }
 
-func (c *AdminClient) printQR(out io.Writer, user, key, content, protocol string, conf bool) {
+func (c *AdminClient) printQR(out io.Writer, user, key, content, protocol string, conf bool) error {
 	text, err := c.Text("/users/" + user + "/keys/" + key + "/qr?format=text&content=" + url.QueryEscape(content))
 	if err != nil {
-		fmt.Fprintf(out, "\n(No QR code: %v)\n", err)
-		return
+		return err
 	}
 	switch {
 	case conf:
@@ -814,6 +856,7 @@ func (c *AdminClient) printQR(out io.Writer, user, key, content, protocol string
 		fmt.Fprintln(out, "\nQR code:")
 	}
 	fmt.Fprint(out, text)
+	return nil
 }
 
 func (c *AdminClient) rulesCommand(args []string, out io.Writer, print func(any, func()) error) error {
@@ -829,7 +872,9 @@ func (c *AdminClient) rulesCommand(args []string, out io.Writer, print func(any,
 	flags.Var(&ports, "block-port", "")
 	torrent := flags.Bool("block-bittorrent", false, "")
 	smtp := flags.Bool("block-smtp", false, "")
-	if err := flags.Parse(args); err != nil {
+	// "rules set" replaces the whole rule set, so an option dropped by a stray word would be
+	// turned off.
+	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	show := func(rules Rules, scope string) error {
@@ -883,7 +928,7 @@ func (c *AdminClient) statsCommand(args []string, out io.Writer, print func(any,
 	}
 	flags := flag.NewFlagSet("stats", flag.ContinueOnError)
 	rangeName := flags.String("range", "7d", "")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	path := "/stats?range=" + url.QueryEscape(*rangeName)
@@ -1000,7 +1045,7 @@ func (c *AdminClient) top(out io.Writer, once bool) error {
 	}
 }
 
-func (c *AdminClient) setCommand(args []string, out io.Writer) error {
+func (c *AdminClient) setCommand(args []string, out io.Writer, print func(any, func()) error) error {
 	flags := flag.NewFlagSet("set", flag.ContinueOnError)
 	name := flags.String("name", "", "")
 	hostname := flags.String("hostname", "", "")
@@ -1014,7 +1059,7 @@ func (c *AdminClient) setCommand(args []string, out io.Writer) error {
 	historyMB := flags.Int("history-max-mb", 0, "")
 	rotatePSK := flags.Bool("rotate-ipsec-psk", false, "")
 	speedLimit := flags.String("speed-limit", "", "")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	patch := map[string]any{}
@@ -1068,26 +1113,29 @@ func (c *AdminClient) setCommand(args []string, out io.Writer) error {
 	if len(patch) == 0 {
 		return errors.New("nothing to change; see: sudo ghostlink-server help")
 	}
-	if err := c.Do(http.MethodPatch, "/server", patch, nil); err != nil {
+	// The answer is the server's settings after the change, as in "settings".
+	var info serverInfo
+	if err := c.Do(http.MethodPatch, "/server", patch, &info); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Saved. Users reconnect automatically.")
-	if *rotatePSK {
-		fmt.Fprintln(out, "The IPsec group key changed: export and reinstall every IPsec PSK profile (sudo ghostlink-server profile NAME ID --output FILE).")
-	}
-	if *hostname != "" {
-		fmt.Fprintln(out, "New keys use the new address; keys you already shared keep the old one. The management key changed: sudo ghostlink-server show-key")
-	}
-	return nil
+	return print(info, func() {
+		fmt.Fprintln(out, "Saved. Users reconnect automatically.")
+		if *rotatePSK {
+			fmt.Fprintln(out, "The IPsec group key changed: export and reinstall every IPsec PSK profile (sudo ghostlink-server profile NAME ID --output FILE).")
+		}
+		if *hostname != "" {
+			fmt.Fprintln(out, "New keys use the new address; keys you already shared keep the old one. The management key changed: sudo ghostlink-server show-key")
+		}
+	})
 }
 
-func (c *AdminClient) dashboardCommand(args []string, out io.Writer) error {
+func (c *AdminClient) dashboardCommand(args []string, out io.Writer, print func(any, func()) error) error {
 	flags := flag.NewFlagSet("dashboard", flag.ContinueOnError)
 	port := flags.Int("port", 0, "")
 	public := flags.Bool("public", false, "")
 	private := flags.Bool("private", false, "")
 	reset := flags.Bool("reset-token", false, "")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	if *public && *private {
@@ -1123,18 +1171,19 @@ func (c *AdminClient) dashboardCommand(args []string, out io.Writer) error {
 	if err := c.Do(http.MethodGet, "/dashboard", nil, &info); err != nil {
 		return err
 	}
-	if *reset {
-		fmt.Fprintln(out, "New login link created; everyone signed in before is signed out.")
-	}
-	if info.Public {
-		fmt.Fprintf(out, "Dashboard: public HTTPS on port %d.\n\nOpen this link in your browser:\n  https://%s:%d/#t=%s\n\n", info.Port, endpointHost(info.Hostname), info.Port, info.Token)
-		fmt.Fprintf(out, "Your browser warns about the certificate because it is self-signed. Before continuing, check that it\nshows this SHA-256 fingerprint:\n  %s\n\n", c.pin)
-		fmt.Fprintf(out, "Allow port %d only from your own address in the firewall if you can. Go back to tunnel-only:\n  sudo ghostlink-server dashboard --private\n", info.Port)
-	} else {
-		fmt.Fprintf(out, "Dashboard: private (reachable only through an SSH tunnel), port %d.\n\n", info.Port)
-		fmt.Fprintf(out, "1. On your computer, open a tunnel (keep it running):\n     ssh -N -L 8080:127.0.0.1:%d YOUR-USER@%s\n", info.Port, info.Hostname)
-		fmt.Fprintf(out, "2. Open this link in your browser:\n     http://127.0.0.1:8080/#t=%s\n\n", info.Token)
-	}
-	fmt.Fprintln(out, "Keep the link private: it signs you in as the administrator. Revoke it with --reset-token.")
-	return nil
+	return print(info, func() {
+		if *reset {
+			fmt.Fprintln(out, "New login link created; everyone signed in before is signed out.")
+		}
+		if info.Public {
+			fmt.Fprintf(out, "Dashboard: public HTTPS on port %d.\n\nOpen this link in your browser:\n  https://%s:%d/#t=%s\n\n", info.Port, endpointHost(info.Hostname), info.Port, info.Token)
+			fmt.Fprintf(out, "Your browser warns about the certificate because it is self-signed. Before continuing, check that it\nshows this SHA-256 fingerprint:\n  %s\n\n", c.pin)
+			fmt.Fprintf(out, "Allow port %d only from your own address in the firewall if you can. Go back to tunnel-only:\n  sudo ghostlink-server dashboard --private\n", info.Port)
+		} else {
+			fmt.Fprintf(out, "Dashboard: private (reachable only through an SSH tunnel), port %d.\n\n", info.Port)
+			fmt.Fprintf(out, "1. On your computer, open a tunnel (keep it running):\n     ssh -N -L 8080:127.0.0.1:%d YOUR-USER@%s\n", info.Port, info.Hostname)
+			fmt.Fprintf(out, "2. Open this link in your browser:\n     http://127.0.0.1:8080/#t=%s\n\n", info.Token)
+		}
+		fmt.Fprintln(out, "Keep the link private: it signs you in as the administrator. Revoke it with --reset-token.")
+	})
 }

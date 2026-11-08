@@ -162,7 +162,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 	case "enable":
 		flags := flag.NewFlagSet("mesh enable", flag.ContinueOnError)
 		cidr := flags.String("cidr", "", "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		patch := map[string]any{"enabled": true}
@@ -192,7 +192,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 		approval := flags.Bool("approval", false, "")
 		local := flags.Bool("local", false, "")
 		note := flags.String("note", "", "")
-		if err := flags.Parse(rest); err != nil {
+		if err := parseFlags(flags, rest); err != nil {
 			return err
 		}
 		request := map[string]any{"tags": splitList(*tags), "uses": *uses, "expires_hours": *hours, "relay": *relay,
@@ -248,7 +248,7 @@ func (c *AdminClient) meshCommand(args []string, out io.Writer, asJSON bool) err
 		routes := flags.String("routes", "", "")
 		disable := flags.Bool("disable", false, "")
 		enable := flags.Bool("enable", false, "")
-		if err := flags.Parse(rest[1:]); err != nil {
+		if err := parseFlags(flags, rest[1:]); err != nil {
 			return err
 		}
 		change := map[string]any{}
@@ -385,7 +385,7 @@ func (c *AdminClient) meshRules(args []string, out io.Writer, print func(any, fu
 		to := flags.String("to", "*", "")
 		proto := flags.String("proto", "any", "")
 		ports := flags.String("ports", "", "")
-		if err := flags.Parse(args[1:]); err != nil {
+		if err := parseFlags(flags, args[1:]); err != nil {
 			return err
 		}
 		rule := mesh.Rule{From: *from, To: *to, Protocol: *proto, Ports: splitList(*ports)}
