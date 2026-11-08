@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 ```
 
 [`scripts/install-server.sh`](../../scripts/install-server.sh) does the following:
-- picks the right package for the distribution and CPU, and installs Docker from the distribution if it is missing;
+- picks the right package for the distribution and CPU, and installs Docker if it is missing: the distribution's package on Debian, Ubuntu, Fedora and Amazon Linux; on RHEL, CentOS Stream, Rocky, AlmaLinux and Oracle Linux, `docker-ce` from Docker's own repository (`download.docker.com`), which it adds;
 - downloads the newest **published** release's package and checks it against that release's `SHA256SUMS.txt`, which protects against corrupted downloads, not against a compromised GitHub account;
 - installs it, then prints the management key and every port to allow.
 
@@ -56,7 +56,7 @@ Run it again to upgrade; users, keys and rules are kept.
 | `--open-firewall` | Add the ports to an **active** ufw or firewalld; a firewall that is off is never turned on |
 | `--no-docker` | Never install Docker |
 | `--reinstall` | Install even if this version is already installed |
-| `--add-swap` | On a server with under 1 GB of memory and swap, add a 1 GB swap file so the installation is not killed |
+| `--add-swap` | On a server with under 900 MB of memory and swap, add a 1 GB swap file so the installation is not killed (without it, the installer stops there). With more, no swap file is needed or added |
 | `--migrate-outline [--check]` | Take over the Outline server on this machine ([Move from Outline](migrate-from-outline.md)); with `--check`, only report what would happen. `--outline-dir DIR` if Outline is not in `/opt/outline` |
 
 The installer refuses Docker from the Snap store, which cannot mount `/var/lib/ghostlink-server`. To read the script before running it, download it first: `curl -fsSLO …/install-server.sh && less install-server.sh && sudo bash install-server.sh`.
@@ -72,9 +72,9 @@ The installer:
 
 1. Starts Docker if it is installed as a systemd service.
 2. Creates the `ghostlink-server` system account and `/var/lib/ghostlink-server` (mode 0700, owned by that account).
-3. Loads the bundled image (`docker load`) and removes images from older versions of the package.
-4. On first install, creates the server: random ports, new keys for every protocol, a self-signed TLS certificate and a random 128-bit API secret.
-5. Starts the container and prints the management key:
+3. Loads the bundled image (`docker load`).
+4. On first install, creates the server: random ports, new keys for every protocol, a self-signed TLS certificate and a random 128-bit API secret. On an upgrade, it first stops the running server, which saves its usage and history.
+5. Starts the container, removes the images of older versions of the package and prints the management key:
 
 ```json
 {"apiUrl":"https://203.0.113.10:23456/Wq9…","certSha256":"3F0A…"}
@@ -135,7 +135,9 @@ sudo ghostlink-server dashboard                      # web dashboard: tunnel com
 sudo ghostlink-server migrate-outline [--check]      # take over the Outline server on this machine
 ```
 
-These run inside the container (`docker exec`) and call the server's own management API on loopback with the same certificate pin as the app. Only root on the host can use them. Add `--json` after `ghostlink-server` for machine-readable output.
+These run inside the container (`docker exec`) and call the server's own management API on loopback with the same certificate pin as the app. Only root on the host can use them. A word a command does not take is refused, not ignored; switches such as `--exempt` take no value.
+
+For machine-readable output, put `--json` right after `ghostlink-server`, before the command: `sudo ghostlink-server --json users`. It works with `users`, `user`, `key`, `keys`, `rules`, `usage`, `stats`, `clients`, `settings`, `set`, `site-stats`, `dashboard` and `mesh`. `set` and `site-stats` give the settings after the change. A few actions still print text: `user remove`, `key qr`, `key remove`, and `mesh disable`, `revoke`, `remove` and `rules add|remove|clear`. Other commands, such as `top`, `kit` and `status`, refuse `--json`.
 
 ## Web dashboard
 
@@ -252,7 +254,7 @@ A speed limit caps a user's speed in **bytes per second**, like the live rates t
 - **Default for everyone:** `set --speed-limit 5MB` (Server settings in the app or dashboard), or none.
 - **Live:** a change applies within a second to every open connection, without restarting the engine or disconnecting anyone.
 - **How:** for Shadowsocks, VLESS, WireGuard and AmneziaWG, the server paces each user's traffic in its relay loop: a token bucket per direction with a burst of a quarter of a second (at least 64 KB), shared by all the user's connections, so many connections together still get only the cap. UDP the user sends is dropped above the rate rather than delayed (apps such as QUIC slow down when packets are lost), because delaying it could hold up other users' Shadowsocks UDP. For IKEv2/IPsec, the component's firewall drops packets above the rate (see [what applies to IKEv2/IPsec users](#what-applies-to-ikev2ipsec-users)).
-- **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5GB` (optionally with `/s`); a bare number, or bits such as `Mbps`, is refused.
+- **Range:** 1 byte to 1.25 GB per second. The app, the dashboard and the CLI take MB/s, 0.001 to 1250. The server commands take a unit, in bytes: `500KB`, `2MB`, `1.5MB` (optionally with `/s`, or `ps` as in `2MBps`), up to `1.25GB`. A bare number is refused, and so are bits, written with a lower-case b: `10Mbps`, `10Mb/s` or `10 mb`.
 
 ## Monitoring and privacy
 
@@ -272,7 +274,7 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 What it can't see: VPN traffic is encrypted, so the server never sees page contents or full URLs. Site names come from the TLS/QUIC handshake, HTTP Host and DNS, and apps that hide them (for example with ECH) show up only as their traffic type.
 
 **Rotation, so the disk never fills:**
-- **By age:** every save (every 5 minutes, and at shutdown) drops records past their retention.
+- **By age:** every save (every 5 minutes, and whenever the server stops, also for an upgrade) drops records past their retention.
 - **By size:** the file has a hard size limit (default 20 MB; `set --history-max-mb`). Over it, the oldest site totals go first, then the oldest breakdowns, then hourly records; daily totals go last.
 - **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed.
 - **Container log:** Docker caps it at 10 MB × 3, and it holds only warnings and errors, never traffic.

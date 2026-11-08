@@ -16,14 +16,14 @@ This installs Ghostlink next to Outline and only reports what the move would do.
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline --check
 ```
 
-On a server with under 1 GB of memory and swap, add `--add-swap`: Outline, Docker and the installation together need about 1 GB.
+On a server with under 900 MB of memory and swap, the installer stops; add `--add-swap` for a 1 GB swap file. Outline, Docker and the installation together need about 1 GB.
 
 The report looks like this:
 
 ```text
 Check only: nothing has changed yet. The import would do this:
   12 clients, one per Outline access key; 11 keep their Outline key as it is.
-  Shadowsocks: port 41234 (cipher chacha20-ietf-poly1305), plus 9000 for keys on other ports.
+  Shadowsocks: port 41234, plus 9000 for keys on other ports (cipher chacha20-ietf-poly1305).
   Server: My Outline, address in keys 203.0.113.7.
   VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import).
   These clients get a new key, which you need to send them:
@@ -42,7 +42,7 @@ If Ghostlink is already installed, the same is done by `sudo ghostlink-server mi
 
 1. Ghostlink reads Outline's `persisted-state/shadowbox_config.json` (access keys) and `shadowbox_server_config.json` (name, address, default data limit). It makes private copies in its own state directory (mode 0600, owned by the server account) and checks them first. If the check fails (for example, the Ghostlink server already has clients), Outline is not touched.
 2. Outline's containers (`shadowbox` and `watchtower`) get the restart policy `no` and are stopped, so their ports are free and they do not come back after a reboot.
-3. The import runs as **one change**. If it fails (for example, another program holds one of Outline's ports) or is interrupted (Ctrl+C, a lost SSH session), nothing changes in Ghostlink and Outline is put back as it was: each container gets its old restart policy, and those that were running start again.
+3. The import runs as **one change**. If it fails (for example, another program holds one of Outline's ports) or is interrupted (Ctrl+C, a lost SSH session) before it is saved, nothing changes in Ghostlink and Outline is put back as it was: each container gets its old restart policy, and those that were running start again. If the import was already saved when a later step failed (for example, its answer was lost), Ghostlink keeps the imported clients and Outline stays stopped; the message says so, and the installer still prints the management key and the ports.
 4. The copies are deleted. The installer then prints the management key and the ports to allow.
 
 Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Ghostlink's management API, VLESS, WireGuard and AmneziaWG ports are new: allow the ones the installer lists.
@@ -62,13 +62,13 @@ Outline's Shadowsocks ports are already open in your firewall and cloud security
 A client gets a **new** Shadowsocks key, listed in the report, when its Outline key:
 
 - uses a port below 1024 (for example 443). The Ghostlink container runs without capabilities, so it cannot listen there;
-- uses a port Ghostlink's management API, dashboard, mesh or IKEv2/IPsec DNS listener already uses;
+- uses a port Ghostlink's management API, dashboard, mesh or IKEv2/IPsec DNS listener already uses, or port 4500 while IKEv2/IPsec is on;
 - shares a port with keys that use another cipher, or uses a cipher Outline does not offer;
 - has an empty or unusual password (more than 256 characters, or not plain text).
 
 Show and send their new key with `sudo ghostlink-server keys NAME --show`, the app or the dashboard.
 
-Two Outline keys with the same password on the same port cannot be told apart by any Shadowsocks server. Both keep working, but their traffic counts for the first one, and the report says so.
+Two Outline keys with the same password on the same port cannot be told apart by any Shadowsocks server. Both keep working, but each connection counts for either of the two clients, and turning one of them off does not stop the key. The report says so.
 
 The import only runs on a Ghostlink server **with no clients yet**, and takes at most 500 keys (the most a server can hold).
 
