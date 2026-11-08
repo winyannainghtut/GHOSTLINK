@@ -63,7 +63,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force .tools | Out-Null
-          Invoke-WebRequest 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile '.tools/peer.zip'
+          # Release downloads sometimes answer 5xx for a while; retry instead of failing the job.
+          Invoke-WebRequest 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile '.tools/peer.zip' -MaximumRetryCount 5 -RetryIntervalSec 15
           if ((Get-FileHash '.tools/peer.zip').Hash -ne '99185D75D314A07DBBA4A130C8AD986CBEB629A07927975636B341CA61F991DF') { throw 'Peer checksum mismatch' }
           Expand-Archive '.tools/peer.zip' '.tools/peer'
           $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
@@ -74,7 +75,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p .tools/peer
-          curl -fLsS 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz' -o .tools/peer.tar.gz
+          # --retry treats 5xx answers such as 504 as transient and tries again.
+          curl -fLsS --retry 5 --retry-delay 15 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz' -o .tools/peer.tar.gz
           printf '%s\n' '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968  .tools/peer.tar.gz' | sha256sum -c
           tar -xzf .tools/peer.tar.gz -C .tools/peer
           export GHOSTLINK_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"

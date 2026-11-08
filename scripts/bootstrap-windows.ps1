@@ -5,7 +5,20 @@ $toolDirectory = Join-Path $repository '.tools'
 New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
 function Get-VerifiedArchive([string]$Url, [string]$Name, [string]$Hash, [string]$Directory) {
     $archive = Join-Path $toolDirectory $Name
-    if (-not (Test-Path -LiteralPath $archive)) { Invoke-WebRequest -Uri $Url -OutFile $archive }
+    if (-not (Test-Path -LiteralPath $archive)) {
+        # Release downloads sometimes answer 5xx for a while, so try a few times. A failed attempt
+        # removes what it wrote, so a partial file never reaches the checksum check or a later run.
+        # (A loop rather than -MaximumRetryCount, which Windows PowerShell 5.1 does not have.)
+        for ($attempt = 1; ; $attempt++) {
+            try { Invoke-WebRequest -Uri $Url -OutFile $archive; break }
+            catch {
+                Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+                if ($attempt -ge 5) { throw }
+                Write-Warning "Downloading $Name failed ($($_.Exception.Message)); trying again in $(15 * $attempt) s"
+                Start-Sleep -Seconds (15 * $attempt)
+            }
+        }
+    }
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $Hash) { throw "Checksum mismatch: $Name" }
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
     Expand-Archive -LiteralPath $archive -DestinationPath $Directory -Force
