@@ -12,7 +12,7 @@
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/images/dashboard-clients.png" alt="Clients as cards: access switch, tunnel IP, endpoint, last handshake, live speed, data used and quick key actions"></td>
+    <td width="33%"><img src="docs/images/dashboard-clients.png" alt="Clients as cards: access switch, tunnel IP, endpoint, when each was last seen, live speed, data used and quick key actions"></td>
     <td width="33%"><img src="docs/images/dashboard-mesh.png" alt="The mesh map: Linux servers linked directly, two behind NAT through the relay, a shared subnet and the node list"></td>
     <td width="33%"><img src="docs/images/desktop-my-servers.png" alt="The desktop app: connection hero with a power control and the servers saved on this device"></td>
   </tr>

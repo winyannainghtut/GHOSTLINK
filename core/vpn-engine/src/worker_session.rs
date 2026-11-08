@@ -211,13 +211,20 @@ pub fn config_with_direct(
         // Bound to the physical interface by auto_detect_interface, like the tunnel's own sockets.
         outbounds.push(json!({"type":"direct","tag":"direct"}));
     }
-    let mut rules = vec![
+    let mut rules = vec![];
+    if endpoint_json.is_some() {
+        // A WireGuard or AmneziaWG endpoint is an inbound too. A flow its far side starts (the
+        // server, or a peer the server forwards) would otherwise be routed like this device's own
+        // traffic: to its loopback, its LAN in bypass or LAN-direct setups, or out to the internet.
+        rules.push(json!({"inbound":PROXY_TAG,"action":"reject"}));
+    }
+    rules.extend([
         // Learn site names (TLS SNI, HTTP Host, QUIC) and DNS for the rules below.
         json!({"action":"sniff"}),
         // The health probe must always test the tunnel, even when "only" mode sends the
         // rest of the traffic direct; otherwise a dead tunnel could be reported as connected.
         json!({"inbound":"health-proxy","outbound":PROXY_TAG}),
-    ];
+    ]);
     rules.extend(direct_rules);
     rules.extend([
         json!({"inbound":"ghostlink-tun","ip_version":6,"action":"reject"}),
@@ -528,6 +535,37 @@ mod tests {
             let mut reader = lines;
             assert!(!reported_cleanup_failure(&mut reader, &mut Vec::new()).await);
         }
+    }
+
+    #[test]
+    fn endpoints_refuse_flows_their_far_side_starts() {
+        let wireguard = crate::wireguard::parse("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 10.8.1.2/32\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n").unwrap();
+        let through_endpoint = config(
+            &Outbound::WireGuard(wireguard),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+        );
+        assert_eq!(
+            through_endpoint["route"]["rules"][0],
+            json!({"inbound":PROXY_TAG,"action":"reject"})
+        );
+        // Shadowsocks and VLESS are outbounds only: nothing arrives through them, so no rule.
+        let key = AccessKey::parse("ss://aes-256-gcm:test-only@192.0.2.10:8388").unwrap();
+        let through_outbound = config(
+            &Outbound::Shadowsocks(key),
+            1,
+            2,
+            "secret",
+            true,
+            &RoutingPolicy::default(),
+        );
+        assert_eq!(
+            through_outbound["route"]["rules"][0],
+            json!({"action":"sniff"})
+        );
     }
 
     #[test]

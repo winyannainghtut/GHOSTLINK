@@ -53,12 +53,11 @@ jobs:
           cargo test --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
       # bash on both systems: Windows' default PowerShell would only check the last command.
-      - name: Process and provisioning tests
+      - name: Process tests
         shell: bash
         run: |
           npm ci --ignore-scripts
           npm test
-          python -m unittest discover -s tests/integration -p 'test_*.py' -v
       - name: Windows independent encrypted peer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -69,6 +68,7 @@ jobs:
           Expand-Archive '.tools/peer.zip' '.tools/peer'
           $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path '.tools/peer/sing-box-1.14.4-windows-amd64/sing-box.exe').Path
           $env:GHOSTLINK_TEST_OUTLINE_WORKER = (Resolve-Path 'target/debug/ghostlink-tunnel.exe').Path
+          "GHOSTLINK_TEST_SING_BOX=$env:GHOSTLINK_TEST_SING_BOX" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           ./scripts/cargo.ps1 test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols '--' --ignored --nocapture --test-threads=1
       - name: Linux independent encrypted peer
         if: runner.os == 'Linux'
@@ -79,7 +79,12 @@ jobs:
           tar -xzf .tools/peer.tar.gz -C .tools/peer
           export GHOSTLINK_TEST_SING_BOX="$PWD/.tools/peer/sing-box-1.14.4-linux-amd64/sing-box"
           export GHOSTLINK_TEST_OUTLINE_WORKER="$PWD/target/debug/ghostlink-tunnel"
+          echo "GHOSTLINK_TEST_SING_BOX=$GHOSTLINK_TEST_SING_BOX" >> "$GITHUB_ENV"
           cargo test --locked -p ghostlink-engine --test outline_traffic --test worker_protocols -- --ignored --nocapture --test-threads=1
+      # After the peer downloads, so the offline Outline-compatible proxy is tested with sing-box.
+      - name: Provisioning tests
+        shell: bash
+        run: python -m unittest discover -s tests/integration -p 'test_*.py' -v
       - name: Windows GUI build
         if: runner.os == 'Windows'
         shell: pwsh

@@ -14,7 +14,8 @@ $graphics.FillPath($brush,$shape)
 $pen = [System.Drawing.Pen]::new([System.Drawing.Color]::White,17)
 $pen.StartCap = $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
 $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-# Monoline ghost matching apps/desktop/ui/mark.svg (40-unit grid scaled by 6.4).
+# Monoline ghost matching ui/desktop/public/mark.svg, which the UI build copies to apps/desktop/ui
+# (40-unit grid scaled by 6.4).
 function Point([single]$x, [single]$y) { [System.Drawing.PointF]::new($x, $y) }
 $ghost = [System.Drawing.Drawing2D.GraphicsPath]::new()
 $ghost.AddLine((Point 76.8 188.8), (Point 76.8 121.6))

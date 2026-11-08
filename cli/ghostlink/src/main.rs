@@ -420,7 +420,7 @@ enum ServerMeshCommand {
         #[arg(long)]
         cidr: Option<String>,
     },
-    /// Turn the mesh off; nodes disconnect, nothing is deleted.
+    /// Turn the mesh off; connected nodes take their links down, nothing is deleted.
     Disable {
         #[arg(long)]
         server: String,

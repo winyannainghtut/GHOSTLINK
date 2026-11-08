@@ -182,7 +182,7 @@ function Overview({ nodes, info, onSelect, change }: { nodes: MeshNode[]; info: 
           variant="ghost"
           className="mt-2 justify-self-start"
           onClick={async () => {
-            if (await confirm({ title: 'Turn the mesh off?', text: 'Every node disconnects within seconds. Nodes, invites and rules are kept for when you turn it on again.', action: 'Turn off', danger: true })) await change('PATCH', '/mesh', { enabled: false }, 'Mesh turned off.');
+            if (await confirm({ title: 'Turn the mesh off?', text: 'Connected nodes take their links down within seconds. Nodes, invites and rules are kept for when you turn it on again.', action: 'Turn off', danger: true })) await change('PATCH', '/mesh', { enabled: false }, 'Mesh turned off.');
           }}
         >
           Turn the mesh off
