@@ -23,6 +23,7 @@ import (
 	updevice "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -34,7 +35,9 @@ import (
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/protocol/mixed"
 	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun/gtcpip/header"
 	boxjson "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -511,6 +514,37 @@ func TestRepeatedAddressFailsValidation(t *testing.T) {
 	  "private_key":%q,"listen_port":%d,"peers":[%s]}]}`, server.private, freePort(t, "udp"), peerJSON("alice", alice, "10.88.0.2/32"))
 	if validate(t, config) == nil {
 		t.Fatal("a configuration that repeats an address passed validation")
+	}
+}
+
+// preMatchRecorder is a router that only records what pre-match is asked.
+type preMatchRecorder struct {
+	adapter.Router
+	metadata adapter.InboundContext
+}
+
+func (r *preMatchRecorder) PreMatch(metadata adapter.InboundContext, _ []byte) adapter.PreMatchResult {
+	r.metadata = metadata
+	return adapter.PreMatchResult{Action: adapter.PreMatchContinue}
+}
+
+// UDP and ICMP flows are pre-matched before they are routed, so the peer's user must come along
+// for auth_user rules to match there.
+func TestPreMatchCarriesThePeerUser(t *testing.T) {
+	router := &preMatchRecorder{}
+	server := &Endpoint{
+		Adapter:        endpoint.NewAdapter(Type, "srv", []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, nil),
+		router:         router,
+		options:        Options{ListenPort: 51820},
+		localAddresses: []netip.Prefix{netip.MustParsePrefix("10.88.0.1/24")},
+		users:          map[netip.Addr]string{netip.MustParseAddr("10.88.0.2"): "alice"},
+	}
+	for _, network := range []uint8{uint8(header.UDPProtocolNumber), uint8(header.ICMPv4ProtocolNumber)} {
+		router.metadata = adapter.InboundContext{}
+		server.JudgeFlow(network, netip.MustParseAddrPort("10.88.0.2:40000"), netip.MustParseAddrPort("192.0.2.1:53"), []byte{0})
+		if router.metadata.User != "alice" || router.metadata.Inbound != "srv" {
+			t.Fatalf("protocol %d was pre-matched for user %q from inbound %q", network, router.metadata.User, router.metadata.Inbound)
+		}
 	}
 }
 

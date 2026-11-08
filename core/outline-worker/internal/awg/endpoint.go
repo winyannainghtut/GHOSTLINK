@@ -329,13 +329,27 @@ func (e *Endpoint) userFor(source M.Socksaddr) string {
 	return e.users[source.Addr.Unmap()]
 }
 
+// userRouter attaches the peer's user to pre-match, which adapter.JudgeFlow leaves out.
+type userRouter struct {
+	adapter.Router
+	user string
+}
+
+func (r userRouter) PreMatch(metadata adapter.InboundContext, firstPacket []byte) adapter.PreMatchResult {
+	metadata.User = r.user
+	return r.Router.PreMatch(metadata, firstPacket)
+}
+
 func (e *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
 	for _, localPrefix := range e.localAddresses {
 		if localPrefix.Contains(destination.Addr()) {
 			return tun.FlowVerdict{Action: tun.ActionAccept}
 		}
 	}
-	return adapter.JudgeFlow(e.router, e.Tag(), e.Type(), network, source, destination, firstPacket)
+	// UDP and ICMP flows are pre-matched before they are routed. Without the user, auth_user
+	// rules cannot match there: an exempt user's UDP met the global blocks, and ping skipped the
+	// per-user blocks and per-user accounting.
+	return adapter.JudgeFlow(userRouter{e.router, e.users[source.Addr().Unmap()]}, e.Tag(), e.Type(), network, source, destination, firstPacket)
 }
 
 func (e *Endpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
