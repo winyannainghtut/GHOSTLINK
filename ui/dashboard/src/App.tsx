@@ -98,7 +98,9 @@ function Shell({ appearance, onSignOut }: { appearance: Appearance; onSignOut: (
     <>
       <header className="sticky top-0 z-30 px-3 pt-3 sm:px-5 sm:pt-4 2xl:px-8">
         <nav className="glass mx-auto flex max-w-[2400px] flex-wrap items-center gap-x-4 gap-y-3 rounded-[28px] px-4 py-3 lg:flex-nowrap">
-          <div className="flex min-w-0 items-center gap-3 lg:w-[300px]">
+          {/* The side slots are equal, so the middle stays centred, and as wide as the right-hand
+              buttons need (about 362 px), so they never reach into the middle. */}
+          <div className="flex min-w-0 items-center gap-3 lg:w-[368px]">
             <Mark className="size-9 shrink-0" />
             <div className="min-w-0 leading-tight">
               <div className="text-[15px] font-semibold tracking-[-0.02em]">GHOSTLINK</div>
@@ -120,7 +122,7 @@ function Shell({ appearance, onSignOut }: { appearance: Appearance; onSignOut: (
             />
             <Island />
           </div>
-          <div className="ml-auto flex items-center gap-1.5 lg:w-[300px] lg:justify-end">
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 lg:w-[368px] lg:flex-nowrap">
             <MotionButton motion={appearance.motion} onChange={appearance.setMotion} />
             <FinishPicker value={appearance.finish} onChange={appearance.setFinish} />
             <IconButton label="Server settings" onClick={() => setSettings(true)}>

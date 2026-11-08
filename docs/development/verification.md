@@ -2,6 +2,18 @@
 
 Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.8.2 Layout fixes (2026-11-08, pull request #5)
+
+Reported on the published 0.8.1: the switches of the Island's protocol list stuck out of its box. An independent review of the fix found the same fault in more places and a few other layout faults, and a skeptic checked each finding again (8 of 10 held). Every check below rendered the real UI in the debug app's WebView2 over DevTools (isolated profile, dummy service endpoint) against a local `ghostlink-server` (`%TEMP%\gl-gui\layout081.mjs` and `layout082.mjs`, kept outside the repository).
+
+| Check | Result actually observed |
+|---|---|
+| Island protocol list (all three finishes, 1000 and 1280 px) | Before the fix: each row 352.5 px wide in the 340 px panel, every switch 13.5 px past the panel's edge, AmneziaWG's hint not shortened. After: rows 314 px, switches 25 px inside the edge, the hint shortened, the knobs inside their tracks |
+| Navigation bar, 1000–1600 px in 8 px steps, in the app's own shell and in the dashboard | No overlap of the motion button or the finish picker with the Island or the view buttons. With 360 px slots the motion button still stood 1.8 px out of its slot; the slots are 368 px |
+| Long names, phones and narrow windows (390, 620, 1000 and 1280 px) | A 64-character client name in cards and list and in its sheet (keys and usage), a mesh node waiting for approval named `ubuntu-s-1vcpu-1gb-sgp1-01`, the Network view, the Island: nothing outside its box and no page wider than the screen. Before the last fixes, at 390 px, the Network view made the page 445 px wide, the bar's buttons stuck out by 28 px, and the mesh card's buttons squeezed its summary out of its box |
+| UI | Typecheck, 17 tests and both builds, after every change |
+| Not rendered | The app's My servers and Servers I run cards and its Connect through list need the local service; they use the same CSS rule (`grid-cols-1`, a shortened title in its own span) |
+
 ## v0.8.1 Second full review and a report from a running server (2026-11-08, pull request #3)
 
 Every subsystem was read in full, reviewed again for new defects, checked by a skeptical verifier, fixed area by area in separate worktrees with tests, and merged. What changed is in the CHANGELOG under [0.8.1].
@@ -13,7 +25,6 @@ Before the release, five reviewers checked every claim of the CHANGELOG section 
 | UDP reply crash (real binaries, Windows) | One Shadowsocks UDP exchange (an NTP request through the server) against a `main` build before this round (`56ae4a7`) crashed the server for capped and uncapped clients: `panic: buffer overflow: capacity 16384, start 0, need 55` in the Shadowsocks UDP writer. The released v0.8.0 answered. The fixed build answered and stayed up. `TestUDPRepliesKeepTheWritersHeadroom` and `TestShadowsocksUDPThroughTheServer` fail with the same panic without the fix |
 | Online and idle (Go) | `TestOnlineFollowsWhatTheClientSends`: an open connection and a small write to the client do not count, an upload or a 16 KB download in a second does; online means seen within 60 s. `TestPeersSeenThroughTheirReceiveCounter`: a keepalive counts, an unchanged, new or reset counter does not, a handshake counts at its own time. `TestMonitoringEndToEnd` reads a real WireGuard client's receive counter |
 | Dashboard (WebView2 DevTools, isolated profile and endpoint, local server, real Shadowsocks traffic from Cloudflare's speed endpoint, Daylight) | The Island read `↓ 983 KB/s ↑ 0 B/s` during a capped 1 MB/s download; the off switches of IKEv2 and IPsec had the track `rgba(120, 120, 128, 0.24)`; the list said "Last seen". With one idle TCP connection held open through Shadowsocks (to an SSH server, which waits for the client), the client showed `active: 1, online: false` and **Idle** 70 s after its last traffic; a client that never connected showed Idle; no page errors |
-| Island protocol list (WebView2 DevTools, local server, all three finishes, 1000 and 1280 px wide) | Reported again after the first 0.8.1 build: the switches stuck out of the box. Measured before the fix: each row 352.5 px wide in the 340 px panel, every switch 13.5 px past the panel's edge, AmneziaWG's hint not shortened. After: rows 314 px, switches 25 px inside the edge, the hint shortened, knobs inside their tracks. No other element outside its box in Overview, Clients and Network |
 | UDP rules per packet (Go, `guard_test.go`) | Over Shadowsocks, VLESS and WireGuard, 5 of 5 later packets reached a blocked loopback port without the check and none with it |
 | TCP and UDP under one cap (Go) | `TestPacerSharesTheCapBetweenTCPAndUDP`: 0 of 146 UDP packets passed while TCP filled the cap before the fix (in the unreleased code of pull request #2), 80 % or more after |
 | IKEv2/IPsec (Go) | 14 new tests in `ipsec_review_test.go`: identities for any user name, a refused key left out without blocking the others, renames and pinning, no double counting after a restart or an ended session, settings written only when they change and one at a time, the profile identifier, certificate renewal at start and after a hostname change. Each fix was reverted in turn and its test failed |

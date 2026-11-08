@@ -137,15 +137,15 @@ function Overview({ nodes, info, onSelect, change }: { nodes: MeshNode[]; info: 
   const { confirm } = useUI();
   const pending = nodes.filter(n => n.status === 'pending');
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       {pending.length > 0 && (
-        <Inner className="grid gap-2">
+        <Inner className="grid grid-cols-1 gap-2">
           <h3 className="text-[14px]">Waiting for approval</h3>
           {pending.map(n => (
             <div key={n.id} className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13.5px]">{n.name}</div>
-                <div className="mono text-[11.5px] text-fg-3">{n.seen_from || n.address}</div>
+                <div className="mono truncate text-[11.5px] text-fg-3" title={n.seen_from || n.address}>{n.seen_from || n.address}</div>
               </div>
               <Button size="sm" variant="cta" onClick={() => change('PATCH', `/mesh/nodes/${n.id}`, { status: 'active' }, `${n.name} is in the mesh.`)}>
                 Approve

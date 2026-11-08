@@ -76,7 +76,7 @@ export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSi
           </Empty>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
           {(servers ?? []).map(current).map(s => (
             <Card as="article" key={s.name} className="flex flex-col gap-4 sm:p-5!">
               <div className="flex items-start gap-3">

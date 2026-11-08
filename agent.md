@@ -8,11 +8,11 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 ### Where things stand
 
-- **Latest release: v0.8.1**, a **pre-release** published on 2026-11-08: the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3). The CHANGELOG's `[0.8.1]` section lists them, with a *Changed* list of what behaves differently after an upgrade; the verification ledger's top two sections record the checks.
+- **Latest release: v0.8.2**, a **pre-release** published on 2026-11-08: layout fixes for the app and the dashboard (pull request #5), reported on 0.8.1. 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
 - **Other releases:**
-  - v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.1:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.2:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move.
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes.
 
 ### Design decisions to keep
 
@@ -75,7 +75,6 @@ A report on a running server and a second full review, reviewed area by area and
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
    - **Engine log:** the packaged server has no switch for it.
-   - **Header slots:** the right-hand groups of the dashboard's and the app's navigation bars have a fixed width at `lg` (300 px and 290 px) for a centred middle, but their buttons need about 360 px, so they reach about 60 px into the middle group. Nothing overlaps at 1000–1440 px; a wider Island could.
 
 ### Rules for contributors and AI agents
 
@@ -137,7 +136,7 @@ A report on a running server and a second full review, reviewed area by area and
 - **GUI and traffic checks:** script them with the DevTools protocol (`Runtime.evaluate`, `Page.captureScreenshot`) against the debug app, launched with an isolated WebView2 profile and its own `GHOSTLINK_ENDPOINT`, and a local `ghostlink-server` (`init --state DIR --hostname 127.0.0.1`, then `serve --state DIR`). Real traffic can come from a small Shadowsocks client written for the check; the dashboard opens in the same isolated webview from `GET /dashboard`. Keep such scripts outside the repository.
 - **Flaky CI to know about:**
   - Mesh end-to-end, "open mesh: relay reaches natb:8080", passed on re-run (2026-11-07).
-  - GitHub release downloads answered 504 Gateway Time-out or 503 for about two hours on 2026-11-08 (the WiX tools, the sing-box test peers, our own release files), while the status page showed no incident. Since then `scripts/bootstrap-windows.ps1` and both peer steps in `desktop.yml` try 5 times; if all fail, re-run the failed job.
+  - GitHub release downloads answered 504 Gateway Time-out or 503 for about two hours on 2026-11-08 (the WiX tools, the sing-box test peers, our own release files), while the status page showed no incident. Since 0.8.2 `scripts/bootstrap-windows.ps1`, both peer steps in `desktop.yml` and the draft-checksum download in `release.yml` try again (5 or 6 attempts in all); if every attempt fails, re-run the failed job.
   - Process test 15 (Outline key import, rename, default and remove) failed once locally on the first run after a rebuild (2026-11-08) and passed the next 7 runs; its error was not captured. Capture the full output (`npm test > file`) if it happens again.
   - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It is fixed by picking a port free on both TCP and UDP, with the UDP port taken from the system first: on the Windows runners, ports free on TCP are often in reserved UDP ranges (a TCP-first helper failed there on 2026-11-08).
 - **Where the speed-limit and Outline code lives:** see §13, *Speed limits and the move from Outline (v0.8.0)*.
@@ -208,7 +207,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 
 ## 2. Current completion report
 
-**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.1, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
+**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.2, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
 
 | Area | Implemented / produced | Evidence and remaining gate |
 |---|---|---|
@@ -222,7 +221,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.1 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.2 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -354,7 +353,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.1; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.2; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -542,7 +541,8 @@ Since v0.7.0 the desktop app's interface is built from `ui/desktop` (React 19, T
   - Sentence-case labels; `.mono` only for machine-readable text (addresses, host names, CIDRs, keys, identities, ports, interface names, shell commands, mesh rule selectors; every `textarea.field` is monospace); `.num` (tabular figures) for live numbers.
   - Speeds use `speed()`/`byteRate()` in `ui/shared/format.ts`; compact live readouts (the Islands) use `LiveRates` in `ui/shared/glass.tsx`, each rate with its own unit in a fixed slot.
   - The fonts are self-hosted (OFL). No inline styles: React's `style` prop is applied through the CSSOM, which the CSP allows, and is used only for computed popover positions.
-  - **Lists with shortened text:** a bare `grid` has one `auto` column, which never gets narrower than its longest row's unwrapped text, so `truncate` does nothing and the row, with its switch or number, grows out of its box. Lists whose rows shorten text use `grid grid-cols-1` (`minmax(0, 1fr)`), also on a row that is itself a grid. The Island's protocol list had this from v0.7.0 until 0.8.1.
+  - **Lists with shortened text:** a bare `grid` has one `auto` column, which never gets narrower than its longest row's unwrapped text, so `truncate` does nothing and the row, with its switch or number, grows out of its box. Lists whose rows shorten text use `grid grid-cols-1` (`minmax(0, 1fr)`), also on a row that is itself a grid, on a bare grid that holds such a list next to other content, and as the base of a responsive card grid (`grid-cols-1 md:grid-cols-2 …`). `truncate` works on a block, not on a flex container: in a flex row, put the text in its own `<span className="truncate">` inside a `min-w-0` item. The Island's protocol list had this from v0.7.0 through 0.8.1; 0.8.2 fixed it and the other lists.
+  - **Navigation bar:** the side slots are equal (`lg:w-[368px]` in both shells), so the middle (view buttons and Island) stays centred, and a little wider than the right-hand buttons (about 362 px), so the motion button never runs into the Island. Below `lg` the right-hand group may wrap (`flex-wrap`), so it fits a phone. Narrower slots made them overlap at some widths before 0.8.2. If a button is added to that group, widen both slots.
 - **Shell:** a floating navigation bar with My servers, Servers I run and Settings. Its Dynamic Island shows the connection (state, server, duration, live speed) and opens a server switcher. Floating panels render in a portal (`shared/Popover.tsx`), because a frosted element cannot blur through a frosted parent.
 - **My servers:**
   - a connection hero with a power control and live rates;
@@ -863,7 +863,7 @@ Each Linux job also builds the server (`ghostlink-server_<v>-1_<arch>.deb`, `gho
 
 The Windows and Linux build jobs run `node scripts/release-version.mjs` first (the Linux step used to hide its exit code). The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
-Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents publish only when a maintainer asks. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.1` exist; v0.5.0, v0.7.0, v0.8.0 and v0.8.1 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
+Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents publish only when a maintainer asks. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.2` exist; v0.5.0, v0.7.0, v0.8.0, v0.8.1 and v0.8.2 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
 
 Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows, Linux x64, `desktop.yml` and `ui.yml`), and `attach-linux-arm64` uploads its files and their checksum lines afterwards. Publish only after it has: the installers and the app's **Add node** command take the newest published release, pre-releases included, so a release without the arm64 files breaks installs and upgrades on arm64. If no arm64 runner is available, keep the release a draft until the job can run.
 

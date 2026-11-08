@@ -51,12 +51,14 @@ export function Inner({ className, children }: { className?: string; children: R
 
 export function CardTitle({ title, detail, action }: { title: ReactNode; detail?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0">
+    // The text keeps at least 160 px (basis-40); when the actions leave less, as on a phone,
+    // they move below the title instead of squeezing the text out of its box.
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0 flex-1 basis-40">
         <h2 className="text-[15px] text-fg">{title}</h2>
         {detail && <p className="mt-0.5 text-[12.5px] text-fg-3">{detail}</p>}
       </div>
-      {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
+      {action && <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div>}
     </div>
   );
 }

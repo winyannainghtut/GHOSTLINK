@@ -108,7 +108,7 @@ export function MyServers({ addKeySignal, onAddKeyShown }: { addKeySignal: numbe
           </Empty>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
           {shown.map(p => (
             <ServerCard
               key={p.name}
@@ -181,8 +181,9 @@ function ServerCard({ profile, status, disabled, onToggle, onDetails, onRename, 
       <div className="flex items-start gap-3">
         <div className="grid size-11 shrink-0 place-items-center rounded-[16px] bg-glass-strong text-[13px] font-semibold text-fg-2">{title.slice(0, 2).toUpperCase()}</div>
         <div className="min-w-0 flex-1">
-          <h3 className="flex items-center gap-1.5 truncate text-[16px]">
-            {title}
+          {/* truncate works on a block, not on a flex container: the title is its own span. */}
+          <h3 className="flex min-w-0 items-center gap-1.5 text-[16px]">
+            <span className="truncate">{title}</span>
             {profile.is_default && <Star size={13} className="shrink-0 fill-current text-idle" aria-label="Default server" />}
           </h3>
           <div className="mono mt-0.5 truncate text-[12px] text-fg-3">{remote ? `${remote.host}:${remote.port}` : 'Fetched when connecting'}</div>

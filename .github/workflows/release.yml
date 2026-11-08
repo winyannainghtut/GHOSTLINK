@@ -157,7 +157,13 @@ jobs:
           find arm64 -type f -exec mv -t flat {} +
           rm -rf arm64
           mv flat arm64
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir sums
+          # Release downloads sometimes answer 5xx for a while: try a few times (--clobber, so a
+          # file left by a failed try does not stop the next one).
+          for attempt in 1 2 3 4 5; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir sums --clobber && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep 15
+          done
           # Idempotent on re-runs: drop any previous line for these files before appending.
           cp sums/SHA256SUMS.txt sums/next.txt
           for file in arm64/*; do
