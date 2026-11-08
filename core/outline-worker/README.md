@@ -14,7 +14,7 @@ The service writes every configuration to private storage. The worker:
 
 - emits only fixed, credential-free JSON events on stderr (`started` with the observed TUN address, `failed` with a code, `closed`); upstream logs stay disabled;
 - calls the engine's graceful `Close()` on a stop message, on stdin EOF (parent died) or on SIGINT/SIGTERM, with a 10-second bound;
-- refuses to start a TUN whose name or addresses collide with an existing interface;
+- refuses to start a TUN whose name is taken, or whose range holds an address of an existing interface (a wider network that only contains the range, such as a Hyper-V or WSL switch, is fine);
 - ignores `SIGPIPE` on Unix, so a broken status pipe cannot interrupt shutdown.
 
 Do not run it as a service with a closed stdin: the daemon owns its lifecycle.

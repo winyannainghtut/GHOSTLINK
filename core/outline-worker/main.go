@@ -78,6 +78,15 @@ func tunnelOptions(options option.Options) *option.TunInboundOptions {
 	return nil
 }
 
+// addressCollides reports whether an address this host already has lies inside a requested TUN
+// range, so that the TUN would take it over. A wider network that only contains the range is not
+// a collision: a Hyper-V or WSL switch can get a /20 from 172.16.0.0/12 at random, and Docker
+// bridges use 172.16.0.0/12 too. The TUN's more specific route wins for its own few addresses and
+// the rest of that network keeps working, while refusing it would fail every connection.
+func addressCollides(existing, requested netip.Prefix) bool {
+	return requested.Contains(existing.Addr())
+}
+
 func checkInterfaceCollision(tunnel *option.TunInboundOptions) bool {
 	if tunnel == nil {
 		return false
@@ -95,7 +104,7 @@ func checkInterfaceCollision(tunnel *option.TunInboundOptions) bool {
 			continue
 		}
 		for _, requested := range tunnel.Address {
-			if existing.Contains(requested.Addr()) || requested.Contains(existing.Addr()) {
+			if addressCollides(existing, requested) {
 				return true
 			}
 		}
