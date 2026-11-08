@@ -1,9 +1,11 @@
 import contextlib
+from datetime import datetime, timedelta, timezone
 import http.server
 import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 import socket
@@ -22,6 +24,8 @@ ENGINE = Path(os.environ.get("GHOSTLINK_TEST_SING_BOX", ROOT / (".tools/sing-box
 OPENVPN = Path(os.environ.get("GHOSTLINK_TEST_ENGINE", ROOT / ".tools/openvpn-bin/openvpn.exe" if os.name == "nt" else shutil.which("openvpn") or "/usr/sbin/openvpn"))
 PROVISION = ROOT / "server/outline/provision.py"
 PASSPHRASE = "test-only-long-ca-passphrase"
+# Stands in for an OpenVPN-generated key, so the PKI tests need no OpenVPN; never deployed.
+STAND_IN_TLS_CRYPT = "-----BEGIN OpenVPN Static key V1-----\n" + "0123456789abcdef" * 16 + "\n-----END OpenVPN Static key V1-----\n"
 
 
 def load(name, relative):
@@ -147,6 +151,12 @@ def fetch(proxy_port, host, port):
         except OSError:
             pass
         return reply
+
+
+def windows_sid():
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    output = subprocess.check_output([str(system32 / "whoami.exe"), "/user", "/fo", "csv", "/nh"], text=True)
+    return output.strip().split(",")[-1].strip('"')
 
 
 class ProvisioningTests(unittest.TestCase):
@@ -300,6 +310,113 @@ class ProvisioningTests(unittest.TestCase):
                 self.assertIn(b"revoked", verify.stderr)
             finally:
                 os.umask(old_umask)
+
+    def test_openvpn_crl_outlives_the_old_30_days(self):
+        module = load("ghostlink_pki", "server/openvpn/pki.py")
+        with tempfile.TemporaryDirectory(prefix=".state-pki-", dir=ROOT) as temporary, private_umask():
+            root = Path(temporary)
+            pki = module.PKI(root / "pki", OPENSSL, PASSPHRASE)
+            pki.init()
+            # PKIs made by earlier versions keep a 30-day default in their own openssl.cnf.
+            config = pki.root / "openssl.cnf"
+            config.write_bytes(config.read_bytes().replace(b"default_crl_days = 3650", b"default_crl_days = 30"))
+            (pki.root / "tls-crypt.key").write_text(STAND_IN_TLS_CRYPT)
+            pki.server("openvpn-is-not-needed")
+            pki.issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "laptop.ovpn", 365)
+            pki.crl()
+            crl, ca = str(pki.root / "crl.pem"), str(pki.root / "ca.crt")
+            # What OpenVPN's crl-verify checks: two months on, a valid client must still pass.
+            later = int(time.time()) + 60 * 86400
+            verify = subprocess.run([OPENSSL, "verify", "-attime", str(later), "-CAfile", ca, "-CRLfile", crl, "-crl_check", str(pki.root / "clients/laptop/client.crt")], capture_output=True)
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            text = subprocess.run([OPENSSL, "crl", "-in", crl, "-noout", "-nextupdate"], check=True, capture_output=True, text=True).stdout
+            next_update = datetime.strptime(" ".join(text.split("=", 1)[1].split()), "%b %d %H:%M:%S %Y %Z")
+            self.assertGreater(next_update, datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=3600))
+
+    def test_openvpn_failed_commands_leave_nothing_behind(self):
+        module = load("ghostlink_pki", "server/openvpn/pki.py")
+        with tempfile.TemporaryDirectory(prefix=".state-pki-", dir=ROOT) as temporary, private_umask():
+            root = Path(temporary)
+            pki = module.PKI(root / "pki", OPENSSL, PASSPHRASE)
+            pki.init()
+            server_files = [pki.root / name for name in ["server.key", "server.csr", "server.crt", "tls-crypt.key", "crl.pem"]]
+            # A mistyped passphrase and a missing OpenVPN both fail before any file is written.
+            with self.assertRaises(module.PKIError):
+                module.PKI(pki.root, OPENSSL, "test-only-mistyped-passphrase").server(str(OPENVPN))
+            with self.assertRaises(module.PKIError):
+                pki.server(str(root / "no-openvpn-here.exe"))
+            self.assertEqual([path.name for path in server_files if path.exists()], [])
+            # With the key in place (as after an earlier run), server needs no OpenVPN and keeps the key.
+            (pki.root / "tls-crypt.key").write_text(STAND_IN_TLS_CRYPT)
+            pki.server(str(root / "no-openvpn-here.exe"))
+            first = (pki.root / "server.crt").read_bytes()
+            with self.assertRaises(module.PKIError) as refused:
+                pki.server(str(root / "no-openvpn-here.exe"))
+            self.assertIn("renew", str(refused.exception))
+            # Renewal: move the old identity away and run server again.
+            (root / "old").mkdir()
+            for name in ["server.key", "server.csr", "server.crt"]:
+                (pki.root / name).replace(root / "old" / name)
+            pki.server(str(root / "no-openvpn-here.exe"))
+            self.assertNotEqual((pki.root / "server.crt").read_bytes(), first)
+            self.assertEqual((pki.root / "tls-crypt.key").read_text(), STAND_IN_TLS_CRYPT)
+            # A failed issue leaves no client behind, so the same name works on the next try.
+            with self.assertRaises(module.PKIError):
+                module.PKI(pki.root, OPENSSL, "test-only-mistyped-passphrase").issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "laptop.ovpn", 30)
+            with self.assertRaises(module.PKIError):
+                pki.issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "missing-folder" / "laptop.ovpn", 30)
+            self.assertFalse((pki.root / "clients" / "laptop").exists())
+            self.assertFalse((root / "laptop.ovpn").exists())
+            pki.issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "laptop.ovpn", 30)
+            # A bundle is never written over an existing file, and the refusal leaves that file alone.
+            with self.assertRaises(module.PKIError):
+                pki.bundle(root / "laptop.ovpn")
+            self.assertIn("<tls-crypt>", (root / "laptop.ovpn").read_text())
+
+    def test_pki_command_failures_say_why(self):
+        module = load("ghostlink_pki", "server/openvpn/pki.py")
+        with tempfile.TemporaryDirectory(prefix=".state-pki-", dir=ROOT) as temporary:
+            root = Path(temporary)
+            secret = root / "passphrase"
+            secret.write_text(PASSPHRASE + "\n")
+            secret.chmod(0o600)
+            command = [PYTHON, str(ROOT / "server/openvpn/pki.py"), "--root", str(root / "pki"), "--openssl", OPENSSL, "--passphrase-file", str(secret)]
+            subprocess.run(command + ["init"], check=True, capture_output=True)
+            # A command that was killed leaves its lock behind; the refusal names it.
+            (root / "pki" / ".pki.lock").write_text("4242")
+            locked = subprocess.run(command + ["crl"], capture_output=True)
+            self.assertEqual(locked.returncode, 1)
+            self.assertIn(".pki.lock", error_of(locked))
+            # A typo in the passphrase at init would make a CA that nothing can unlock.
+            argv = ["pki.py", "--root", str(root / "second"), "--openssl", OPENSSL, "init"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(module.getpass, "getpass", side_effect=[PASSPHRASE, PASSPHRASE + "!"]), private_umask():
+                with self.assertRaises(module.PKIError):
+                    module.main()
+            self.assertFalse((root / "second").exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows permissions")
+    def test_openvpn_pki_and_outputs_are_private_on_windows(self):
+        module = load("ghostlink_pki", "server/openvpn/pki.py")
+        security = load("ghostlink_provision", "server/outline/provision.py").windows_security
+        sid = windows_sid()
+        with tempfile.TemporaryDirectory(prefix=".state-pki-", dir=ROOT) as temporary, private_umask():
+            root = Path(temporary)
+            (root / "out").mkdir()
+            pki = module.PKI(root / "pki", OPENSSL, PASSPHRASE)
+            pki.init()
+            (pki.root / "tls-crypt.key").write_text(STAND_IN_TLS_CRYPT)
+            pki.server("openvpn-is-not-needed")
+            profile = pki.issue("laptop", "vpn.example.com", 1194, "udp", "split", root / "out" / "laptop.ovpn", 30)
+            pki.bundle(root / "out" / "server.tar.gz")
+            # Outside the root, a profile or bundle would otherwise take the folder's permissions.
+            for path, allowed in [(pki.root, {sid, "SY", "BA", "OW"}), (profile, {sid, "SY"}), (root / "out" / "server.tar.gz", {sid, "SY"})]:
+                sddl = security(path)
+                flags = re.search(r"D:([A-Z]*)", sddl).group(1)
+                self.assertIn("P", flags, f"{path.name} still inherits permissions")
+                for ace in re.findall(r"\(([^()]*)\)", sddl):
+                    fields = ace.split(";")
+                    self.assertNotIn("ID", fields[1], f"{path.name} has inherited access")
+                    self.assertIn(fields[5], allowed, f"{path.name} lets another account in")
 
 
 if __name__ == "__main__":
