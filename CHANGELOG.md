@@ -6,7 +6,7 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [0.8.1] - 2026-11-08
 
-Fixes on top of 0.8.0: what was reported on a running server, and what two reviews of the whole code base found. Upgrade servers: this release closes ways for VPN users to reach the server's own services and its network (*Server: what VPN users can reach*), and a way for a compromised server to get hold of any directory on its host (*The state and root*). See *Changed* for what behaves differently after an upgrade.
+Fixes on top of 0.8.0: what was reported on a running server, what a review of 0.8.0 found, and what a second, full review of the code found. Upgrade servers: this release closes ways for VPN users to reach the server's own services and its network (*Server: what VPN users can reach*), and a way for a compromised server to get hold of any directory on its host (*The state and root*). See *Changed* for what behaves differently after an upgrade.
 
 ### Fixed
 
@@ -18,7 +18,6 @@ Reported on a server running 0.8.0:
   - **Clients view:** the "Last handshake" column and card field are now "Last seen", which is what they show.
 - **Off switches in the Daylight finish:** an off switch was almost invisible, white on white, and more so when disabled (IKEv2 and IPsec without the IPsec component). Off switches now have a visible track in every finish.
 - **Live speed in the Island:** the dashboard's and the app's capsules showed both rates in MB/s with two decimals, so anything under 5 KB/s read 0.00. Each rate now has its own unit (B/s, KB/s, MB/s or GB/s), with room for it, so the capsule keeps its width.
-- **Tests on Windows:** the server could pick a port that Windows reserves for IPv4 only, and its end-to-end test then failed to start Shadowsocks. The port check now also tries the IPv4 wildcard, and in tests it checks only the loopback address they listen on, so Windows Defender Firewall no longer asks about every test run.
 
 Found by a review of 0.8.0 after its release:
 
@@ -155,6 +154,7 @@ Found by a second, full review of the code:
   - **Secrets on the server:** the IPsec settings file `desired.json` holds XAuth passwords, the group key and the server's private key, so it is a secret. Profiles install the server's CA as a root certificate without name constraints; protect `state.json` accordingly.
   - **Known limit:** WireGuard and AmneziaWG profiles that route only some ranges, such as a home LAN, cannot pass the connection health check and fail after the connection timeout. Keys the Ghostlink server issues route everything and are not affected.
   - **CI:** on Windows, the process tests' step checked only its last command, so failures were hidden; it now checks every command. A test that made an expired certificate failed with OpenSSL 3.4 and later. Many smoke checks written as `a && b` ignored a failing `a`; each part now fails the check on its own. The offline proxy is tested against sing-box.
+  - **Tests on Windows:** the server's end-to-end test could pick a port that Windows reserves for IPv4 only, and then failed to start Shadowsocks. The port check now also tries the IPv4 wildcard. In tests it checks only the loopback address they listen on, so Windows Defender Firewall no longer asks about every test run.
 
 ### Changed
 

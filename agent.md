@@ -11,7 +11,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 - **Latest release: v0.8.1**, a **pre-release** published on 2026-11-08: the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3). The CHANGELOG's `[0.8.1]` section lists them, with a *Changed* list of what behaves differently after an upgrade; the verification ledger's top two sections record the checks.
 - **Other releases:**
   - v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
-  - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. Only a maintainer publishes or deletes releases.
+  - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
 - **`main` after 0.8.1:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
@@ -68,10 +68,10 @@ A report on a running server and a second full review, reviewed area by area and
    - Separate download and upload caps.
    - Windows mesh nodes.
    - The Linux desktop app, blocked by the GTK `glib` advisory.
-3. **Limits found while checking the 0.8.1 notes** (each is stated in the CHANGELOG):
+3. **Limits found while checking the 0.8.1 notes** (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
    - **Mesh and Docker:** the agent puts its `FORWARD` jump first only when it adds it (`hostfw.EnsureJumps`), and its 30 s check only tests that the jump exists. Docker puts its own rules first when it starts after the agent, and then every node reaches published container ports whatever the access rules say. Keep the agent's rules ahead of Docker's (for example through `DOCKER-USER`) without fighting kube-proxy or Calico, and add Docker's chains to the mesh end-to-end test.
    - **An engine that cannot start** (new in 0.8.1, where `serve` no longer exits): `setup`, the installer and `status` say the server is running, and the app and the dashboard show nothing; only the log and `GET /live` (`health.engine_error`) tell. Show it.
-   - **Engine restarts from host addresses** (new in 0.8.1, a side effect of blocking every host address): addresses in 100.64.0.0/10, the mesh's included, count as public host addresses, so the coordinator's own mesh node restarts the VPN engine when it joins, leaves or restarts. Those ranges are blocked anyway.
+   - **Engine restarts from host addresses** (new in 0.8.1, a side effect of blocking every host address): addresses in 100.64.0.0/10, the mesh's default 100.96.0.0/16 included, count as public host addresses. So the coordinator's own mesh node restarts the VPN engine when it joins or leaves, and can when `ghostlink-mesh` restarts: the agent removes `glmesh0` while it restarts, and the server checks the addresses every 30 s. Those ranges are blocked anyway.
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
    - **Engine log:** the packaged server has no switch for it.
@@ -136,6 +136,8 @@ A report on a running server and a second full review, reviewed area by area and
 - **GUI and traffic checks:** script them with the DevTools protocol (`Runtime.evaluate`, `Page.captureScreenshot`) against the debug app, launched with an isolated WebView2 profile and its own `GHOSTLINK_ENDPOINT`, and a local `ghostlink-server` (`init --state DIR --hostname 127.0.0.1`, then `serve --state DIR`). Real traffic can come from a small Shadowsocks client written for the check; the dashboard opens in the same isolated webview from `GET /dashboard`. Keep such scripts outside the repository.
 - **Flaky CI to know about:**
   - Mesh end-to-end, "open mesh: relay reaches natb:8080", passed on re-run (2026-11-07).
+  - Release, Windows job, "Pinned WiX tools": the download server answered 504 Gateway Time-out (2026-11-08). `scripts/bootstrap-windows.ps1` has no retry; re-run the failed job.
+  - Process test 15 (Outline key import, rename, default and remove) failed once locally on the first run after a rebuild (2026-11-08) and passed the next 7 runs; its error was not captured. Capture the full output (`npm test > file`) if it happens again.
   - Windows "Shadowsocks server failed to start" in `outline_traffic.rs` came from a port race. It is fixed by picking a port free on both TCP and UDP, with the UDP port taken from the system first: on the Windows runners, ports free on TCP are often in reserved UDP ranges (a TCP-first helper failed there on 2026-11-08).
 - **Where the speed-limit and Outline code lives:** see §13, *Speed limits and the move from Outline (v0.8.0)*.
 
@@ -743,7 +745,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
 - **Coordinator** (in the unprivileged server):
   - `internal/mesh`:
     - `network.go`: nodes, hashed invite tokens and node secrets (`ID.secret`), addresses, rules and the `tag:`/`node:` selectors;
-    - `live.go`: last reports, the per-pair path state machine (direct, relay after 90 s without a handshake, retried after 15 min) and the topology for the map;
+    - `live.go`: last reports, the per-pair path state machine (direct; relayed after 90 s without a fresh handshake; direct again once a handshake on the probe peer shows it works, with no timed retry) and the topology for the map;
     - `config.go`: per-node configs, relay re-routing of `AllowedIPs`, rules compiled to source CIDRs, and a 53-bit content-hash generation.
   - `internal/server/mesh.go`: `MeshServer`, its own TLS port with the API certificate, `/v1/join|sync|leave`, and a long-poll of up to 10 s. Each sync takes the wake channel before computing its answer. The same file holds the admin handlers under `/mesh…`.
   - `admin_mesh.go`: `ghostlink-server mesh …`; the host script adds `mesh join-here`.
@@ -772,7 +774,7 @@ Pitfalls found here:
 
 - **Speed limits:** `User.SpeedLimitBps` (0 = server default, -1 = none, >0 = cap) and `State.DefaultSpeedLimitBps`, in bytes per second. They are not in the engine config. `internal/server/pace.go` is a token bucket per client and direction.
   - **TCP:** `Monitor.RoutedConnection` wraps each connection in `bufio.NewCounterConn` with `upPace.Wait`/`downPace.Wait` as count functions, which sing's copy loop calls after each chunk (a plain wrapper would be bypassed by its unwrapping).
-  - **UDP:** `RoutedPacketConnection` wraps `policedPacketConn` in `bufio.NewCounterPacketConn`. What the client sends is policed with `pacer.Allow` (dropped above the rate, never delayed, because the Shadowsocks inbound feeds every client's UDP from one loop); UDP to the client waits on `downPace`. `policedPacketConn` must stay opaque to read unwrapping (no `Upstream`, `UpstreamReader`, `ReaderReplaceable` or read waiter), but it must expose `UpstreamWriter`: sing sizes write buffers from the header and tag room the writer behind it needs, and hiding it made the first Shadowsocks UDP reply crash the server (found before release; `udp_test.go` and `police_test.go` guard it).
+  - **UDP:** `RoutedPacketConnection` wraps `policedPacketConn` in `bufio.NewCounterPacketConn`. What the client sends is policed with `pacer.Allow` (dropped above the rate, never delayed, because the Shadowsocks inbound feeds every client's UDP from one loop); UDP to the client waits on `downPace`. `policedPacketConn` must stay opaque to read unwrapping (not `ReaderReplaceable`, no `UpstreamReader` or read waiter). It exposes `Upstream`, through which sing finds the WireGuard stack's handshake reports and NAT timeout (`guard_test.go` checks this), and it must expose `UpstreamWriter`: sing sizes write buffers from the header and tag room the writer behind it needs, and hiding it made the first Shadowsocks UDP reply crash the server (found before release; `udp_test.go` and `police_test.go` guard it).
   - **Online state:** `isOnline` in `monitor.go`: seen within 60 s. Only what the client sends moves "last seen" (new connections, uploads, downloads of at least 16 KB in a second, a WireGuard/AmneziaWG peer whose receive counter grew, polled every 5 s, or a handshake, and IKEv2/IPsec reports). Open connections don't count. `Service.Change` and `Start` call `Monitor.SetSpeedLimits`. IKEv2/IPsec: `ipsecproto.Desired.SpeedLimits`; the agent renders `hashlimit` rules in `GHOSTLINK-IPSEC-LIM` from the current sessions' virtual IPs and re-renders when they change.
 - **Outline import:** `internal/server/outline.go` (`POST /import/outline`, report without secrets, dry run through a sentinel error in `Service.Change`), `admin_outline.go` (`import-outline --dir DIR [--check]`, read-only). Keys may carry `Port`/`Method` overrides; `render.go` adds an inbound `shadowsocks-<port>` per extra port and `CheckPorts` refuses moving the main port onto one. The host command `ghostlink-server migrate-outline` copies Outline's files into `$STATE/outline-import` (0700/0600, server account), checks, stops `shadowbox`/`watchtower` with restart `no`, imports, restores Outline on failure and deletes the copies. `install-server.sh --migrate-outline [--check]` wraps it.
 - **Units:** all speeds in the UI and `top` are bytes per second (`byteRate`, `speed`, `megabytes` in `ui/shared/format.ts`).
