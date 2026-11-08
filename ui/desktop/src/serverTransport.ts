@@ -1,7 +1,7 @@
 // A managed server for the admin views: their requests become typed operations (routes.ts) that
 // the local service sends over its pinned connection with the sealed management key.
 import type { Key, Transport, User } from '@admin/api';
-import { request, saveDownload, slug } from './ipc';
+import { localKeyId, request, saveDownload, type Profile } from './ipc';
 import { toOp, type Op } from './routes';
 
 export function serverTransport(server: string, onImported: () => void): Transport {
@@ -15,7 +15,8 @@ export function serverTransport(server: string, onImported: () => void): Transpo
     save: async file => saveDownload(file.name, file.content, file.extension),
     // The key becomes a VPN connection on this device (it never leaves the local service).
     useHere: async (user: User, key: Key) => {
-      await request({ type: 'access_key_import', name: slug(`${user.name}-${key.protocol}-${key.id}`), access_key: key.access_key });
+      const { profiles } = await request<{ profiles: Profile[] }>({ type: 'profile_list' });
+      await request({ type: 'access_key_import', name: localKeyId(user.name, key.protocol, key.id, profiles.map(p => p.name)), access_key: key.access_key });
       onImported();
     },
   };

@@ -1,9 +1,14 @@
-// The local service's state, polled every second: the connection (with live rates) and the
-// servers saved on this device. Changes go through `act`, which refreshes afterwards.
+// The local service's state: the connection (with live rates) every second, and the servers saved
+// on this device every few seconds. Changes go through `act`, which refreshes both afterwards.
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useUI } from '@shared/glass';
 import { usePoll } from '@shared/hooks';
 import { request, type Info, type Profile } from './ipc';
+
+// The saved servers change only when someone changes them, and this app refreshes them after its
+// own changes. The service writes every request to its audit log, which keeps about 1 MiB, so the
+// list is not asked for every second along with the connection.
+const PROFILES_MS = 5000;
 
 type Service = {
   available: boolean;
@@ -30,11 +35,15 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const listed = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const load = useCallback(async (withProfiles: boolean) => {
     try {
-      const [list, next] = await Promise.all([request<{ profiles: Profile[] }>({ type: 'profile_list' }), request<Info>({ type: 'info' })]);
-      setProfiles(list.profiles);
+      const [list, next] = await Promise.all([withProfiles ? request<{ profiles: Profile[] }>({ type: 'profile_list' }) : null, request<Info>({ type: 'info' })]);
+      if (list) {
+        setProfiles(list.profiles);
+        listed.current = Date.now();
+      }
       setInfo(next);
       setAvailable(true);
       setError('');
@@ -43,11 +52,16 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
       setError((e as Error).message);
     }
   }, []);
-  usePoll(refresh, 1000);
+  const refresh = useCallback(() => load(true), [load]);
+  usePoll(() => load(Date.now() - listed.current >= PROFILES_MS), 1000);
 
   const act = useCallback(
     async (action: Record<string, unknown>, message?: string) => {
-      if (busyRef.current) return false;
+      // One change at a time; say so rather than dropping a second one without a word.
+      if (busyRef.current) {
+        toast('Another change is still in progress. Try again in a moment.', 'info');
+        return false;
+      }
       busyRef.current = true;
       setBusy(true);
       try {

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MenuItem, Popover } from '@shared/Popover';
 import { bytes, speed } from '@shared/format';
 import { Button, Card, Empty, Facts, Field, IconButton, Note, Sheet, StatusDot, cx, useUI } from '@shared/glass';
+import { failureText } from '../failures';
 import { KEY_PREFIXES, KINDS, KIND_DETAIL, isActive, request, slug, stateLabel, uniqueName, type ConnectionState, type Profile } from '../ipc';
 import { useService } from '../service';
 import { SplitSheet } from './SplitSheet';
@@ -13,7 +14,9 @@ function clock(seconds: number): string {
   return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, '0')).join(':');
 }
 
-export function MyServers({ addKeySignal }: { addKeySignal: number }) {
+// addKeySignal counts presses of the navigation bar's Add key; onAddKeyShown clears it once the
+// sheet is open, so coming back to this view later does not open it again.
+export function MyServers({ addKeySignal, onAddKeyShown }: { addKeySignal: number; onAddKeyShown: () => void }) {
   const { info, profiles, available, error, act, busy } = useService();
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
@@ -22,7 +25,10 @@ export function MyServers({ addKeySignal }: { addKeySignal: number }) {
   const [split, setSplit] = useState<Profile | null | undefined>(undefined);
   const { confirm } = useUI();
   useEffect(() => {
-    if (addKeySignal) setAdding(true);
+    if (!addKeySignal) return;
+    setAdding(true);
+    onAddKeyShown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addKeySignal]);
 
   const c = info?.connection;
@@ -43,7 +49,7 @@ export function MyServers({ addKeySignal }: { addKeySignal: number }) {
     : c?.status === 'connected'
       ? `Through ${current?.display_name || current?.name}${c.vpn_ip ? `, tunnel address ${c.vpn_ip}` : ''}.`
       : c?.status === 'failed'
-        ? c.last_error || 'Check your key, then the diagnostics in Settings.'
+        ? failureText(c.last_error)
         : c && isActive(c.status)
           ? `Connecting to ${current?.display_name || current?.name}…`
           : profiles.length
@@ -60,7 +66,7 @@ export function MyServers({ addKeySignal }: { addKeySignal: number }) {
             <p className="mt-1.5 max-w-xl text-[13.5px] text-fg-2">{caption}</p>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Duration" value={c?.status === 'connected' ? clock(c.connected_duration_seconds) : '—'} mono />
+            <Stat label="Duration" value={c?.status === 'connected' ? clock(c.connected_duration_seconds) : '—'} />
             <Stat label="Downloaded" value={c?.status === 'connected' ? bytes(c.bytes_received) : '—'} />
             <Stat label="Uploaded" value={c?.status === 'connected' ? bytes(c.bytes_sent) : '—'} />
             <Stat label="Live" value={c?.status === 'connected' ? `↓ ${speed(c.receive_bytes_per_second)}` : '—'} sub={c?.status === 'connected' ? `↑ ${speed(c.send_bytes_per_second)}` : undefined} />
@@ -143,11 +149,11 @@ export function MyServers({ addKeySignal }: { addKeySignal: number }) {
   );
 }
 
-function Stat({ label, value, sub, mono }: { label: string; value: string; sub?: string; mono?: boolean }) {
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="inset-glass rounded-[20px] px-4 py-3">
       <div className="text-[12px] text-fg-3">{label}</div>
-      <div className={cx('mt-0.5 truncate text-[16px] font-medium', mono ? 'mono' : 'num')}>{value}</div>
+      <div className="num mt-0.5 truncate text-[16px] font-medium">{value}</div>
       {sub && <div className="num truncate text-[12px] text-fg-2">{sub}</div>}
     </div>
   );
@@ -171,7 +177,7 @@ function ServerCard({ profile, status, disabled, onToggle, onDetails, onRename, 
   const on = isActive(status);
   const pick = (fn: () => void) => () => (setMenu(false), fn());
   return (
-    <Card as="article" className={cx('flex flex-col gap-4 sm:p-5', status === 'connected' && 'border-ok/40')}>
+    <Card as="article" className={cx('flex flex-col gap-4 sm:p-5!', status === 'connected' && 'border-ok/40')}>
       <div className="flex items-start gap-3">
         <div className="grid size-11 shrink-0 place-items-center rounded-[16px] bg-glass-strong text-[13px] font-semibold text-fg-2">{title.slice(0, 2).toUpperCase()}</div>
         <div className="min-w-0 flex-1">
@@ -305,7 +311,7 @@ function AddKeySheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         }}
       >
         <Field label="Name on this device">
-          <input className="field" maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="For example Singapore" autoComplete="off" autoFocus />
+          <input className="field" maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="For example Singapore" autoComplete="off" data-autofocus />
         </Field>
         <Field label="Access key">
           <div className="relative">
@@ -364,7 +370,7 @@ function RenameSheet({ profile, onClose }: { profile: Profile | null; onClose: (
         }}
       >
         <Field label="Name">
-          <input className="field" maxLength={80} value={value} onChange={e => setValue(e.target.value)} autoFocus />
+          <input className="field" maxLength={80} value={value} onChange={e => setValue(e.target.value)} data-autofocus />
         </Field>
       </form>
     </Sheet>

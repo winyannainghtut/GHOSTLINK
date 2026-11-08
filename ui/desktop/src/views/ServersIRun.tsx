@@ -13,29 +13,45 @@ import { SettingsSheet } from '@admin/views/Settings';
 import { dateTime } from '@shared/format';
 import { Button, Card, Empty, Field, IconButton, Note, Segmented, Sheet, useUI } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
-import { request, slug, type ManagedServer } from '../ipc';
+import { request, slug, uniqueName, type ManagedServer } from '../ipc';
 import { serverTransport } from '../serverTransport';
 import { useService } from '../service';
 
-export function ServersIRun({ addServerSignal }: { addServerSignal: number }) {
+type Seen = Record<string, { name: string; version: string }>;
+
+// addServerSignal counts presses of the navigation bar's Add server; onAddServerShown clears it
+// once the sheet is open, so coming back to this view later does not open it again.
+export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSignal: number; onAddServerShown: () => void }) {
   const { toast } = useUI();
   const [servers, setServers] = useState<ManagedServer[] | null>(null);
+  // The service keeps each server's name and version from the day it was added; the servers
+  // themselves tell the current ones (after a rename or an upgrade).
+  const [seen, setSeen] = useState<Seen>({});
   const [adding, setAdding] = useState(false);
   const [help, setHelp] = useState(false);
   const [open, setOpen] = useState<ManagedServer | null>(null);
   const load = () =>
     request<{ servers: ManagedServer[] }>({ type: 'managed_server_list' })
-      .then(r => setServers(r.servers))
+      .then(r => {
+        setServers(r.servers);
+        for (const s of r.servers) {
+          request<Server>({ type: 'server_call', server: s.name, op: { op: 'info' } })
+            .then(info => setSeen(all => ({ ...all, [s.name]: { name: info.name, version: info.version } })))
+            .catch(() => {});
+        }
+      })
       .catch(e => (toast(e.message, 'bad'), setServers([])));
   useEffect(() => void load(), []);
   useEffect(() => {
-    if (addServerSignal) {
-      setOpen(null);
-      setAdding(true);
-    }
+    if (!addServerSignal) return;
+    setOpen(null);
+    setAdding(true);
+    onAddServerShown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addServerSignal]);
 
-  if (open) return <Workspace server={open} onBack={() => (setOpen(null), load())} />;
+  const current = (s: ManagedServer): ManagedServer => ({ ...s, server_name: seen[s.name]?.name || s.server_name, version: seen[s.name]?.version || s.version });
+  if (open) return <Workspace server={current(open)} onBack={() => (setOpen(null), load())} />;
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1">
@@ -61,8 +77,8 @@ export function ServersIRun({ addServerSignal }: { addServerSignal: number }) {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 min-[112.5rem]:grid-cols-4 min-[143.75rem]:grid-cols-5">
-          {(servers ?? []).map(s => (
-            <Card as="article" key={s.name} className="flex flex-col gap-4 sm:p-5">
+          {(servers ?? []).map(current).map(s => (
+            <Card as="article" key={s.name} className="flex flex-col gap-4 sm:p-5!">
               <div className="flex items-start gap-3">
                 <div className="grid size-11 shrink-0 place-items-center rounded-[16px] bg-glass-strong text-fg-2">
                   <ServerIcon size={18} />
@@ -84,7 +100,7 @@ export function ServersIRun({ addServerSignal }: { addServerSignal: number }) {
           ))}
         </div>
       )}
-      <AddServerSheet open={adding} onClose={() => setAdding(false)} onAdded={load} />
+      <AddServerSheet open={adding} taken={(servers ?? []).map(s => s.name)} onClose={() => setAdding(false)} onAdded={load} />
       <SetupHelp open={help} onClose={() => setHelp(false)} />
     </div>
   );
@@ -188,7 +204,9 @@ function WorkspaceBody({ server, onBack }: { server: ManagedServer; onBack: () =
   );
 }
 
-function AddServerSheet({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded: () => void }) {
+// The name typed here only becomes the server's ID on this device (letters, digits, - and _), so
+// a name in another script, or one already used, still needs an ID of its own.
+function AddServerSheet({ open, taken, onClose, onAdded }: { open: boolean; taken: string[]; onClose: () => void; onAdded: () => void }) {
   const { toast } = useUI();
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
@@ -207,7 +225,7 @@ function AddServerSheet({ open, onClose, onAdded }: { open: boolean; onClose: ()
     setBusy(true);
     setError('');
     try {
-      await request({ type: 'managed_server_add', name: slug(name.trim()).slice(0, 40), management_key: key.trim() });
+      await request({ type: 'managed_server_add', name: uniqueName(slug(name.trim()).slice(0, 40), taken), management_key: key.trim() });
       setKey('');
       toast('Server added. Its management key is sealed in the local service.');
       onAdded();
@@ -243,7 +261,7 @@ function AddServerSheet({ open, onClose, onAdded }: { open: boolean; onClose: ()
         }}
       >
         <Field label="Name on this device">
-          <input className="field" maxLength={40} value={name} onChange={e => setName(e.target.value)} placeholder="For example home" autoComplete="off" autoFocus />
+          <input className="field" maxLength={40} value={name} onChange={e => setName(e.target.value)} placeholder="For example home" autoComplete="off" data-autofocus />
         </Field>
         <Field label="Management key">
           <div className="relative">

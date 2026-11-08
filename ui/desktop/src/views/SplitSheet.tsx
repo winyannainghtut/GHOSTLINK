@@ -50,7 +50,9 @@ export function SplitSheet({ profile, onClose, onSaved }: { profile: Profile | n
       onSaved?.();
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      // The lists are kept (and checked) in every mode, but "Everything uses the VPN" hides them.
+      const hidden = policy?.mode === 'full' && (policy.domains.length + policy.ip_ranges.length + policy.apps.length > 0);
+      setError((e as Error).message + (hidden ? ' The lists are kept for the other modes: choose one of them to see and correct the entry.' : ''));
     }
   };
   const editing = !(profile && follow);
