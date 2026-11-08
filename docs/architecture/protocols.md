@@ -16,7 +16,7 @@ Every protocol except the optional OpenVPN backend runs in the managed worker (`
 - **Routing target:** `route.final` is always set to `proxy` explicitly, because sing-box only falls back to endpoints when `final` names one.
 - **DNS:** WireGuard profiles with a `DNS =` resolver use it over UDP through the tunnel. Every other profile uses DNS-over-HTTPS to 1.1.1.1 through the tunnel.
 - **Partial `AllowedIPs`:** a WireGuard profile that doesn't route everything becomes the TUN's `route_address` list, so only those prefixes enter the tunnel.
-- **Build tags:** `with_gvisor` for the userspace stacks, `with_utls` for REALITY, `with_wireguard` for the endpoint.
+- **Build tags:** `with_gvisor` for the userspace stacks (the TUN and the WireGuard and AmneziaWG endpoints), `with_utls` for REALITY. `with_wireguard` is passed too but has no effect, because the worker registers the WireGuard endpoint directly.
 
 `core/vpn-engine/src/access.rs` is the single entry point that turns a credential into an `Outbound`. It is used both when importing (to validate) and when connecting (to re-validate the sealed original).
 
@@ -26,7 +26,9 @@ sing-box has no AmneziaWG support. Rather than fork it, `core/outline-worker/int
 
 - **Network stack:** sing-box's exported gVisor stack device (`transport/wireguard.NewDevice`). Its `tun.Device` method set matches amneziawg-go's exactly, except for the `Event` type, which a small adapter converts.
 - **Client sockets:** a bind adapted from sing-box's `ClientBind`. It sends through sing-box's dialer, so UDP binds to the physical interface and never loops back into the TUN. **It must not rewrite packet bytes.** sing-box's original overwrites bytes 1–3 for Cloudflare WARP's "reserved" field, which is exactly where AmneziaWG's magic headers sit.
-- **Server sockets:** amneziawg-go's standard bind on `listen_port`. Incoming flows go to sing-box's router, with each peer's `user` attached, so `auth_user` rules apply to WireGuard/AmneziaWG users the same way as to Shadowsocks and VLESS users.
+- **Server sockets:** amneziawg-go's standard bind on `listen_port`. Incoming flows go to sing-box's router with each peer's `user` attached, also when UDP and ICMP flows are pre-matched, so `auth_user` rules apply to WireGuard/AmneziaWG users the same way as to Shadowsocks and VLESS users.
+- **Server UDP:** one NAT session per destination address and port. Rules are judged when a session opens, so with one session per client socket (sing-tun's default) a client could send one allowed datagram and then reach any other destination from the same socket. Only the session's destination can answer it.
+- **Client flows:** a client endpoint drops every flow the far side of the tunnel starts. Its own flows use their own sockets, so only such flows reach the stack's forwarder; routed by the client's rules, they could reach the device's loopback and LAN in "only" mode or with LAN kept direct. Plain WireGuard profiles use sing-box's native endpoint, which still routes such flows.
 - **Configuration safety:** obfuscation values are written through amneziawg-go's UAPI from an allowlist of parameter names. Values containing `=`, CR/LF or NUL are refused, so a config cannot inject other UAPI settings.
 - **Plain WireGuard:** the same endpoint with zero obfuscation parameters interoperates with a stock WireGuard client. The client side still uses sing-box's native endpoint for plain WireGuard.
 
@@ -34,8 +36,12 @@ Interop tests in `internal/awg` run against the real upstream peer:
 - upstream amneziawg-go with legacy, 2.0 and zero parameters;
 - an upstream AWG 2.0 client against our server;
 - a stock WireGuard client against our server;
-- per-user rules;
+- per-user rules, and the peer's user in pre-match;
+- one UDP socket that sends to an allowed port and then to a blocked one, which must not answer;
+- the far side of the tunnel dialing the client's tunnel address, which must not get through;
 - a mismatched header, which must fail.
+
+Other tests check that an engine that was only validated, or started and closed, leaves no goroutines behind.
 
 ## Import formats
 
@@ -192,6 +198,7 @@ flowchart LR
 ## Process notes
 
 - **Close race in the TUN adapter:** the adapter (`internal/awg/tun.go`) makes `Close` wait for writes in flight and refuses later writes. amneziawg-go closes the TUN before stopping peers, and sing-box's stack dereferences a detached dispatcher on a late write. This crashed an AmneziaWG client on Linux CI and would have crashed the server on reloads.
+- **Nothing left after a reload:** the endpoint creates its gVisor stack when it starts, not when it is built. sing-box closes only what has started, and the server validates each new configuration without starting it, so a stack built earlier leaked on every change. The adapter also closes its events channel when it closes; amneziawg-go's event reader stops only then.
 
 - The worker ignores `SIGPIPE` on Unix (`sigpipe_unix.go`). A broken status pipe returns an error instead of killing the worker before its graceful engine shutdown.
-- Status events are fixed JSON codes; upstream logs stay disabled so no credential or address reaches the daemon.
+- Status events are fixed JSON objects: `started` with `vpn_ip` (the IPv4 the worker saw on the TUN, which the daemon configured), `failed` with a fixed code, and `closed`. Upstream logs stay disabled, so no credential, server address or traffic destination reaches the daemon.

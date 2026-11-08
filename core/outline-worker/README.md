@@ -48,7 +48,7 @@ ghostlink-server serve --state DIR [--log-level warn]               # engine + H
 ghostlink-server show-key|check|version --state DIR
 ```
 
-It normally runs inside the container shipped by the `ghostlink-server` packages; see the [server guide](../../docs/deployment/ghostlink-server.md). `internal/version` holds the version both programs report.
+It normally runs inside the container shipped by the `ghostlink-server` packages; see the [server guide](../../docs/deployment/ghostlink-server.md). The module also builds the mesh agent (`cmd/ghostlink-mesh`) and the IPsec agent (`cmd/ghostlink-ipsec-agent`). `internal/version` holds the one Ghostlink version all four programs report.
 
 ## Licensing
 
