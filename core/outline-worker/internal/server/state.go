@@ -2,7 +2,8 @@
 // Copyright 2026 Ghostlink contributors
 
 // Package server is the Ghostlink server: one sing-box instance hosting Shadowsocks,
-// VLESS-REALITY, WireGuard and AmneziaWG, managed through an HTTPS API (Outline-style).
+// VLESS-REALITY, WireGuard and AmneziaWG (a new server has only Shadowsocks on), managed
+// through an HTTPS API (Outline-style).
 package server
 
 import (

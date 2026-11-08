@@ -338,9 +338,9 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 			}
 			s.Monitor.HistoryMaxMB = *patch.HistoryMaxMB
 		}
-		// New ports to try binding, and the ports this server used before the change.
+		// New ports to try binding, and the ports this server's listeners held before the change.
 		var tryPorts []portTry
-		ours := s.usedPorts()
+		ours := s.heldPorts()
 		if patch.DashboardPort != nil {
 			if *patch.DashboardPort != s.Dashboard.Port {
 				tryPorts = append(tryPorts, portTry{"the dashboard", *patch.DashboardPort, []string{"tcp"}})
@@ -382,15 +382,17 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 				}
 				*port = *change.Port
 			}
-			if port != nil && *enabled && (!wasEnabled || *port != oldPort) {
+			// A protocol turned on, or moved (also while it is off), has its port tried.
+			if port != nil && ((*enabled && !wasEnabled) || *port != oldPort) {
 				tryPorts = append(tryPorts, portTry{protocol, *port, protocolNetworks[protocol]})
 			}
 		}
 		// The engine binds a protocol's port only once the protocol has keys, and the dashboard
 		// moves only after the change is saved, so a port that cannot be bound (another program
 		// holds it, or it is below 1024) is tried here and refused now rather than failing later.
+		// A protocol that is off keeps its port for when it is turned on: nothing else may take it.
 		if len(tryPorts) > 0 {
-			if err := s.CheckPorts(); err != nil {
+			if err := s.checkReservedPorts(); err != nil {
 				return InputError{err}
 			}
 		}
@@ -698,7 +700,7 @@ func (a *API) createKey(r *http.Request) (int, any, error) {
 			return InputError{fmt.Errorf("protocol must be one of %s", strings.Join(append(append([]string{}, Protocols...), AppleProtocols...), ", "))}
 		}
 		if !*enabled {
-			return InputError{fmt.Errorf("%s is turned off on this server", request.Protocol)}
+			return InputError{fmt.Errorf("%s is turned off on this server; turn it on first (its switch in the app or dashboard, or sudo ghostlink-server set --enable %s)", request.Protocol, request.Protocol)}
 		}
 		key, err := s.NewKeyWith(u, request.Protocol, options)
 		if err != nil {

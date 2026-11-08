@@ -1,6 +1,18 @@
 # Verification ledger
 
-Updated 2026-11-08 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
+Updated 2026-11-09 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
+
+## v0.8.3 New servers run only Shadowsocks (2026-11-09, pull request #7)
+
+Measured first on the real test server (idle, with keys): container memory 11.1 MiB with only Shadowsocks running, 15.1 with VLESS, 18.8 with WireGuard, 22.8 MiB with AmneziaWG too. A protocol without keys starts nothing, so the change is in the defaults: a new server, its hints and the app create Shadowsocks keys. Implemented in three worktrees (Go, UI, scripts and docs) from one plan with a prototype, then cross-checked by a reviewer (5 findings, all fixed) and integrated.
+
+| Check | Result actually observed |
+|---|---|
+| Go suite | All 8 packages pass (the server package in 145 s), `go vet` on Windows and for Linux, `gofmt` clean. 6 new tests: a new server runs only Shadowsocks; an existing server keeps its switches; turning a protocol on tries its port; a protocol that is off keeps its port; held ports are those that listen now; the commands on a new server. Each fails on the old code, and four single-point mutations of the new port checks are each caught |
+| Process suite | 19/19 against a fresh `init` server: only Shadowsocks on, an AmneziaWG key refused, `server set --enable` turns the others on, then their keys work |
+| UI | Typecheck, 19 tests (2 new: the Shadowsocks-first pick and the "turned on" text) and both builds, identical to the committed output |
+| GUI (WebView2 DevTools, isolated profile, a fresh local server, Daylight, Obsidian and Titanium) | 40 checks: Overview and Network say the WireGuard/AmneziaWG pools are off and a new server runs only Shadowsocks; Network shows only Shadowsocks on; New client and New key start on Shadowsocks and mark the protocols that are off; nothing outside its box. Turning AmneziaWG on from Network: on, and the toast says "Allow UDP <its port> in this server's firewall and your cloud security group"; New client then offers it but still starts on Shadowsocks; turning it off asks first and pauses it |
+| Not run here | The installer's `--enable` and the smoke tests in `linux-package.yml` and `ipsec.yml` (Docker; release CI runs them); a refused turn-on in the GUI (covered by the Go tests) |
 
 ## A real internet-facing server (2026-11-08, Ghostlink 0.8.2)
 

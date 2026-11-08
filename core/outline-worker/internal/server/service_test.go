@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -108,6 +109,147 @@ func TestPortsAreTriedBeforeTheyAreSaved(t *testing.T) {
 	server.must(t, http.StatusOK, "PATCH", "/server", swap, &after)
 	if after.Protocols[VLESS].Port != before.Protocols[Shadowsocks].Port || after.Protocols[Shadowsocks].Port != before.Protocols[VLESS].Port {
 		t.Fatalf("ports were not swapped: %+v", after.Protocols)
+	}
+}
+
+// Turning a protocol on tries its port, which another program may have taken since the server
+// was created; keys for a protocol are refused while it is off.
+func TestTurningAProtocolOnTriesItsPort(t *testing.T) {
+	server := newTestServer(t, func(s *State) {
+		onlyShadowsocks(s)
+		// Free on UDP too: at the end Shadowsocks takes it over.
+		port, err := pickPort(s.usedPorts(), portFree, "tcp", "udp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.VLESS.Port = port
+	})
+	user := server.user(t, map[string]any{"name": "Later"})
+	if status := server.call(t, "POST", "/users/"+user.ID+"/keys", map[string]string{"protocol": VLESS}, nil); status != http.StatusBadRequest ||
+		!strings.Contains(server.last, "vless is turned off on this server; turn it on first") || !strings.Contains(server.last, "sudo ghostlink-server set --enable vless") {
+		t.Fatalf("a key for VLESS while it is off: %d %s", status, server.last)
+	}
+	var info serverInfo
+	server.must(t, http.StatusOK, "GET", "/server", nil, &info)
+	tcp, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", info.Protocols[VLESS].Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcp.Close()
+	udp, err := net.ListenPacket("udp4", fmt.Sprintf("127.0.0.1:%d", info.Protocols[AmneziaWG].Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	for protocol, network := range map[string]string{VLESS: "TCP", AmneziaWG: "UDP"} {
+		on := map[string]any{"protocols": map[string]any{protocol: map[string]any{"enabled": true}}}
+		want := fmt.Sprintf("%s cannot use %s port %d: another program uses it", protocol, network, info.Protocols[protocol].Port)
+		if status := server.call(t, "PATCH", "/server", on, nil); status != http.StatusBadRequest || !strings.Contains(server.last, want) {
+			t.Fatalf("turning %s on while its port is taken: %d %s", protocol, status, server.last)
+		}
+	}
+	tcp.Close()
+	udp.Close()
+	both := map[string]any{"protocols": map[string]any{VLESS: map[string]any{"enabled": true}, AmneziaWG: map[string]any{"enabled": true}}}
+	server.must(t, http.StatusOK, "PATCH", "/server", both, &info)
+	if !info.Protocols[VLESS].Enabled || !info.Protocols[AmneziaWG].Enabled || info.Protocols[WireGuard].Enabled {
+		t.Fatalf("protocols: %+v", info.Protocols)
+	}
+	server.key(t, user, VLESS)
+	server.key(t, user, AmneziaWG)
+	dial := func(what string, port uint16) {
+		t.Helper()
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+		if err != nil {
+			t.Fatalf("%s: VLESS does not listen: %v", what, err)
+		}
+		conn.Close()
+	}
+	dial("after its first key", info.Protocols[VLESS].Port)
+
+	// The ports the engine holds can still be swapped: it restarts with the change.
+	server.key(t, user, Shadowsocks)
+	swap := map[string]any{"protocols": map[string]any{
+		VLESS: map[string]any{"port": info.Protocols[Shadowsocks].Port}, Shadowsocks: map[string]any{"port": info.Protocols[VLESS].Port}}}
+	var swapped serverInfo
+	server.must(t, http.StatusOK, "PATCH", "/server", swap, &swapped)
+	if swapped.Protocols[VLESS].Port != info.Protocols[Shadowsocks].Port {
+		t.Fatalf("ports were not swapped: %+v", swapped.Protocols)
+	}
+	dial("after a swap", swapped.Protocols[VLESS].Port)
+}
+
+// A protocol that is off keeps its port: the dashboard and the other protocols cannot take it,
+// and moving it is checked as for a protocol that is on.
+func TestPortsOfAProtocolThatIsOffStayReserved(t *testing.T) {
+	server := newTestServer(t, func(s *State) {
+		onlyShadowsocks(s)
+		// As the server picks it (10000-32000): never one of the free ports the system hands out
+		// below for the busy listener and the move.
+		if _, err := s.ensureDashboard(portFree); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var before serverInfo
+	server.must(t, http.StatusOK, "GET", "/server", nil, &before)
+	busy, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	move := func(protocol string, port any) map[string]any {
+		return map[string]any{"protocols": map[string]any{protocol: map[string]any{"port": port}}}
+	}
+	const kept = "(a protocol that is off keeps its port for when it is turned on)"
+	for _, refused := range []struct {
+		patch      map[string]any
+		want, also string
+	}{
+		{map[string]any{"dashboard_port": before.Protocols[VLESS].Port}, "dashboard and vless cannot share port", kept},
+		{move(WireGuard, before.Protocols[AmneziaWG].Port), "wireguard and amneziawg cannot share port", kept},
+		{move(VLESS, before.APIPort), "api and vless cannot share port", kept},
+		{move(VLESS, before.DashboardPort), "dashboard and vless cannot share port", kept},
+		{move(VLESS, busy.Addr().(*net.TCPAddr).Port), "vless cannot use TCP port", "another program uses it"},
+	} {
+		if status := server.call(t, "PATCH", "/server", refused.patch, nil); status != http.StatusBadRequest ||
+			!strings.Contains(server.last, refused.want) || !strings.Contains(server.last, refused.also) {
+			t.Fatalf("%v: status %d %s", refused.patch, status, server.last)
+		}
+	}
+	moved := freeTCPPort(t)
+	var after serverInfo
+	server.must(t, http.StatusOK, "PATCH", "/server", move(VLESS, moved), &after)
+	if after.Protocols[VLESS].Port != moved || after.Protocols[VLESS].Enabled || after.DashboardPort != before.DashboardPort ||
+		after.Protocols[WireGuard].Port != before.Protocols[WireGuard].Port {
+		t.Fatalf("after the refusals and a move of VLESS: %+v, dashboard port %d", after.Protocols, after.DashboardPort)
+	}
+}
+
+// The ports a change may take over from the server's own listeners (two services swapping) are
+// those that listen now: a protocol that is off, or that has no keys, holds none.
+func TestHeldPortsAreThoseThatListenNow(t *testing.T) {
+	free := func(string, uint16) bool { return true }
+	state, err := NewState(InitOptions{Hostname: "203.0.113.7", PortFree: free})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ensureDashboard(free); err != nil {
+		t.Fatal(err)
+	}
+	// Shadowsocks and AmneziaWG are on with keys, VLESS is on with none, WireGuard is off with one.
+	state.Shadowsocks.Enabled, state.VLESS.Enabled, state.WireGuard.Enabled, state.AmneziaWG.Enabled = true, true, false, true
+	u := &User{ID: state.newID(), Name: "Held", Enabled: true}
+	for _, protocol := range []string{Shadowsocks, WireGuard, AmneziaWG} {
+		key, err := state.NewKey(u, protocol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Keys = append(u.Keys, key)
+	}
+	state.Users = append(state.Users, u)
+	want := map[uint16]bool{state.API.Port: true, state.Dashboard.Port: true, state.Shadowsocks.Port: true, state.AmneziaWG.Port: true}
+	if held := state.heldPorts(); !maps.Equal(held, want) {
+		t.Fatalf("held ports %v, want %v", held, want)
 	}
 }
 

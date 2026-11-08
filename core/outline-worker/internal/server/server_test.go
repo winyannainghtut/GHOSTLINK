@@ -254,12 +254,26 @@ type testServer struct {
 	last    string // the body of the last answer
 }
 
+// allProtocolsOn turns on what a new server leaves off (it runs only Shadowsocks), as servers
+// created by older versions have it: most tests use every protocol.
+func allProtocolsOn(s *State) {
+	s.Shadowsocks.Enabled, s.VLESS.Enabled, s.WireGuard.Enabled, s.AmneziaWG.Enabled = true, true, true, true
+}
+
+// onlyShadowsocks undoes allProtocolsOn: the protocols as a new server has them.
+func onlyShadowsocks(s *State) {
+	s.VLESS.Enabled, s.WireGuard.Enabled, s.AmneziaWG.Enabled = false, false, false
+}
+
+// newTestServer starts a server with every protocol on (see allProtocolsOn); mutate changes its
+// state first.
 func newTestServer(t *testing.T, mutate func(*State)) *testServer {
 	t.Helper()
 	state, err := NewState(InitOptions{Hostname: "127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	allProtocolsOn(state)
 	if mutate != nil {
 		mutate(state)
 	}

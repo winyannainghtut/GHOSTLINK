@@ -8,13 +8,13 @@ React, TypeScript, Tailwind CSS and Lucide icons, built with Vite.
 | `admin/` | The server-administration views (overview, clients, network, mesh, settings, new client) and their parts, such as the speed limit control (`admin/SpeedLimit.tsx`). They are used by both apps through a transport (`admin/api.ts`) |
 | `dashboard/` | The server dashboard shell. Its transport is this server's `/api` |
 | `desktop/` | The desktop app: My servers, Servers I run (the admin views over the local service) and Settings. `desktop/src/routes.ts` maps the admin views' requests onto the service's `server_call` operations |
-| `tests/` | `npm test`: the desktop mapping against the Rust `ServerOp` contract, the formatting (`shared/format.ts`), speed and data limits (`admin/limits.ts`), and the desktop app's local IDs and failure messages. Tests import plain `.ts` modules without imports, so pure logic lives in such modules rather than in `.tsx` files |
+| `tests/` | `npm test`: the desktop mapping against the Rust `ServerOp` contract, the formatting (`shared/format.ts`), speed and data limits (`admin/limits.ts`), the protocol new clients and keys start with and the firewall hint after turning a protocol on (`admin/protocols.ts`), and the desktop app's local IDs and failure messages. Tests import plain `.ts` modules without imports, so pure logic lives in such modules rather than in `.tsx` files |
 
 ```sh
 cd ui
 npm ci --ignore-scripts      # exact versions from package-lock.json
 npm run build                # typecheck, then build the dashboard and the desktop UI
-npm test                     # the request mapping, formatting, limits and desktop helpers
+npm test                     # the request mapping, formatting, limits, protocols and desktop helpers
 GHOSTLINK_DASHBOARD=http://127.0.0.1:8080 npm run dev:dashboard   # live reload against a real dashboard
 ```
 

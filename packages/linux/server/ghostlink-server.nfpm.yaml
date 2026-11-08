@@ -14,9 +14,10 @@ vendor: Ghostlink
 homepage: https://github.com/winyannainghtut/GHOSTLINK
 license: GPL-3.0-or-later AND GPL-2.0-or-later
 description: |-
-  Self-hosted Ghostlink VPN server in a Docker container: AmneziaWG, WireGuard,
-  VLESS-REALITY and Shadowsocks (Outline-compatible), optional IKEv2/IPsec for the built-in
-  VPN of iPhone, iPad and Mac, with users, per-user and global traffic rules and data limits.
+  Self-hosted Ghostlink VPN server in a Docker container: Shadowsocks (Outline-compatible)
+  is on by default; AmneziaWG, WireGuard and VLESS-REALITY are there to turn on, and so is
+  IKEv2/IPsec for the built-in VPN of iPhone, iPad and Mac. Users, per-user and global
+  traffic rules and data limits.
   Installing prints a management key for the Ghostlink app.
 
 contents:

@@ -1,6 +1,6 @@
 # Ghostlink — guide for developers and AI coding agents
 
-Updated **2026-11-08**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
+Updated **2026-11-09**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
 
 This guide is for anyone, person or AI coding agent, who builds, tests or changes Ghostlink. Read *Start here* first; the numbered sections below are the detailed reference (some of their tables are older, and say so). Agents that only look for `AGENTS.md` should be pointed at this file.
 
@@ -8,11 +8,11 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 ### Where things stand
 
-- **Latest release: v0.8.2**, a **pre-release** published on 2026-11-08: layout fixes for the app and the dashboard (pull request #5), reported on 0.8.1. 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
+- **Latest release: v0.8.3**, a **pre-release** published on 2026-11-09: new servers run only Shadowsocks, and turning a protocol on checks its port and names it (pull request #7). 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
 - **Other releases:**
-  - v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.2:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.3:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes.
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default.
 
 ### Design decisions to keep
 
@@ -33,6 +33,7 @@ These came from the maintainer and shape the code. Keep them unless the maintain
 - **Look (0.7.0):** the app and the dashboard share one frosted-glass design (see §10). Check new UI in all three finishes, Daylight included.
 - **Online state:** a client is online while it sends something at least once a minute; open connections alone don't count (see §13).
 - **Small servers:** with under 1 GB of memory and swap the installer stops unless it gets `--add-swap`. Before a real move from Outline, suggest `--migrate-outline --check`.
+- **Default protocols (2026-11-09):** a new server turns on only Shadowsocks (Outline-compatible). AmneziaWG, WireGuard and VLESS-REALITY still get their ports and keys at `init` and stay off until an administrator turns them on (`set --enable P`, or their switch in the app or the dashboard), and turning one on says which port to allow. Upgrades keep each server's switches; nothing is turned off on its own. A protocol that is off keeps its port: `checkReservedPorts` counts it, so the dashboard or another protocol cannot take it, and turning it on tries it (`heldPorts`). New clients in the app start on Shadowsocks. `install-server.sh --enable PROTOCOL` turns protocols on at install time, and the ports it lists and opens are those of protocols that are on.
 - **Two packages (2026-11-08):** the server and the mesh agent stay separate packages. A node needs no Docker or VPN server, the server runs in an unprivileged container, and network rights on a host stay with small pieces (the mesh agent, and the IPsec component when it is on). `install-server.sh --mesh` installs both on the coordinator's host.
 - **First stable release:** v1.0.0, after the checks under *Next steps*. Launching with unsigned builds is acceptable.
 
@@ -207,7 +208,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 
 ## 2. Current completion report
 
-**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.2, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
+**No platform has yet met the full original VPN definition of done.** Windows has the most advanced implementation and local verification. This table dates from the first Windows client work; the server side has moved on a lot since (v0.3.0 to v0.8.3, see [Start here](#start-here) and the README's *Status and roadmap*). Rows that changed are marked.
 
 | Area | Implemented / produced | Evidence and remaining gate |
 |---|---|---|
@@ -221,7 +222,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.2 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.3 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -353,7 +354,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.2; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.3; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -721,7 +722,7 @@ No successful full TUN connection, all-application routing, full/split route com
 ### Ghostlink server — primary server path (v0.3.0)
 
 `core/outline-worker/cmd/ghostlink-server` + `internal/server` (GPL, same Go module as the worker) is an Outline-style server:
-- **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg`, with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
+- **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg` (a new server has only Shadowsocks on), with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
 - **Packaging:** `.deb`/`.rpm` (`packages/linux/server/`, `scripts/build-linux-server.sh`) carry the image (`docker save`); the postinst loads it and prints the management key. The container runs with host networking, no capabilities, a read-only root and a dedicated host account.
 - **Rules:** always-on internal blocks, then per-user (`auth_user`), exempt and global rules; usage via a router `ConnectionTracker`; data limits.
 
@@ -863,7 +864,7 @@ Each Linux job also builds the server (`ghostlink-server_<v>-1_<arch>.deb`, `gho
 
 The Windows and Linux build jobs run `node scripts/release-version.mjs` first (the Linux step used to hide its exit code). The root `[workspace.package] version` is authoritative, and the job fails if the desktop crate, `tauri.conf.json`, `ui/desktop/src/version.ts`, the Go worker identity or the Rust `WORKER_VERSION` disagree, or if a pushed tag is not `v<version>`. Build scripts take `-Version`/`VERSION` from it, and the WiX `Version` is `$(var.Version)`. Bump all of those declarations together.
 
-Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents publish only when a maintainer asks. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.2` exist; v0.5.0, v0.7.0, v0.8.0, v0.8.1 and v0.8.2 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
+Pushing a `v<version>` tag also runs `publish`, which needs the Windows, Linux x64, `desktop.yml` and `ui.yml` jobs (the last two called through `workflow_call`), collects the files, writes `SHA256SUMS.txt` and creates (or updates) a **draft pre-release** using `.github/release-notes.md` and the version's CHANGELOG section. On a re-run it deletes draft files it did not build again, so the checksums always list every file, and `publish` and `attach-linux-arm64` refuse a release that is already published. A maintainer reviews and publishes the draft (after `attach-linux-arm64` finished); agents publish only when a maintainer asks. A manual `workflow_dispatch` run (`gh workflow run release.yml --ref <branch>`), also on a tag, only builds and tests, and is the release dry run before merging. Tags `v0.1.0` to `v0.8.3` exist; v0.5.0, v0.7.0, v0.8.0, v0.8.1, v0.8.2 and v0.8.3 are published pre-releases, the others are unpublished drafts. The workflow always passes `--prerelease`; a v1.0.0 "Latest" release needs that changed (see Start here).
 
 Deliberately not built: the Linux desktop GUI (unresolved GTK `glib` advisory, see §15), Windows arm64, macOS (`process.rs` has no macOS listener-ownership check, so connect fails closed), Android and iOS (no implementation). The Linux jobs call the reusable `linux-package.yml`; the arm64 job never gates the draft (`publish` needs Windows, Linux x64, `desktop.yml` and `ui.yml`), and `attach-linux-arm64` uploads its files and their checksum lines afterwards. Publish only after it has: the installers and the app's **Add node** command take the newest published release, pre-releases included, so a release without the arm64 files breaks installs and upgrades on arm64. If no arm64 runner is available, keep the release a draft until the job can run.
 

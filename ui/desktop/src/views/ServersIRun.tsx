@@ -302,6 +302,7 @@ function SetupHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
         </li>
         <li>
           <span className="text-fg">4. Open the ports</span> the installer lists in the server's firewall and your cloud security group.
+          <span className="mt-1.5 block text-[12.5px] text-fg-3">A new server runs only Shadowsocks (Outline-compatible). To offer others, turn them on under Manage, then Network, and allow the port each one names.</span>
         </li>
       </ol>
     </Sheet>

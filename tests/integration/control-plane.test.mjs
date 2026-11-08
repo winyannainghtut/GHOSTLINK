@@ -235,7 +235,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.8.2');
+  assert.equal((await cli(['version'])).data.version, '0.8.3');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -378,7 +378,9 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   }
   assert.ok(added, 'the server did not come up');
   assert.equal(added.data.endpoint, new URL(management.apiUrl).host);
-  assert.equal(added.data.protocols.amneziawg.enabled, true);
+  // A new server runs only Shadowsocks; the other protocols have their ports and keys but are off.
+  assert.equal(added.data.protocols.shadowsocks.enabled, true);
+  for (const p of ['amneziawg', 'wireguard', 'vless']) assert.equal(added.data.protocols[p].enabled, false, `${p} is off on a new server`);
   assert.equal((await cli(['server', 'add', '--name', 'home', '--key-file', keyFile], 2)).error.code, 'invalid_request', 'no silent overwrite');
   const listed = await cli(['server', 'list']);
   assert.equal(listed.data.servers[0].name, 'home');
@@ -396,6 +398,10 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   // A delete is answered with no data, which is a success.
   const temporary = await cli(['server', 'users', 'add', '--server', 'home', '--name', 'Temporary']);
   assert.equal((await cli(['server', 'users', 'remove', '--server', 'home', '--user', temporary.data.id])).data, null);
+  // Keys for a protocol that is off are refused until it is turned on (this also tries its port).
+  assert.ok((await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'amneziawg'], 2)).error.message.includes('turned off'));
+  const on = await cli(['server', 'set', '--server', 'home', '--enable', 'amneziawg', '--enable', 'wireguard', '--enable', 'vless']);
+  assert.ok(['amneziawg', 'wireguard', 'vless'].every(p => on.data.protocols[p].enabled));
   const imported = await cli(['server', 'keys', 'create', '--server', 'home', '--user', user, '--protocol', 'amneziawg', '--import', 'alice-awg']);
   assert.equal(imported.data.imported.kind, 'amneziawg'); assert.equal(imported.data.access_key, undefined);
   const vlessFile = path.join(temp, 'alice-vless.txt');

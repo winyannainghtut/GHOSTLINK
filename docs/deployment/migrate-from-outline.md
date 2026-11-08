@@ -6,7 +6,7 @@ If an Outline server (Jigsaw's `shadowbox`) runs on a Linux machine, Ghostlink c
 - each key keeps its password, port and cipher, so the `ss://` keys people already have **keep working**, with nothing to re-send;
 - Outline is stopped and stays off after a reboot, and its files are left as they were, as a backup.
 
-After the move you manage everything with Ghostlink: the app, the dashboard or `sudo ghostlink-server`. You can also give the same people AmneziaWG, WireGuard, VLESS-REALITY or IKEv2 keys, speed limits and traffic rules.
+After the move you manage everything with Ghostlink: the app, the dashboard or `sudo ghostlink-server`. You can also turn on AmneziaWG, WireGuard, VLESS-REALITY or IKEv2 and give the same people keys for them, plus speed limits and traffic rules.
 
 ## Check first
 
@@ -25,7 +25,7 @@ Check only: nothing has changed yet. The import would do this:
   12 clients, one per Outline access key; 11 keep their Outline key as it is.
   Shadowsocks: port 41234, plus 9000 for keys on other ports (cipher chacha20-ietf-poly1305).
   Server: My Outline, address in keys 203.0.113.7.
-  VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import).
+  VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import). It is off; its port is ready for when you turn it on.
   These clients get a new key, which you need to send them:
     Office: it uses port 443; Ghostlink cannot serve ports below 1024
 ```
@@ -45,7 +45,7 @@ If Ghostlink is already installed, the same is done by `sudo ghostlink-server mi
 3. The import runs as **one change**. If it fails (for example, another program holds one of Outline's ports) or is interrupted (Ctrl+C, a lost SSH session) before it is saved, nothing changes in Ghostlink and Outline is put back as it was: each container gets its old restart policy, and those that were running start again. If the import was already saved when a later step failed (for example, its answer was lost), Ghostlink keeps the imported clients and Outline stays stopped; the message says so, and the installer still prints the management key and the ports.
 4. The copies are deleted. The installer then prints the management key and the ports to allow.
 
-Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Ghostlink's management API, VLESS, WireGuard and AmneziaWG ports are new: allow the ones the installer lists.
+Outline's Shadowsocks ports are already open in your firewall and cloud security group, because Outline used them. Only the management API's port is new, because a new Ghostlink server runs only Shadowsocks: allow the one the installer lists for it. VLESS, WireGuard and AmneziaWG stay off. A port of one of them that Outline's keys use still moves to a free one, so that you can turn the protocol on later (for example `sudo ghostlink-server set --enable amneziawg`, or `--enable amneziawg` on the installer) and allow its port then.
 
 ## What moves, and what doesn't
 
@@ -94,4 +94,4 @@ You can also remove Outline's images (`sudo docker image ls` shows them).
 
 ## Over the API
 
-`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `dry_run`, `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to), `disabled` and `notes`. It contains no passwords. Inside the container, `ghostlink-server admin import-outline --dir DIR [--check]` posts the two files from a directory the server can read (under its state directory); `sudo ghostlink-server migrate-outline` does that for you.
+`POST /import/outline` on the [management API](ghostlink-server.md#management-api) takes Outline's two files as they are: `{"access_keys": <shadowbox_config.json>, "server": <shadowbox_server_config.json>, "dry_run": true}`. The body can be up to 4 MiB. The answer is the report: `dry_run`, `clients`, `kept`, `port`, `method`, `extra_ports`, `hostname`, `hostname_changed`, `name`, `new_keys` (client and reason), `moved` (service, from, to, and `off`: true when the protocol is off, so nothing listens on its new port yet), `disabled` and `notes`. It contains no passwords. Inside the container, `ghostlink-server admin import-outline --dir DIR [--check]` posts the two files from a directory the server can read (under its state directory); `sudo ghostlink-server migrate-outline` does that for you.

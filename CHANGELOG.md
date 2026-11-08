@@ -4,6 +4,23 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-09
+
+New servers run only Shadowsocks (Outline-compatible), with the other protocols a switch away, and turning a protocol on now checks its port and says which port to allow. Existing servers keep their settings.
+
+### Changed
+
+- **New servers run only Shadowsocks:** a new Ghostlink server turns on only Shadowsocks (Outline-compatible). AmneziaWG, WireGuard and VLESS-REALITY still get their ports and keys when the server is created, but they are off until you turn them on: their switch in the app or the dashboard, or `sudo ghostlink-server set --enable amneziawg` (also `wireguard`, `vless`). Turning one on prints the port to allow in the firewall. A key for a protocol that is off is refused, and the message says how to turn the protocol on. A protocol without keys never started, so the switches alone save no memory: what changes is that new clients, the hints and the installer now create Shadowsocks keys, so a new server starts no AmneziaWG, WireGuard or VLESS-REALITY engine until you choose one. A server that already has only Shadowsocks keys uses the same memory as before.
+  - **Installer:** it lists, and with `--open-firewall` opens, only the ports of the protocols that are on, so a new install shows 3 firewall rules instead of 6. The next steps now say `key add Alice shadowsocks` and, when a protocol is off, how to turn it on. New option `--enable PROTOCOL` (`amneziawg`, `wireguard` or `vless`; repeat it) turns protocols on during the install, and `--open-firewall` then opens their ports.
+  - **App and dashboard:** a new client and a new key start on Shadowsocks (they started on AmneziaWG). Turning a protocol on in the Island or in Network says which port to allow.
+  - **Moving from Outline:** a new Ghostlink server runs only Shadowsocks, on Outline's port, so the management API's port is the only new one to allow. VLESS, WireGuard and AmneziaWG stay off, and a port of theirs that Outline's keys use still moves to a free one.
+- **Existing servers keep their protocols:** an upgrade changes no switch. A server that has AmneziaWG, WireGuard and VLESS-REALITY on keeps them on, and its users' keys keep working. To match the new default, run `sudo ghostlink-server set --disable amneziawg --disable wireguard --disable vless` (or use the switches); the keys of a protocol that is off stop working until it is turned back on.
+
+### Fixed
+
+- **Turning a protocol on:** the server now tries the protocol's port first. Before, a port that another program had taken since the install was accepted, and the first key for the protocol then failed with the engine's bind error. Now the change is refused and names the port, and you can choose another with `set --port` or in Network. This matters more now that three protocols start off.
+- **Ports of a protocol that is off:** the dashboard or another protocol could be moved onto the port of a protocol that was off, and turning that protocol on was then refused. A protocol that is off now keeps its port, and a new port for it is tried even while it is off.
+
 ## [0.8.2] - 2026-11-08
 
 Layout fixes for the app and the dashboard, reported on 0.8.1. Nothing else changes. Upgrading from 0.8.0? Also read the 0.8.1 notes: they list what behaves differently after that upgrade.
@@ -462,7 +479,8 @@ What behaves differently after an upgrade:
 - Access-key fingerprints are salted.
 - Build-script fixes for Git Bash (`link.exe`) and paths with spaces.
 
-[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/winyannainghtut/GHOSTLINK/compare/v0.7.0...v0.8.0
