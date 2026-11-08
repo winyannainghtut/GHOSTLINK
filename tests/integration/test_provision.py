@@ -417,6 +417,12 @@ class ProvisioningTests(unittest.TestCase):
                     fields = ace.split(";")
                     self.assertNotIn("ID", fields[1], f"{path.name} has inherited access")
                     self.assertIn(fields[5], allowed, f"{path.name} lets another account in")
+            # A FAT or exFAT USB stick stores no permissions; a profile written there must still work.
+            self.assertTrue(module.volume_keeps_permissions(root))
+            with mock.patch.object(module, "volume_keeps_permissions", return_value=False), \
+                    mock.patch.object(module.subprocess, "run", wraps=module.subprocess.run) as run:
+                pki.issue("phone", "vpn.example.com", 1194, "udp", "split", root / "out" / "phone.ovpn", 30)
+            self.assertFalse([call for call in run.call_args_list if "icacls" in str(call.args[0][0])])
 
 
 if __name__ == "__main__":

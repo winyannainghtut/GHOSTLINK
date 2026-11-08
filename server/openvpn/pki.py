@@ -36,13 +36,28 @@ def identity(value):
     return value
 
 
+def volume_keeps_permissions(path):
+    """Whether the volume holding path stores permissions; FAT and exFAT, as on many USB sticks, do not."""
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetVolumePathNameW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    kernel32.GetVolumePathNameW.restype = ctypes.c_int
+    kernel32.GetVolumeInformationW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_wchar_p, ctypes.c_uint32]
+    kernel32.GetVolumeInformationW.restype = ctypes.c_int
+    root, flags = ctypes.create_unicode_buffer(32768), ctypes.c_uint32()
+    if not kernel32.GetVolumePathNameW(str(path), root, len(root)) or not kernel32.GetVolumeInformationW(root.value, None, 0, None, None, ctypes.byref(flags), None, 0):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return bool(flags.value & 0x8)  # FILE_PERSISTENT_ACLS
+
+
 def restrict_to_owner(path, directory=False):
     """Drop inherited access to path and give this account and SYSTEM full control.
 
     Windows ignores the POSIX modes used here, so files outside a protected folder would
-    otherwise take that folder's permissions.
+    otherwise take that folder's permissions. A drive that stores no permissions is left as it
+    is: nothing can be restricted there, and profiles are often carried on such USB sticks.
     """
-    if os.name != "nt":
+    if os.name != "nt" or not volume_keeps_permissions(path):
         return
     # Absolute System32 paths: a bare name can resolve to an unrelated tool on PATH, such as Git's GNU whoami.
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
