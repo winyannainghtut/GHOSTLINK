@@ -577,7 +577,7 @@ impl Daemon {
                 self.commit(next)?;
                 Ok(Response::ok(summary))
             }
-            Action::ProfileList | Action::ServersList => {
+            Action::ProfileList {} | Action::ServersList {} => {
                 let profiles: Vec<_> = self
                     .store
                     .profiles
@@ -622,7 +622,7 @@ impl Daemon {
             }
             Action::Connect { profile } => self.connect(profile, false).await,
             Action::Switch { profile } => self.connect(Some(profile), true).await,
-            Action::Disconnect => {
+            Action::Disconnect {} => {
                 self.disconnect().await;
                 if let Some(error) = self.cleanup_failure().await {
                     return Ok(error);
@@ -634,8 +634,8 @@ impl Daemon {
                 }
                 Ok(Response::ok(self.state.read().await.status()))
             }
-            Action::Status => Ok(Response::ok(self.state.read().await.status())),
-            Action::Info => Ok(Response::ok(
+            Action::Status {} => Ok(Response::ok(self.state.read().await.status())),
+            Action::Info {} => Ok(Response::ok(
                 json!({"connection": self.state.read().await.status(), "autoconnect": self.store.autoconnect, "default_profile": self.store.default_profile, "engines": ["outline-compatible-shadowsocks", "openvpn2-management"], "version": env!("CARGO_PKG_VERSION")}),
             )),
             Action::Autoconnect { enabled } => {
@@ -671,7 +671,7 @@ impl Daemon {
                     json!({"entries": lines.into_iter().rev().collect::<Vec<_>>()}),
                 ))
             }
-            Action::Doctor => {
+            Action::Doctor {} => {
                 let outline_available = worker_session::worker_available(&self.args.sing_box).await;
                 let engine_available =
                     self.args.openvpn.is_absolute() && self.args.openvpn.is_file();
@@ -767,7 +767,7 @@ impl Daemon {
                     "applies": "next_connection",
                 })))
             }
-            Action::ManagedServerList => {
+            Action::ManagedServerList {} => {
                 let servers: Vec<_> = self
                     .store
                     .managed_servers

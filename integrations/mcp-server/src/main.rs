@@ -116,13 +116,13 @@ async fn main() -> anyhow::Result<()> {
                         }
                     });
                     let action = match name {
-                        "vpn_list_profiles" => Some(Action::ProfileList),
-                        "vpn_status" => Some(Action::Status),
-                        "vpn_diagnostics" => Some(Action::Doctor),
+                        "vpn_list_profiles" => Some(Action::ProfileList {}),
+                        "vpn_status" => Some(Action::Status {}),
+                        "vpn_diagnostics" => Some(Action::Doctor {}),
                         "vpn_connect" => profile.map(|s| Action::Connect {
                             profile: Some(s.into()),
                         }),
-                        "vpn_disconnect" => Some(Action::Disconnect),
+                        "vpn_disconnect" => Some(Action::Disconnect {}),
                         "vpn_switch" => profile.map(|s| Action::Switch { profile: s.into() }),
                         _ => None,
                     };

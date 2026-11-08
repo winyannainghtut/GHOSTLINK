@@ -284,9 +284,9 @@ fn body(value: &impl Serialize) -> Result<Option<Value>, AdminError> {
 /// Maps a typed operation to its API request. Only these fixed paths can ever be requested.
 pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminError> {
     Ok(match op {
-        ServerOp::Info => (Method::GET, "/server".into(), None),
+        ServerOp::Info {} => (Method::GET, "/server".into(), None),
         ServerOp::Update { patch } => (Method::PATCH, "/server".into(), body(patch)?),
-        ServerOp::UsersList => (Method::GET, "/users".into(), None),
+        ServerOp::UsersList {} => (Method::GET, "/users".into(), None),
         ServerOp::UserCreate { change } => (Method::POST, "/users".into(), body(change)?),
         ServerOp::UserUpdate { user, change } => (
             Method::PATCH,
@@ -372,10 +372,10 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             format!("/users/{}/keys/{}", numeric_id(user)?, numeric_id(key)?),
             None,
         ),
-        ServerOp::RulesGet => (Method::GET, "/rules".into(), None),
+        ServerOp::RulesGet {} => (Method::GET, "/rules".into(), None),
         ServerOp::RulesSet { rules } => (Method::PUT, "/rules".into(), body(rules)?),
-        ServerOp::Metrics => (Method::GET, "/metrics".into(), None),
-        ServerOp::Live => (Method::GET, "/live".into(), None),
+        ServerOp::Metrics {} => (Method::GET, "/metrics".into(), None),
+        ServerOp::Live {} => (Method::GET, "/live".into(), None),
         ServerOp::Stats { user, range } => {
             if !["24h", "7d", "30d", "90d"].contains(&range.as_str()) {
                 return Err(AdminError::Invalid(
@@ -440,7 +440,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             ),
             None,
         ),
-        ServerOp::MeshInfo => (Method::GET, "/mesh".into(), None),
+        ServerOp::MeshInfo {} => (Method::GET, "/mesh".into(), None),
         ServerOp::MeshUpdate { patch } => (Method::PATCH, "/mesh".into(), body(patch)?),
         ServerOp::MeshInviteCreate { invite } => {
             if invite.tags.iter().any(|t| !mesh_word(t)) {
@@ -450,7 +450,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             }
             (Method::POST, "/mesh/invites".into(), body(invite)?)
         }
-        ServerOp::MeshInviteList => (Method::GET, "/mesh/invites".into(), None),
+        ServerOp::MeshInviteList {} => (Method::GET, "/mesh/invites".into(), None),
         ServerOp::MeshInviteDelete { invite } => (
             Method::DELETE,
             format!("/mesh/invites/{}", numeric_id(invite)?),
@@ -485,7 +485,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             format!("/mesh/nodes/{}", numeric_id(node)?),
             None,
         ),
-        ServerOp::MeshRulesGet => (Method::GET, "/mesh/rules".into(), None),
+        ServerOp::MeshRulesGet {} => (Method::GET, "/mesh/rules".into(), None),
         ServerOp::MeshRulesSet { rules } => {
             check_mesh_rules(rules)?;
             (
@@ -494,7 +494,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
                 Some(json!({ "rules": rules })),
             )
         }
-        ServerOp::MeshTopology => (Method::GET, "/mesh/topology".into(), None),
+        ServerOp::MeshTopology {} => (Method::GET, "/mesh/topology".into(), None),
     })
 }
 
@@ -775,7 +775,7 @@ mod tests {
     #[tokio::test]
     async fn server_errors_are_reported_without_the_key() {
         let (port, _) = server(http("400 Bad Request", r#"{"error":"names must be 1-64"}"#)).await;
-        let error = call(&key(port, &fingerprint()), &ServerOp::UsersList)
+        let error = call(&key(port, &fingerprint()), &ServerOp::UsersList {})
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "names must be 1-64");

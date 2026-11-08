@@ -649,17 +649,17 @@ async fn run(args: &Args) -> Response {
                     replace: *replace,
                 }
             }
-            ProfileCommand::List => Action::ProfileList,
+            ProfileCommand::List => Action::ProfileList {},
             ProfileCommand::Default { name } => Action::ProfileDefault { name: name.clone() },
             ProfileCommand::Remove { name } => Action::ProfileRemove { name: name.clone() },
         },
         Command::Connect { profile, .. } => Action::Connect {
             profile: profile.clone(),
         },
-        Command::Disconnect => Action::Disconnect,
-        Command::Status => Action::Status,
-        Command::Info => Action::Info,
-        Command::Servers { .. } => Action::ServersList,
+        Command::Disconnect => Action::Disconnect {},
+        Command::Status => Action::Status {},
+        Command::Info => Action::Info {},
+        Command::Servers { .. } => Action::ServersList {},
         Command::Server {
             command: ServerCommand::InstallHelp,
         } => return Response::ok(json!({ "help_text": install_help() })),
@@ -676,7 +676,7 @@ async fn run(args: &Args) -> Response {
         Command::Logs { tail } => Action::Logs {
             tail: *tail as usize,
         },
-        Command::Doctor => Action::Doctor,
+        Command::Doctor => Action::Doctor {},
         Command::Split { command } => match command {
             SplitCommand::Show { profile } => Action::RoutingPolicyGet {
                 profile: profile.clone(),
@@ -800,7 +800,7 @@ async fn run(args: &Args) -> Response {
             Request {
                 schema_version: SCHEMA_VERSION,
                 agent_token: token.clone(),
-                action: Action::Status,
+                action: Action::Status {},
             },
             remaining,
         )
@@ -1015,9 +1015,9 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             )?,
             replace: *replace,
         },
-        ServerCommand::List => Action::ManagedServerList,
+        ServerCommand::List => Action::ManagedServerList {},
         ServerCommand::Remove { name } => Action::ManagedServerRemove { name: name.clone() },
-        ServerCommand::Info { server } => call(server, ServerOp::Info),
+        ServerCommand::Info { server } => call(server, ServerOp::Info {}),
         ServerCommand::Set {
             server,
             name,
@@ -1074,7 +1074,7 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             )
         }
         ServerCommand::Users { command } => match command {
-            ServerUsersCommand::List { server } => call(server, ServerOp::UsersList),
+            ServerUsersCommand::List { server } => call(server, ServerOp::UsersList {}),
             ServerUsersCommand::Add {
                 server,
                 name,
@@ -1234,12 +1234,12 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             }
         },
         ServerCommand::Rules { command } => match command {
-            ServerRulesCommand::Show { server, user: None } => call(server, ServerOp::RulesGet),
+            ServerRulesCommand::Show { server, user: None } => call(server, ServerOp::RulesGet {}),
             // One user's rules come from the user list.
             ServerRulesCommand::Show {
                 server,
                 user: Some(_),
-            } => call(server, ServerOp::UsersList),
+            } => call(server, ServerOp::UsersList {}),
             ServerRulesCommand::Set {
                 server,
                 user,
@@ -1272,8 +1272,8 @@ fn server_action(command: &ServerCommand) -> Result<Action, Response> {
             }
         },
         ServerCommand::Mesh { command } => mesh_action(command)?,
-        ServerCommand::Usage { server } => call(server, ServerOp::Metrics),
-        ServerCommand::Live { server } => call(server, ServerOp::Live),
+        ServerCommand::Usage { server } => call(server, ServerOp::Metrics {}),
+        ServerCommand::Live { server } => call(server, ServerOp::Live {}),
         ServerCommand::Stats {
             server,
             user,
@@ -1318,7 +1318,7 @@ fn mesh_action(command: &ServerMeshCommand) -> Result<Action, Response> {
         op,
     };
     Ok(match command {
-        ServerMeshCommand::Show { server } => call(server, ServerOp::MeshInfo),
+        ServerMeshCommand::Show { server } => call(server, ServerOp::MeshInfo {}),
         ServerMeshCommand::Enable { server, cidr } => call(
             server,
             ServerOp::MeshUpdate {
@@ -1367,14 +1367,14 @@ fn mesh_action(command: &ServerMeshCommand) -> Result<Action, Response> {
                 },
             )
         }
-        ServerMeshCommand::Invites { server } => call(server, ServerOp::MeshInviteList),
+        ServerMeshCommand::Invites { server } => call(server, ServerOp::MeshInviteList {}),
         ServerMeshCommand::Revoke { server, invite } => call(
             server,
             ServerOp::MeshInviteDelete {
                 invite: invite.clone(),
             },
         ),
-        ServerMeshCommand::Nodes { server } => call(server, ServerOp::MeshTopology),
+        ServerMeshCommand::Nodes { server } => call(server, ServerOp::MeshTopology {}),
         ServerMeshCommand::Node {
             server,
             node,
@@ -1419,7 +1419,7 @@ fn mesh_action(command: &ServerMeshCommand) -> Result<Action, Response> {
             clear,
         } => {
             if rules.is_empty() && !clear {
-                return Ok(call(server, ServerOp::MeshRulesGet));
+                return Ok(call(server, ServerOp::MeshRulesGet {}));
             }
             let mut parsed = Vec::new();
             for rule in rules {
