@@ -100,8 +100,8 @@ func (a *Agent) Serve(ctx context.Context) error {
 		}
 		a.checkDevice()
 		a.keepFirewall(ctx)
-		started := time.Now()
-		resp, err := a.client.Sync(ctx, a.Node.Secret, a.report())
+		started, request := time.Now(), a.report()
+		resp, err := a.client.Sync(ctx, a.Node.Secret, request)
 		if ctx.Err() != nil {
 			return nil // stopping: the deferred teardown cleans up
 		}
@@ -150,8 +150,9 @@ func (a *Agent) Serve(ctx context.Context) error {
 			return nil
 		}
 		a.writeStatus()
-		if resp.Status != meshproto.StatusActive && time.Since(started) < time.Second {
-			// Older coordinators answer at once while a node waits for approval or is disabled;
+		if resp.Status != meshproto.StatusActive && request.Applied == 0 && time.Since(started) < time.Second {
+			// With nothing set up to take down, an answer this quick comes from an older
+			// coordinator, which answers at once while a node waits for approval or is disabled;
 			// asking again right away would turn into a busy loop.
 			sleep(ctx, 10*time.Second)
 		}

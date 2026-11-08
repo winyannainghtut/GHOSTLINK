@@ -249,16 +249,37 @@ func TestWaitingNodeDoesNotBusyLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &Agent{Dir: dir, Node: node, Log: log.New(io.Discard, "", 0), FW: &hostfw.Firewall{}, Version: "test"}
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := a.Serve(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if n := syncs.Load(); n != 1 {
-		t.Fatalf("%d syncs in 1.5 s while waiting for approval", n)
+		t.Fatalf("%d syncs in 3 s while waiting for approval", n)
 	}
 	if s, err := ReadStatus(dir); err != nil || s.State != meshproto.StatusPending {
 		t.Fatalf("status: %+v %v", s, err)
+	}
+}
+
+// A node told it is disabled while it has a configuration takes it down and asks again without
+// a pause (a current coordinator then waits for a change); it pauses only once there is nothing
+// left to take down.
+func TestDisabledNodeAsksAgainAfterTeardown(t *testing.T) {
+	node, syncs := fakeCoordinator(t, meshproto.StatusDisabled)
+	dir := t.TempDir()
+	if err := node.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{Dir: dir, Node: node, Log: log.New(io.Discard, "", 0), FW: &hostfw.Firewall{}, Version: "test",
+		applied: &meshproto.Config{Generation: 7}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := a.Serve(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs.Load(); n != 2 || a.applied != nil {
+		t.Fatalf("%d syncs in 3 s, applied %v", n, a.applied)
 	}
 }
 
