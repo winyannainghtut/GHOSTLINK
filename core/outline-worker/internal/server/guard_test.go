@@ -178,12 +178,17 @@ func (s *socksUDP) sendTo(t *testing.T, addr netip.Addr, port uint16, payload []
 
 // A UDP session through the real server, routed to an allowed service, cannot then send its
 // packets to a service the rules block: here another port on the server's own loopback.
+// Shadowsocks and VLESS (XUDP) carry an address with each packet; the WireGuard stack keys
+// sessions by the client's address.
 func TestUDPSessionsCannotSwitchToBlockedDestinations(t *testing.T) {
 	allowed, hidden := udpEcho(t), udpEcho(t)
 	testInternalPort = allowed
 	t.Cleanup(func() { testInternalPort = 0 })
-	server := newTestServer(t, nil)
-	for _, protocol := range []string{Shadowsocks, WireGuard} {
+	reality := realityTarget(t)
+	server := newTestServer(t, func(s *State) {
+		s.VLESS.Handshake, s.VLESS.HandshakeServer, s.VLESS.HandshakePort = "reality.test", "127.0.0.1", reality
+	})
+	for _, protocol := range []string{Shadowsocks, VLESS, WireGuard} {
 		t.Run(protocol, func(t *testing.T) {
 			user := server.user(t, map[string]any{"name": "UDP " + protocol})
 			key := server.key(t, user, protocol)
