@@ -128,7 +128,9 @@ func (s *State) CertSHA256() (string, error) {
 	return strings.ToUpper(hex.EncodeToString(sum[:])), nil
 }
 
-// NewState creates a server with fresh keys, random ports and default rules.
+// NewState creates a server with fresh keys, random ports and default rules. Only Shadowsocks
+// (Outline-compatible) is on; the other protocols get their keys and ports now and stay off
+// until an administrator turns them on.
 func NewState(options InitOptions) (*State, error) {
 	free := options.PortFree
 	if free == nil {
@@ -182,12 +184,12 @@ func NewState(options InitOptions) (*State, error) {
 		},
 		Shadowsocks: ShadowsocksServer{Enabled: true, Port: ports[1], Method: "chacha20-ietf-poly1305"},
 		VLESS: VLESSServer{
-			Enabled: true, Port: ports[2], PrivateKey: realityPrivate, PublicKey: realityPublic,
+			Enabled: false, Port: ports[2], PrivateKey: realityPrivate, PublicKey: realityPublic,
 			ShortID: hex.EncodeToString(random(8)), Handshake: DefaultHandshake,
 		},
-		WireGuard: WireGuardServer{Enabled: true, Port: ports[3], PrivateKey: wgPrivate, PublicKey: wgPublic, Subnet: "10.77.0.0/20"},
+		WireGuard: WireGuardServer{Enabled: false, Port: ports[3], PrivateKey: wgPrivate, PublicKey: wgPublic, Subnet: "10.77.0.0/20"},
 		AmneziaWG: AmneziaWGServer{
-			WireGuardServer: WireGuardServer{Enabled: true, Port: ports[4], PrivateKey: awgPrivate, PublicKey: awgPublic, Subnet: "10.78.0.0/20"},
+			WireGuardServer: WireGuardServer{Enabled: false, Port: ports[4], PrivateKey: awgPrivate, PublicKey: awgPublic, Subnet: "10.78.0.0/20"},
 			Params:          newAWGParams(),
 		},
 		Rules: Rules{BlockSMTP: true, BlockedDomains: []string{}, BlockedIPs: []string{}, BlockedPorts: []string{}},

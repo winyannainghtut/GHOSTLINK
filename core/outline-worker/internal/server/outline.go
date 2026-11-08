@@ -119,6 +119,8 @@ type outlineMove struct {
 	Service string `json:"service"`
 	From    uint16 `json:"from"`
 	To      uint16 `json:"to"`
+	// Off: the protocol is turned off, so nothing listens on its new port until it is turned on.
+	Off bool `json:"off,omitempty"`
 }
 
 var errDryRun = errors.New("dry run")
@@ -291,13 +293,16 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 	for _, port := range ports {
 		used[port] = true
 	}
+	// They move whether they are on or not: a protocol that is off keeps its port for when it
+	// is turned on (only Shadowsocks is on in a new server).
 	movable := []struct {
 		name, network string
 		port          *uint16
+		on            bool
 	}{
-		{"VLESS", "tcp", &s.VLESS.Port},
-		{"WireGuard", "udp", &s.WireGuard.Port},
-		{"AmneziaWG", "udp", &s.AmneziaWG.Port},
+		{"VLESS", "tcp", &s.VLESS.Port, s.VLESS.Enabled},
+		{"WireGuard", "udp", &s.WireGuard.Port, s.WireGuard.Enabled},
+		{"AmneziaWG", "udp", &s.AmneziaWG.Port, s.AmneziaWG.Enabled},
 	}
 	for _, m := range movable {
 		if _, clash := byPort[*m.port]; !clash {
@@ -312,7 +317,7 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 		if err != nil {
 			return report, err
 		}
-		report.Moved = append(report.Moved, outlineMove{m.name, *m.port, port})
+		report.Moved = append(report.Moved, outlineMove{m.name, *m.port, port, !m.on})
 		*m.port = port
 	}
 

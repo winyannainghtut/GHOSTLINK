@@ -83,10 +83,15 @@ func writeOutlineReport(out io.Writer, r outlineReport) {
 	fmt.Fprintf(out, "  Server: %s, address in keys %s.\n", r.Name, r.Hostname)
 	for _, m := range r.Moved {
 		if r.DryRun {
-			fmt.Fprintf(out, "  %s moves off port %d to make way for Outline's (to a free port picked during the import).\n", m.Service, m.From)
+			fmt.Fprintf(out, "  %s moves off port %d to make way for Outline's (to a free port picked during the import).", m.Service, m.From)
 		} else {
-			fmt.Fprintf(out, "  %s moves from port %d to %d to make way for Outline's.\n", m.Service, m.From, m.To)
+			fmt.Fprintf(out, "  %s moves from port %d to %d to make way for Outline's.", m.Service, m.From, m.To)
 		}
+		if m.Off {
+			// Nothing listens there yet, so the firewall needs no rule for it now.
+			fmt.Fprint(out, " It is off; its port is ready for when you turn it on.")
+		}
+		fmt.Fprintln(out)
 	}
 	if len(r.Disabled) > 0 {
 		fmt.Fprintf(out, "  Turned off, as in Outline (a data limit of 0): %s.\n", strings.Join(r.Disabled, ", "))

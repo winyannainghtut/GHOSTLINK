@@ -122,6 +122,19 @@ func TestOutlineImportPlan(t *testing.T) {
 		int(state.VLESS.Port) == main || int(state.VLESS.Port) == extra {
 		t.Fatalf("VLESS should have moved off Bob's port: %+v, now %d", report.Moved, state.VLESS.Port)
 	}
+	// VLESS is off on a new server and stays off; it moved anyway, so it can be turned on later
+	// without a clash, and the report says it needs no firewall rule yet.
+	if state.VLESS.Enabled || !report.Moved[0].Off {
+		t.Fatalf("VLESS after the import: on %v, reported off %v", state.VLESS.Enabled, report.Moved[0].Off)
+	}
+	if err := state.checkReservedPorts(); err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	writeOutlineReport(&text, report)
+	if want := fmt.Sprintf("  VLESS moves from port %d to %d to make way for Outline's. It is off; its port is ready for when you turn it on.\n", before, state.VLESS.Port); !strings.Contains(text.String(), want) {
+		t.Fatalf("the report lacks %q:\n%s", want, text.String())
+	}
 	if report.Clients != 11 || report.Kept != 6 {
 		t.Fatalf("clients %d, kept %d", report.Clients, report.Kept)
 	}
