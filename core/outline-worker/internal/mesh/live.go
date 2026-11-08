@@ -19,10 +19,8 @@ const (
 	// handshakeFresh: WireGuard renews sessions every 2 minutes while packets flow, and every
 	// peer has a keepalive, so a working link always has a handshake younger than this.
 	handshakeFresh = 3 * time.Minute
-	// directGrace is how long a new direct pair has to complete a handshake.
+	// directGrace is how long a direct pair has to complete a handshake once both nodes are up.
 	directGrace = 90 * time.Second
-	// relayFor is how long a pair stays relayed before direct is tried again.
-	relayFor = 15 * time.Minute
 )
 
 // Report is the latest sync from one node.
@@ -39,7 +37,6 @@ type report struct {
 type pairState struct {
 	relayed bool
 	since   time.Time
-	until   time.Time
 }
 
 // Live is the coordinator's in-memory view: what agents last reported and which pairs are
@@ -130,6 +127,12 @@ func pairKey(a, b string) [2]string {
 func (l *Live) online(id string, now time.Time) bool {
 	r := l.reports[id]
 	return r != nil && now.Sub(r.at) <= OnlineFor
+}
+
+// ready is a node that is online and has set up its interface, so what it reports about its
+// links means something. Right after the agent starts it reports no peers at all.
+func (l *Live) ready(id string, now time.Time) bool {
+	return l.online(id, now) && l.reports[id].applied != 0
 }
 
 // handshake is the newest handshake either node reports with the other.
@@ -225,6 +228,7 @@ func (l *Live) Tick(n *Network, now time.Time) bool {
 				l.pairs[key] = st
 			}
 			wasRelayed := st.relayed
+			reachable := l.endpoint(a, b) != "" || l.endpoint(b, a) != ""
 			switch {
 			case relay == nil || a == relay || b == relay:
 				*st = pairState{since: st.since}
@@ -232,16 +236,21 @@ func (l *Live) Tick(n *Network, now time.Time) bool {
 					st.since = now
 				}
 			case st.relayed:
-				if now.After(st.until) {
+				// The two keep a probe peer for each other (see config): a handshake on it since
+				// the pair was relayed shows that direct works again, without moving its traffic
+				// off the relay to find out.
+				if hs := l.handshake(a, b); reachable && hs.After(st.since) && now.Sub(hs) <= handshakeFresh {
 					*st = pairState{since: now}
 				}
-			case l.endpoint(a, b) == "" && l.endpoint(b, a) == "":
+			case !reachable:
 				// Neither can reach the other directly.
-				*st = pairState{relayed: true, since: now, until: now.Add(relayFor)}
-			case !l.online(a.ID, now) || !l.online(b.ID, now):
-				// Can't judge a pair while a side is offline.
+				*st = pairState{relayed: true, since: now}
+			case !l.ready(a.ID, now) || !l.ready(b.ID, now):
+				// A pair can't be judged while a side is offline or still setting up its
+				// interface, so its grace period starts again once both are up.
+				st.since = now
 			case now.Sub(st.since) > directGrace && now.Sub(l.handshake(a, b)) > handshakeFresh:
-				*st = pairState{relayed: true, since: now, until: now.Add(relayFor)}
+				*st = pairState{relayed: true, since: now}
 			}
 			if st.relayed != wasRelayed {
 				changed = true
@@ -262,6 +271,16 @@ func (l *Live) Tick(n *Network, now time.Time) bool {
 func (l *Live) relayed(a, b *Node) bool {
 	st := l.pairs[pairKey(a.ID, b.ID)]
 	return st != nil && st.relayed
+}
+
+// rate is what node reports receiving from and sending to peer, in bytes/s.
+func (l *Live) rate(node, peer *Node, now time.Time) ([2]float64, bool) {
+	r := l.reports[node.ID]
+	if r == nil || now.Sub(r.at) > OnlineFor {
+		return [2]float64{}, false
+	}
+	rate, ok := r.rates[peer.PublicKey]
+	return rate, ok
 }
 
 func activeNodes(n *Network) []*Node {
@@ -309,8 +328,10 @@ type LinkView struct {
 	Via             string  `json:"via,omitempty"`
 	RTTMillis       float64 `json:"rtt_ms"`
 	HandshakeAgeSec int64   `json:"handshake_age_s"`
-	RxBps           float64 `json:"rx_bps"`
-	TxBps           float64 `json:"tx_bps"`
+	// RxBps is what A receives from B and TxBps what A sends to B (bytes/s, direct links only);
+	// together they are the link's traffic.
+	RxBps float64 `json:"rx_bps"`
+	TxBps float64 `json:"tx_bps"`
 }
 
 // Topology is everything the map draws.
@@ -380,10 +401,14 @@ func (l *Live) Topology(n *Network, now time.Time) Topology {
 				if us := r.pings[pair[1].Address]; us > 0 {
 					rtts = append(rtts, float64(us)/1000)
 				}
-				if link.Path == "direct" {
-					rate := r.rates[pair[1].PublicKey]
-					link.RxBps += rate[0]
-					link.TxBps += rate[1]
+			}
+			if link.Path == "direct" {
+				// As A sees it: received from B and sent to B. What one node receives the other sent,
+				// so one report gives both directions, each counted once.
+				if rate, ok := l.rate(a, b, now); ok {
+					link.RxBps, link.TxBps = rate[0], rate[1]
+				} else if rate, ok := l.rate(b, a, now); ok {
+					link.RxBps, link.TxBps = rate[1], rate[0]
 				}
 			}
 			if len(rtts) > 0 {

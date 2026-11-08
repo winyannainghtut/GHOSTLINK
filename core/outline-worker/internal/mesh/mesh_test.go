@@ -52,13 +52,24 @@ func (f *fixture) join(name string, o InviteOptions, endpoints ...string) *Node 
 	return node
 }
 
-// sync records a report from node: remote is where the coordinator sees it from, and
-// handshakes lists the peers it has a fresh handshake with.
+// sync records a report from node with its interface set up: remote is where the coordinator
+// sees it from, and handshakes lists the peers it has a fresh handshake with.
 func (f *fixture) sync(node *Node, remote string, handshakes ...*Node) {
 	f.t.Helper()
-	r := &meshproto.SyncRequest{Protocol: meshproto.Version, ListenPort: 51820}
+	at := map[*Node]time.Time{}
 	for _, peer := range handshakes {
-		r.Peers = append(r.Peers, meshproto.PeerStatus{PublicKey: peer.PublicKey, LastHandshake: f.now.Add(-10 * time.Second).Unix(), RxBytes: 1000, TxBytes: 2000})
+		at[peer] = f.now.Add(-10 * time.Second)
+	}
+	f.report(node, remote, 1, at)
+}
+
+// report records a sync from node: applied is the generation it applied (0 right after the
+// agent started), handshakes the last handshake with each peer it lists.
+func (f *fixture) report(node *Node, remote string, applied uint64, handshakes map[*Node]time.Time) {
+	f.t.Helper()
+	r := &meshproto.SyncRequest{Protocol: meshproto.Version, ListenPort: 51820, Applied: applied}
+	for peer, at := range handshakes {
+		r.Peers = append(r.Peers, meshproto.PeerStatus{PublicKey: peer.PublicKey, LastHandshake: at.Unix(), RxBytes: 1000, TxBytes: 2000})
 		r.Pings = append(r.Pings, meshproto.Ping{Address: peer.Address, RTTMicros: 4200})
 	}
 	f.l.Record(node.ID, netip.MustParseAddr(remote), r, f.now)
@@ -155,8 +166,15 @@ func TestDirectAndRelayedPaths(t *testing.T) {
 		t.Fatal("the office pair should be relayed, the rest direct")
 	}
 	ca := f.config(natA)
-	if peerNamed(ca, "office-b") != nil || !slices.Contains(peerNamed(ca, "relay").AllowedIPs, natB.Address+"/32") {
+	if !slices.Contains(peerNamed(ca, "relay").AllowedIPs, natB.Address+"/32") {
 		t.Fatalf("office-a reaches office-b through the relay: %+v", ca.Peers)
+	}
+	// office-b stays a peer without addresses: a probe for when direct works again.
+	if probe := peerNamed(ca, "office-b"); probe == nil || len(probe.AllowedIPs) != 0 || probe.Endpoint != "198.51.100.200:51820" || probe.Keepalive != keepalive {
+		t.Fatalf("probe for office-b: %+v", probe)
+	}
+	if err := ca.Validate(); err != nil {
+		t.Fatalf("a configuration with a probe: %v", err)
 	}
 	if peerNamed(ca, "public").Endpoint != "198.51.100.7:51820" || peerNamed(ca, "relay").Endpoint != "203.0.113.1:51820" {
 		t.Fatalf("endpoints: %+v", ca.Peers)
@@ -174,16 +192,92 @@ func TestDirectAndRelayedPaths(t *testing.T) {
 	if officeLink.Path != "relay" || officeLink.Via != relay.ID {
 		t.Fatalf("office link: %+v", officeLink)
 	}
-	// After the relay period, direct is tried again.
-	f.now = f.now.Add(relayFor + time.Second)
-	f.l.Tick(f.n, f.now)
-	if f.l.relayed(natA, natB) {
-		t.Fatal("direct was not retried")
+	// Traffic stays on the relay for as long as the probes get no handshake: no blind switch
+	// back to a direct path that does not work.
+	for i := 0; i < 400; i++ {
+		f.now = f.now.Add(5 * time.Second)
+		f.sync(natA, "198.51.100.50", relay, public)
+		f.sync(natB, "198.51.100.200", relay, public)
+		if f.l.Tick(f.n, f.now); !f.l.relayed(natA, natB) {
+			t.Fatalf("the pair left the relay after %v without a direct handshake", time.Duration(i+1)*5*time.Second)
+		}
+	}
+	// A handshake on the probe moves the pair back to direct.
+	f.sync(natA, "198.51.100.50", relay, public, natB)
+	if !f.l.Tick(f.n, f.now) || f.l.relayed(natA, natB) {
+		t.Fatal("a direct handshake did not bring the pair back from the relay")
+	}
+	if p := peerNamed(f.config(natA), "office-b"); p == nil || !slices.Equal(p.AllowedIPs, []string{natB.Address + "/32"}) {
+		t.Fatalf("office-b direct again: %+v", p)
 	}
 	// Nodes behind the same public address use their private addresses.
 	f.sync(natB, "198.51.100.50")
 	if e := f.l.endpoint(natA, natB); e != "192.168.7.20:51820" {
 		t.Fatalf("same-site endpoint: %s", e)
+	}
+}
+
+// A node that comes back after a few minutes away keeps its direct links: its first sync, before
+// its interface is set up again, reports no peers, and its peers' last handshakes with it are old
+// by then. The grace period starts once it is back.
+func TestReturningNodeKeepsDirectLinks(t *testing.T) {
+	f := newFixture(t)
+	relay := f.join("relay", InviteOptions{Relay: true}, "203.0.113.1:51820")
+	a := f.join("alpha", InviteOptions{}, "198.51.100.7:51820")
+	b := f.join("beta", InviteOptions{}, "198.51.100.8:51820")
+	f.sync(relay, "203.0.113.1", a, b)
+	f.sync(a, "198.51.100.7", relay, b)
+	f.sync(b, "198.51.100.8", relay, a)
+	f.l.Tick(f.n, f.now)
+	lastWithBeta := f.now.Add(-10 * time.Second)
+	// beta is away for 4 minutes; alpha keeps reporting its last handshake with beta.
+	for i := 0; i < 48; i++ {
+		f.now = f.now.Add(5 * time.Second)
+		f.sync(relay, "203.0.113.1", a)
+		f.report(a, "198.51.100.7", 1, map[*Node]time.Time{relay: f.now.Add(-10 * time.Second), b: lastWithBeta})
+		f.l.Tick(f.n, f.now)
+	}
+	// beta's agent starts again: its first sync has applied nothing and lists no peers.
+	f.report(b, "198.51.100.8", 0, nil)
+	f.now = f.now.Add(200 * time.Millisecond)
+	if f.l.Tick(f.n, f.now); f.l.relayed(a, b) {
+		t.Fatal("the pair went to the relay before beta had set up its interface")
+	}
+	f.now = f.now.Add(2 * time.Second)
+	f.sync(b, "198.51.100.8", relay, a)
+	f.sync(a, "198.51.100.7", relay, b)
+	if f.l.Tick(f.n, f.now); f.l.relayed(a, b) {
+		t.Fatal("the pair went to the relay although both report a fresh handshake")
+	}
+	if p := peerNamed(f.config(a), "beta"); p == nil || !slices.Equal(p.AllowedIPs, []string{b.Address + "/32"}) {
+		t.Fatalf("alpha's peer beta: %+v", p)
+	}
+}
+
+// A link's traffic counts each direction once, whether one node reports it or both do.
+func TestLinkTrafficCountedOnce(t *testing.T) {
+	f := newFixture(t)
+	a := f.join("alpha", InviteOptions{}, "198.51.100.7:51820")
+	b := f.join("beta", InviteOptions{}, "198.51.100.8:51820")
+	record := func(node, peer *Node, remote string, rx, tx uint64) {
+		f.l.Record(node.ID, netip.MustParseAddr(remote), &meshproto.SyncRequest{Protocol: meshproto.Version, ListenPort: 51820, Applied: 1,
+			Peers: []meshproto.PeerStatus{{PublicKey: peer.PublicKey, LastHandshake: f.now.Unix(), RxBytes: rx, TxBytes: tx}}}, f.now)
+	}
+	record(a, b, "198.51.100.7", 0, 0)
+	record(b, a, "198.51.100.8", 0, 0)
+	// In 10 s alpha sends beta 20 000 bytes and beta sends alpha 10 000: 3000 B/s in all.
+	f.now = f.now.Add(10 * time.Second)
+	record(a, b, "198.51.100.7", 10_000, 20_000)
+	record(b, a, "198.51.100.8", 20_000, 10_000)
+	link := f.l.Topology(f.n, f.now).Links[0]
+	if link.RxBps+link.TxBps != 3000 || (link.A == a.ID && (link.RxBps != 1000 || link.TxBps != 2000)) {
+		t.Fatalf("both reporting: %+v", link)
+	}
+	// Only beta still reports: in 31 s it received 310 000 bytes from alpha and sent it 155 000.
+	f.now = f.now.Add(OnlineFor + time.Second)
+	record(b, a, "198.51.100.8", 330_000, 165_000)
+	if link := f.l.Topology(f.n, f.now).Links[0]; link.RxBps+link.TxBps != 15_000 || (link.A == a.ID && link.TxBps != 10_000) {
+		t.Fatalf("one reporting: %+v", link)
 	}
 }
 

@@ -41,7 +41,7 @@ const usage = `usage: ghostlink-mesh <command> [flags]
               --relay                     allow this machine to relay for nodes behind NAT
               --no-hosts                  do not add <node>.mesh names to /etc/hosts
   serve     run the agent (the ghostlink-mesh systemd service does this)
-  status    show this node, its peers and latency [--json]
+  status    show this node, its peers (direct or through the relay) and latency [--json]
   allow-forwarding
             allow this node to relay or share subnets (then restart the service)
   leave     leave the mesh and remove everything the agent set up
@@ -277,7 +277,13 @@ func status(dir string, asJSON bool) {
 				break
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d B\t%d B\n", p.Name, strings.Join(p.AllowedIPs, ","), p.Endpoint, handshake, latency, p.RxBytes, p.TxBytes)
+		addresses := strings.Join(p.AllowedIPs, ",")
+		if addresses == "" {
+			// A peer without addresses is a probe: its traffic goes through the relay, whose
+			// addresses include it, while WireGuard keeps trying to reach it directly.
+			addresses = "(through the relay)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d B\t%d B\n", p.Name, addresses, p.Endpoint, handshake, latency, p.RxBytes, p.TxBytes)
 	}
 	w.Flush()
 }
