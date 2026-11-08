@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -203,7 +203,24 @@ impl fmt::Display for AdminError {
 struct PinnedCertificate {
     pin: [u8; 32],
     provider: Arc<CryptoProvider>,
-    mismatch: AtomicBool,
+    /// Certificates refused so far. Calls compare it before and after instead of resetting a
+    /// flag, because concurrent calls share this verifier: a call that starts later must not
+    /// clear the evidence of an earlier call's mismatch.
+    rejections: AtomicU64,
+}
+
+impl PinnedCertificate {
+    fn rejections(&self) -> u64 {
+        self.rejections.load(Ordering::SeqCst)
+    }
+    /// Why a request that started when `rejections()` was `seen` could not be sent.
+    fn failure(&self, seen: u64) -> AdminError {
+        if self.rejections() != seen {
+            AdminError::IdentityMismatch
+        } else {
+            AdminError::Unreachable
+        }
+    }
 }
 
 impl ServerCertVerifier for PinnedCertificate {
@@ -219,7 +236,7 @@ impl ServerCertVerifier for PinnedCertificate {
         if constant_time_eq(&digest, &self.pin) {
             Ok(ServerCertVerified::assertion())
         } else {
-            self.mismatch.store(true, Ordering::SeqCst);
+            self.rejections.fetch_add(1, Ordering::SeqCst);
             Err(rustls::Error::InvalidCertificate(
                 rustls::CertificateError::ApplicationVerificationFailure,
             ))
@@ -284,9 +301,9 @@ fn body(value: &impl Serialize) -> Result<Option<Value>, AdminError> {
 /// Maps a typed operation to its API request. Only these fixed paths can ever be requested.
 pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminError> {
     Ok(match op {
-        ServerOp::Info => (Method::GET, "/server".into(), None),
+        ServerOp::Info {} => (Method::GET, "/server".into(), None),
         ServerOp::Update { patch } => (Method::PATCH, "/server".into(), body(patch)?),
-        ServerOp::UsersList => (Method::GET, "/users".into(), None),
+        ServerOp::UsersList {} => (Method::GET, "/users".into(), None),
         ServerOp::UserCreate { change } => (Method::POST, "/users".into(), body(change)?),
         ServerOp::UserUpdate { user, change } => (
             Method::PATCH,
@@ -372,10 +389,10 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             format!("/users/{}/keys/{}", numeric_id(user)?, numeric_id(key)?),
             None,
         ),
-        ServerOp::RulesGet => (Method::GET, "/rules".into(), None),
+        ServerOp::RulesGet {} => (Method::GET, "/rules".into(), None),
         ServerOp::RulesSet { rules } => (Method::PUT, "/rules".into(), body(rules)?),
-        ServerOp::Metrics => (Method::GET, "/metrics".into(), None),
-        ServerOp::Live => (Method::GET, "/live".into(), None),
+        ServerOp::Metrics {} => (Method::GET, "/metrics".into(), None),
+        ServerOp::Live {} => (Method::GET, "/live".into(), None),
         ServerOp::Stats { user, range } => {
             if !["24h", "7d", "30d", "90d"].contains(&range.as_str()) {
                 return Err(AdminError::Invalid(
@@ -440,7 +457,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             ),
             None,
         ),
-        ServerOp::MeshInfo => (Method::GET, "/mesh".into(), None),
+        ServerOp::MeshInfo {} => (Method::GET, "/mesh".into(), None),
         ServerOp::MeshUpdate { patch } => (Method::PATCH, "/mesh".into(), body(patch)?),
         ServerOp::MeshInviteCreate { invite } => {
             if invite.tags.iter().any(|t| !mesh_word(t)) {
@@ -450,7 +467,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             }
             (Method::POST, "/mesh/invites".into(), body(invite)?)
         }
-        ServerOp::MeshInviteList => (Method::GET, "/mesh/invites".into(), None),
+        ServerOp::MeshInviteList {} => (Method::GET, "/mesh/invites".into(), None),
         ServerOp::MeshInviteDelete { invite } => (
             Method::DELETE,
             format!("/mesh/invites/{}", numeric_id(invite)?),
@@ -485,7 +502,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
             format!("/mesh/nodes/{}", numeric_id(node)?),
             None,
         ),
-        ServerOp::MeshRulesGet => (Method::GET, "/mesh/rules".into(), None),
+        ServerOp::MeshRulesGet {} => (Method::GET, "/mesh/rules".into(), None),
         ServerOp::MeshRulesSet { rules } => {
             check_mesh_rules(rules)?;
             (
@@ -494,7 +511,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
                 Some(json!({ "rules": rules })),
             )
         }
-        ServerOp::MeshTopology => (Method::GET, "/mesh/topology".into(), None),
+        ServerOp::MeshTopology {} => (Method::GET, "/mesh/topology".into(), None),
     })
 }
 
@@ -521,7 +538,7 @@ impl AdminClient {
         let verifier = Arc::new(PinnedCertificate {
             pin: key.pin(),
             provider: provider.clone(),
-            mismatch: AtomicBool::new(false),
+            rejections: AtomicU64::new(0),
         });
         let tls = rustls::ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
@@ -549,8 +566,8 @@ impl AdminClient {
         path: &str,
         body: Option<Value>,
     ) -> Result<Value, AdminError> {
-        self.verifier.mismatch.store(false, Ordering::SeqCst);
-        send_with(&self.client, &self.verifier, key, method, path, body).await
+        let seen = self.verifier.rejections();
+        send_with(&self.client, &self.verifier, seen, key, method, path, body).await
     }
 
     pub async fn call(&self, key: &ManagementKey, op: &ServerOp) -> Result<Value, AdminError> {
@@ -572,6 +589,7 @@ pub async fn send(
 async fn send_with(
     client: &reqwest::Client,
     verifier: &PinnedCertificate,
+    seen: u64,
     key: &ManagementKey,
     method: Method,
     path: &str,
@@ -588,10 +606,7 @@ async fn send_with(
     }
     let mut response = match request.send().await {
         Ok(response) => response,
-        Err(_) if verifier.mismatch.load(Ordering::SeqCst) => {
-            return Err(AdminError::IdentityMismatch)
-        }
-        Err(_) => return Err(AdminError::Unreachable),
+        Err(_) => return Err(verifier.failure(seen)),
     };
     let status = response.status();
     let textual = response
@@ -762,6 +777,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_later_call_cannot_hide_an_earlier_pin_mismatch() {
+        // One cached client serves concurrent calls (live polling and a user action).
+        let client = AdminClient::new(&key(1, &"AB".repeat(32))).unwrap();
+        let first = client.verifier.rejections();
+        let refused = client.verifier.verify_server_cert(
+            &CertificateDer::from(identity().0.clone()),
+            &[],
+            &ServerName::try_from("ghostlink-test").unwrap(),
+            &[],
+            UnixTime::now(),
+        );
+        assert!(refused.is_err());
+        // A second call starts before the first reports its failure.
+        let second = client.verifier.rejections();
+        assert!(matches!(
+            client.verifier.failure(first),
+            AdminError::IdentityMismatch
+        ));
+        assert!(matches!(
+            client.verifier.failure(second),
+            AdminError::Unreachable
+        ));
+    }
+
     #[tokio::test]
     async fn outline_servers_are_recognized() {
         let (port, _) = server(http("200 OK", r#"{"serverId":"x","name":"o"}"#)).await;
@@ -775,7 +815,7 @@ mod tests {
     #[tokio::test]
     async fn server_errors_are_reported_without_the_key() {
         let (port, _) = server(http("400 Bad Request", r#"{"error":"names must be 1-64"}"#)).await;
-        let error = call(&key(port, &fingerprint()), &ServerOp::UsersList)
+        let error = call(&key(port, &fingerprint()), &ServerOp::UsersList {})
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "names must be 1-64");

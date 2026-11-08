@@ -13,9 +13,10 @@ Every protocol except the optional OpenVPN backend runs in the managed worker (`
 | WireGuard | sing-box native `wireguard` endpoint | `proxy` |
 | AmneziaWG | Ghostlink `amneziawg` endpoint (below) | `proxy` |
 
-- **Routing target:** `route.final` is always set to `proxy` explicitly, because sing-box only falls back to endpoints when `final` names one.
-- **DNS:** WireGuard profiles with a `DNS =` resolver use it over UDP through the tunnel. Every other profile uses DNS-over-HTTPS to 1.1.1.1 through the tunnel.
-- **Partial `AllowedIPs`:** a WireGuard profile that doesn't route everything becomes the TUN's `route_address` list, so only those prefixes enter the tunnel.
+- **Routing target:** `route.final` is always set explicitly: to `proxy` in full and bypass modes, because sing-box only falls back to endpoints when `final` names one, and to `direct` in "only" mode.
+- **DNS:** WireGuard profiles with a `DNS =` line use its first address over UDP through the tunnel; later addresses are ignored, so there is no fallback. Amnezia `vpn://` keys whose configuration has no DNS line get the key's `dns1`/`dns2` added at import. Every other profile uses DNS-over-HTTPS to 1.1.1.1 through the tunnel.
+- **Partial `AllowedIPs`:** without `0.0.0.0/0`, a WireGuard profile's `AllowedIPs` become the TUN's `route_address` list, so only those prefixes enter the tunnel. A list that still covers every public IPv4 address (`0.0.0.0/1, 128.0.0.0/1`, or the "exclude private IPs" list of the WireGuard apps) counts as a full tunnel, also for the Linux `--allow-full-tunnel` gate.
+- **Known limit of split WireGuard and AmneziaWG:** the health probe (`https://www.gstatic.com/generate_204`) and the default DNS-over-HTTPS resolver go through the tunnel, and WireGuard drops anything addressed outside `AllowedIPs`. A profile that routes only some ranges, such as a home LAN, therefore never passes the probe. It fails at the connection deadline with `outline_server_unreachable_or_key_rejected`. On Windows, name lookups also fail while it tries, unless its `DNS =` server lies inside `AllowedIPs`.
 - **Build tags:** `with_gvisor` for the userspace stacks (the TUN and the WireGuard and AmneziaWG endpoints), `with_utls` for REALITY. `with_wireguard` is passed too but has no effect, because the worker registers the WireGuard endpoint directly.
 
 `core/vpn-engine/src/access.rs` is the single entry point that turns a credential into an `Outbound`. It is used both when importing (to validate) and when connecting (to re-validate the sealed original).
@@ -48,9 +49,11 @@ Other tests check that an engine that was only validated, or started and closed,
 | Format | Parser | Notes |
 |---|---|---|
 | `ss://`, `ssconf://` | `outline.rs` | Modern AEAD only; dynamic keys over verified HTTPS to public hosts, pinned DNS, no redirects, 64 KiB cap |
-| `vless://`, Xray JSON | `vless.rs` | `security` must be `reality` or `tls`; flow empty or `xtls-rprx-vision`; transport TCP/raw only; uTLS fingerprints map `hellochrome_*` to `chrome` |
+| `vless://` | `vless.rs` | `security` must be `reality` or `tls`; flow empty or `xtls-rprx-vision`; transport TCP/raw only; uTLS fingerprints map `hellochrome_*` to `chrome`. Xray client JSON is read only as the `last_config` of an `amnezia-xray` container in a `vpn://` key, not on its own |
 | `.conf` | `wireguard.rs` | One `[Peer]`; AmneziaWG keys map to UAPI names; `HeaderProtectionKey` base64 → hex and requires S1–S4 ≥ 12; `RandomTrailers`/`DisableCookies` → `true`/`false`; legacy `J1`–`J3`/`Itime` ignored |
 | `vpn://` | `amnezia.rs` | `vpn://` + base64url(4-byte big-endian length + zlib(JSON)). Containers `amnezia-awg2`, `amnezia-awg`, `amnezia-wireguard` and `amnezia-xray` are supported. `last_config` is a JSON *string*; its `config` text goes through `wireguard.rs` |
+
+A server name carried by a key (an `ss://` or `vless://` `#fragment`, an Amnezia `description`) is cut to 80 characters, and dropped if it contains control characters; it never makes the key itself invalid. Ghostlink servers name keys "user @ server", which can be longer.
 
 Always rejected:
 - `.conf`: `PreUp`/`PostUp`/`PreDown`/`PostDown`, `Table`, `FwMark`, `SaveConfig`, unknown keys and malformed keys.
@@ -68,9 +71,10 @@ It is owner-only and validated by `core/vpn-engine/src/split.rs`. The generated 
 
 1. `sniff`, so protocol (DNS) and site names (TLS SNI, HTTP Host, QUIC) are known;
 2. the health proxy is pinned to `proxy`, because otherwise "only" mode would let the health check succeed without the tunnel;
-3. IPv6 from the TUN is rejected;
-4. DNS is hijacked;
-5. the policy rules: bypass sends matches to `direct`, "only" sends them to `proxy`. App rules use `process_name`/`process_path` with `find_process`.
+3. while this device administers Ghostlink servers, each server's API `host:port` goes `direct` (by IP, or by domain plus a local DNS rule; see below);
+4. IPv6 from the TUN is rejected;
+5. DNS is hijacked;
+6. the policy rules: bypass sends matches to `direct`, "only" sends them to `proxy`. App rules use `process_name`/`process_path`, and `find_process` is on only when such rules exist (never in full mode). In full and bypass modes, "Keep LAN direct" adds an `ip_is_private` rule last.
 
 `final` is `proxy`, or `direct` in "only" mode. Bypassed sites resolve through the local resolver; in "only" mode, listed sites resolve through the tunnel.
 

@@ -138,7 +138,7 @@ fn main() {
                     }
                     "disconnect" => {
                         tauri::async_runtime::spawn(async {
-                            let _ = vpn_request(Action::Disconnect).await;
+                            let _ = vpn_request(Action::Disconnect {}).await;
                         });
                     }
                     "quit" => app.exit(0),

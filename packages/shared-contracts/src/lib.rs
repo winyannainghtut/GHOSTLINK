@@ -14,6 +14,9 @@ pub struct Request {
     pub action: Action,
 }
 
+/// Actions without fields are written `Status {}`, not `Status`: serde ignores extra keys on
+/// unit variants of an internally tagged enum even with `deny_unknown_fields`, and the contract
+/// rejects them. The JSON is the same (`{"type":"status"}`).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
@@ -35,7 +38,7 @@ pub enum Action {
         #[serde(default)]
         replace: bool,
     },
-    ProfileList,
+    ProfileList {},
     ProfileDefault {
         name: String,
     },
@@ -45,20 +48,20 @@ pub enum Action {
     Connect {
         profile: Option<String>,
     },
-    Disconnect,
+    Disconnect {},
     Switch {
         profile: String,
     },
-    Status,
-    Info,
-    ServersList,
+    Status {},
+    Info {},
+    ServersList {},
     Autoconnect {
         enabled: bool,
     },
     Logs {
         tail: usize,
     },
-    Doctor,
+    Doctor {},
     AgentGrant {
         name: String,
         control: bool,
@@ -86,7 +89,7 @@ pub enum Action {
         #[serde(default)]
         replace: bool,
     },
-    ManagedServerList,
+    ManagedServerList {},
     ManagedServerRemove {
         name: String,
     },
@@ -99,14 +102,15 @@ pub enum Action {
 }
 
 /// Administration operations on a managed Ghostlink server. IDs are the server's numeric IDs.
+/// Operations without fields are empty struct variants for the same reason as in [`Action`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServerOp {
-    Info,
+    Info {},
     Update {
         patch: ServerPatch,
     },
-    UsersList,
+    UsersList {},
     UserCreate {
         change: UserChange,
     },
@@ -142,13 +146,13 @@ pub enum ServerOp {
         user: String,
         key: String,
     },
-    RulesGet,
+    RulesGet {},
     RulesSet {
         rules: TrafficRules,
     },
-    Metrics,
+    Metrics {},
     /// Live speeds, open connections, online users and server health.
-    Live,
+    Live {},
     /// Recorded traffic: `range` is 24h, 7d, 30d or 90d; without `user`, everyone.
     Stats {
         #[serde(default)]
@@ -184,7 +188,7 @@ pub enum ServerOp {
         on_demand: bool,
     },
     /// The mesh (private network between Linux servers) this server coordinates.
-    MeshInfo,
+    MeshInfo {},
     MeshUpdate {
         patch: MeshPatch,
     },
@@ -192,7 +196,7 @@ pub enum ServerOp {
     MeshInviteCreate {
         invite: MeshInvite,
     },
-    MeshInviteList,
+    MeshInviteList {},
     MeshInviteDelete {
         invite: String,
     },
@@ -203,12 +207,12 @@ pub enum ServerOp {
     MeshNodeDelete {
         node: String,
     },
-    MeshRulesGet,
+    MeshRulesGet {},
     MeshRulesSet {
         rules: Vec<MeshRule>,
     },
     /// Nodes and links for the map: online state, direct or relayed paths, latency, traffic.
-    MeshTopology,
+    MeshTopology {},
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -397,24 +401,24 @@ impl Action {
             Self::AccessKeyImport { .. } => "access_key_import",
             Self::ProfileRename { .. } => "profile_rename",
             Self::ProfileImport { .. } => "profile_import",
-            Self::ProfileList => "profile_list",
+            Self::ProfileList {} => "profile_list",
             Self::ProfileDefault { .. } => "profile_default",
             Self::ProfileRemove { .. } => "profile_remove",
             Self::Connect { .. } => "connect",
-            Self::Disconnect => "disconnect",
+            Self::Disconnect {} => "disconnect",
             Self::Switch { .. } => "switch",
-            Self::Status => "status",
-            Self::Info => "info",
-            Self::ServersList => "servers_list",
+            Self::Status {} => "status",
+            Self::Info {} => "info",
+            Self::ServersList {} => "servers_list",
             Self::Autoconnect { .. } => "autoconnect",
             Self::Logs { .. } => "logs",
-            Self::Doctor => "doctor",
+            Self::Doctor {} => "doctor",
             Self::AgentGrant { .. } => "agent_grant",
             Self::AgentRevoke { .. } => "agent_revoke",
             Self::RoutingPolicyGet { .. } => "routing_policy_get",
             Self::RoutingPolicySet { .. } => "routing_policy_set",
             Self::ManagedServerAdd { .. } => "managed_server_add",
-            Self::ManagedServerList => "managed_server_list",
+            Self::ManagedServerList {} => "managed_server_list",
             Self::ManagedServerRemove { .. } => "managed_server_remove",
             Self::ServerCall { op, .. } => op.name(),
         }
@@ -422,11 +426,15 @@ impl Action {
     pub fn agent_allowed(&self, control: bool) -> bool {
         matches!(
             self,
-            Self::Status | Self::Info | Self::Doctor | Self::ProfileList | Self::ServersList
+            Self::Status {}
+                | Self::Info {}
+                | Self::Doctor {}
+                | Self::ProfileList {}
+                | Self::ServersList {}
         ) || (control
             && matches!(
                 self,
-                Self::Connect { .. } | Self::Disconnect | Self::Switch { .. }
+                Self::Connect { .. } | Self::Disconnect {} | Self::Switch { .. }
             ))
     }
 }
@@ -434,34 +442,34 @@ impl Action {
 impl ServerOp {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Info => "server_info",
+            Self::Info {} => "server_info",
             Self::Update { .. } => "server_update",
-            Self::UsersList => "server_users_list",
+            Self::UsersList {} => "server_users_list",
             Self::UserCreate { .. } => "server_user_create",
             Self::UserUpdate { .. } => "server_user_update",
             Self::UserDelete { .. } => "server_user_delete",
             Self::KeysList { .. } => "server_keys_list",
             Self::KeyCreate { .. } => "server_key_create",
             Self::KeyDelete { .. } => "server_key_delete",
-            Self::RulesGet => "server_rules_get",
+            Self::RulesGet {} => "server_rules_get",
             Self::RulesSet { .. } => "server_rules_set",
-            Self::Metrics => "server_metrics",
-            Self::Live => "server_live",
+            Self::Metrics {} => "server_metrics",
+            Self::Live {} => "server_live",
             Self::Stats { .. } => "server_stats",
             Self::Clients { .. } => "server_clients",
             Self::KeyQr { .. } => "server_key_qr",
             Self::Kit { .. } => "server_kit",
             Self::KeyProfile { .. } => "server_key_profile",
-            Self::MeshInfo => "server_mesh_info",
+            Self::MeshInfo {} => "server_mesh_info",
             Self::MeshUpdate { .. } => "server_mesh_update",
             Self::MeshInviteCreate { .. } => "server_mesh_invite_create",
-            Self::MeshInviteList => "server_mesh_invite_list",
+            Self::MeshInviteList {} => "server_mesh_invite_list",
             Self::MeshInviteDelete { .. } => "server_mesh_invite_delete",
             Self::MeshNodeUpdate { .. } => "server_mesh_node_update",
             Self::MeshNodeDelete { .. } => "server_mesh_node_delete",
-            Self::MeshRulesGet => "server_mesh_rules_get",
+            Self::MeshRulesGet {} => "server_mesh_rules_get",
             Self::MeshRulesSet { .. } => "server_mesh_rules_set",
-            Self::MeshTopology => "server_mesh_topology",
+            Self::MeshTopology {} => "server_mesh_topology",
         }
     }
 }
@@ -478,10 +486,20 @@ pub struct ApiError {
 pub struct Response {
     pub schema_version: u32,
     pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `"data": null` is kept as `Some(Null)`: a server's empty answer (every delete) is a
+    /// success with null data, which must not read as a response without data.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub data: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ApiError>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl Response {
@@ -689,6 +707,13 @@ fn verify_pipe_server(
     }
 }
 
+/// A response of this schema with data exactly when it succeeded (the data may be null).
+fn compatible(response: &Response) -> bool {
+    response.schema_version == SCHEMA_VERSION
+        && response.success == response.error.is_none()
+        && response.success == response.data.is_some()
+}
+
 pub async fn call(endpoint: &str, request: Request, timeout: std::time::Duration) -> Response {
     let operation = async {
         let stream = connect(endpoint).await.map_err(|_| {
@@ -706,10 +731,7 @@ pub async fn call(endpoint: &str, request: Request, timeout: std::time::Duration
             .map_err(|_| Response::err("daemon_unavailable", "Incomplete service response"))?;
         let response: Response = serde_json::from_slice(&bytes)
             .map_err(|_| Response::err("internal", "Invalid service response"))?;
-        if response.schema_version != SCHEMA_VERSION
-            || response.success != response.error.is_none()
-            || response.success != response.data.is_some()
-        {
+        if !compatible(&response) {
             return Err(Response::err("internal", "Incompatible service response"));
         }
         Ok(response)
@@ -745,8 +767,8 @@ mod tests {
             replace: true
         }
         .agent_allowed(true));
-        assert!(!Action::Disconnect.agent_allowed(false));
-        assert!(Action::Status.agent_allowed(false));
+        assert!(!Action::Disconnect {}.agent_allowed(false));
+        assert!(Action::Status {}.agent_allowed(false));
     }
     #[test]
     fn agents_cannot_manage_servers() {
@@ -756,19 +778,19 @@ mod tests {
                 management_key: "{}".into(),
                 replace: false,
             },
-            Action::ManagedServerList,
+            Action::ManagedServerList {},
             Action::ManagedServerRemove { name: "x".into() },
             Action::ServerCall {
                 server: "x".into(),
-                op: ServerOp::Info,
+                op: ServerOp::Info {},
             },
             Action::ServerCall {
                 server: "x".into(),
-                op: ServerOp::Metrics,
+                op: ServerOp::Metrics {},
             },
             Action::ServerCall {
                 server: "x".into(),
-                op: ServerOp::Live,
+                op: ServerOp::Live {},
             },
             Action::ServerCall {
                 server: "x".into(),
@@ -776,7 +798,7 @@ mod tests {
             },
             Action::ServerCall {
                 server: "x".into(),
-                op: ServerOp::MeshTopology,
+                op: ServerOp::MeshTopology {},
             },
             Action::ServerCall {
                 server: "x".into(),
@@ -815,5 +837,61 @@ mod tests {
                 .is_err()
         );
         assert!(serde_json::from_str::<ServerOp>(r#"{"op":"raw","method":"GET"}"#).is_err());
+    }
+    #[test]
+    fn actions_without_fields_keep_their_json_and_refuse_extra_keys() {
+        for name in [
+            "status",
+            "info",
+            "doctor",
+            "disconnect",
+            "profile_list",
+            "servers_list",
+            "managed_server_list",
+        ] {
+            let action: Action = serde_json::from_str(&format!(r#"{{"type":"{name}"}}"#)).unwrap();
+            assert_eq!(action.name(), name);
+            assert_eq!(
+                serde_json::to_string(&action).unwrap(),
+                format!(r#"{{"type":"{name}"}}"#)
+            );
+            let extra = format!(r#"{{"type":"{name}","profile":"x"}}"#);
+            assert!(serde_json::from_str::<Action>(&extra).is_err(), "{extra}");
+        }
+        for name in [
+            "info",
+            "users_list",
+            "rules_get",
+            "metrics",
+            "live",
+            "mesh_info",
+            "mesh_invite_list",
+            "mesh_rules_get",
+            "mesh_topology",
+        ] {
+            let op: ServerOp = serde_json::from_str(&format!(r#"{{"op":"{name}"}}"#)).unwrap();
+            assert_eq!(
+                serde_json::to_string(&op).unwrap(),
+                format!(r#"{{"op":"{name}"}}"#)
+            );
+            let extra = format!(r#"{{"op":"{name}","path":"/etc"}}"#);
+            assert!(serde_json::from_str::<ServerOp>(&extra).is_err(), "{extra}");
+        }
+    }
+    #[test]
+    fn an_empty_server_answer_is_a_successful_response() {
+        // Every delete through server_call is answered with null data.
+        let text = serde_json::to_string(&Response::ok(Value::Null)).unwrap();
+        assert_eq!(text, r#"{"schema_version":1,"success":true,"data":null}"#);
+        let response: Response = serde_json::from_str(&text).unwrap();
+        assert!(compatible(&response));
+        let missing: Response =
+            serde_json::from_str(r#"{"schema_version":1,"success":true}"#).unwrap();
+        assert!(!compatible(&missing));
+        let failed: Response = serde_json::from_str(
+            r#"{"schema_version":1,"success":false,"error":{"code":"busy","message":"x"}}"#,
+        )
+        .unwrap();
+        assert!(compatible(&failed));
     }
 }

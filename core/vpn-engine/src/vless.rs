@@ -140,8 +140,7 @@ impl VlessKey {
         let url = Url::parse(value).map_err(|_| anyhow::anyhow!("Malformed vless:// link"))?;
         let label = url
             .fragment()
-            .map(|f| percent_decode_str(f).decode_utf8_lossy().trim().to_string())
-            .filter(|l| crate::outline::valid_label(l));
+            .and_then(|f| crate::outline::key_label(&percent_decode_str(f).decode_utf8_lossy()));
         let mut query = std::collections::BTreeMap::new();
         for (name, item) in url.query_pairs() {
             query.insert(name.to_string(), item.to_string());

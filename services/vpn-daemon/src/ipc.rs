@@ -84,8 +84,15 @@ impl Listener {
         })
     }
     pub async fn accept(&mut self) -> Result<Stream> {
-        let pipe = self.pipe.as_mut().unwrap();
-        pipe.connect().await?;
+        let connected = self.pipe.as_mut().unwrap().connect().await;
+        if let Err(error) = connected {
+            // A failed connect can leave this instance unusable. Replace it; the new one exists
+            // before the old one closes, so the pipe name is never free.
+            if let Ok(fresh) = create(&self.endpoint, &self.owner, false) {
+                self.pipe = Some(fresh);
+            }
+            return Err(error.into());
+        }
         // Always retain a server instance so the pipe name cannot be captured between clients.
         let next = create(&self.endpoint, &self.owner, false)?;
         let connected = self.pipe.replace(next).unwrap();

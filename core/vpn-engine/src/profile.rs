@@ -51,15 +51,18 @@ fn port(value: &str) -> Result<u16> {
     Ok(p)
 }
 
-fn protocol(value: &str) -> Result<&str> {
-    ensure!(
-        matches!(
-            value,
-            "udp" | "udp4" | "udp6" | "tcp-client" | "tcp4-client" | "tcp6-client"
-        ),
-        "Only UDP or TCP client transport is allowed"
-    );
-    Ok(value)
+/// A client transport. `tcp`, `tcp4` and `tcp6` are how most profiles spell the `-client` forms
+/// (the canonical profile is always a client), and are written in that form.
+fn protocol(value: &str) -> Result<&'static str> {
+    Ok(match value {
+        "udp" => "udp",
+        "udp4" => "udp4",
+        "udp6" => "udp6",
+        "tcp" | "tcp-client" => "tcp-client",
+        "tcp4" | "tcp4-client" => "tcp4-client",
+        "tcp6" | "tcp6-client" => "tcp6-client",
+        _ => bail!("Only UDP or TCP client transport is allowed"),
+    })
 }
 
 pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
@@ -131,12 +134,19 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
         !blocks["key"].contains("ENCRYPTED"),
         "Encrypted private keys require an OS vault workflow not yet supported"
     );
-    let key_pem = pem::parse(&blocks["key"]).context("Invalid PEM private key")?;
+    // `openssl ecparam -genkey` writes an EC PARAMETERS block before the key. OpenVPN skips it
+    // when it loads the key, so it may stay; exactly one private key is required.
+    let key_blocks = pem::parse_many(&blocks["key"]).context("Invalid PEM private key")?;
+    let keys: Vec<_> = key_blocks
+        .iter()
+        .filter(|block| block.tag() != "EC PARAMETERS")
+        .collect();
     ensure!(
-        matches!(
-            key_pem.tag(),
-            "PRIVATE KEY" | "RSA PRIVATE KEY" | "EC PRIVATE KEY"
-        ),
+        keys.len() == 1
+            && matches!(
+                keys[0].tag(),
+                "PRIVATE KEY" | "RSA PRIVATE KEY" | "EC PRIVATE KEY"
+            ),
         "Unsupported private key format"
     );
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
@@ -166,6 +176,10 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
     let mut proto = "udp".to_string();
     let mut default_port = 1194;
     let mut full = false;
+    // Kept as the profile gives them: `auth` is also the tls-auth HMAC digest, which must match
+    // the server, and the redirect flags change which traffic the tunnel takes.
+    let mut digest = "SHA256".to_string();
+    let mut redirect_flags = vec![];
     let mut remote_args = vec![];
     let mut extra = String::new();
     let mut seen = std::collections::HashSet::new();
@@ -193,9 +207,14 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
             "remote-cert-tls" => ensure!(one()? == "server", "Server certificate verification cannot be disabled"),
             "tls-version-min" => ensure!(matches!(one()?, "1.2" | "1.3"), "TLS 1.2 or newer is required"),
             "cipher" | "data-ciphers" => ensure!(one()?.split(':').all(|c| matches!(c, "AES-256-GCM" | "AES-128-GCM" | "CHACHA20-POLY1305")), "Only modern AEAD ciphers are supported"),
-            "auth" => ensure!(matches!(one()?, "SHA256" | "SHA384" | "SHA512"), "Weak digest rejected"),
+            "auth" => { let value = one()?; ensure!(matches!(value, "SHA256" | "SHA384" | "SHA512"), "Weak digest rejected"); digest = value.into(); }
             "allow-compression" => ensure!(one()? == "no", "Compression is forbidden"),
-            "redirect-gateway" => { ensure!(args.iter().all(|a| matches!(a.as_str(), "def1" | "ipv6" | "bypass-dhcp" | "block-local")), "Unsupported redirect-gateway option"); full = true; }
+            "redirect-gateway" => {
+                ensure!(args.iter().all(|a| matches!(a.as_str(), "def1" | "ipv6" | "bypass-dhcp" | "block-local")), "Unsupported redirect-gateway option");
+                full = true;
+                // def1 is always written; the others in a fixed order, once each.
+                redirect_flags = ["ipv6", "bypass-dhcp", "block-local"].into_iter().filter(|flag| args.iter().any(|a| a == flag)).collect();
+            }
             "route" => {
                 ensure!((1..=4).contains(&args.len()), "Invalid IPv4 route");
                 args[0].parse::<std::net::Ipv4Addr>().context("Routes must use numeric IPv4 addresses")?;
@@ -232,7 +251,7 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
         !(full && seen.iter().any(|x| x.as_str() == "route-nopull")),
         "Full tunnel and route-nopull conflict"
     );
-    let mut canonical = String::from("client\ndev tun\nnobind\nremote-cert-tls server\ntls-version-min 1.2\ndata-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\nauth SHA256\nallow-compression no\nauth-nocache\nscript-security 1\nverb 3\nresolv-retry infinite\nconnect-retry 2 30\n");
+    let mut canonical = format!("client\ndev tun\nnobind\nremote-cert-tls server\ntls-version-min 1.2\ndata-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\nauth {digest}\nallow-compression no\nauth-nocache\nscript-security 1\nverb 3\nresolv-retry infinite\nconnect-retry 2 30\n");
     // Do not weaken an explicitly stricter TLS minimum.
     if directives
         .iter()
@@ -267,7 +286,14 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
     ensure!(remotes.iter().all(|remote| remote.protocol == remotes[0].protocol), "Use separate profiles for different remote transports so connection protocol is unambiguous");
     // Pull only the selected route mode. The service does not claim platform leak prevention.
     if full {
-        canonical.push_str("redirect-gateway def1\n");
+        canonical.push_str(&format!(
+            "{}\n",
+            ["redirect-gateway", "def1"]
+                .into_iter()
+                .chain(redirect_flags)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
     } else {
         canonical.push_str("pull-filter ignore redirect-gateway\n");
     }
@@ -307,6 +333,74 @@ mod tests {
             assert!(!valid_name(s));
         }
     }
+    /// A valid inline profile with a fresh self-signed certificate; `key` replaces the key block.
+    fn profile(extra: &str, key: Option<&str>) -> String {
+        let pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["ghostlink-test".into()])
+            .unwrap()
+            .self_signed(&pair)
+            .unwrap()
+            .pem();
+        let key = key
+            .map(String::from)
+            .unwrap_or_else(|| pair.serialize_pem());
+        format!("client\ndev tun\nremote 192.0.2.10 1194\n{extra}<ca>\n{cert}</ca>\n<cert>\n{cert}</cert>\n<key>\n{key}</key>\n")
+    }
+
+    #[test]
+    fn profile_choices_reach_the_canonical_profile() {
+        let digest = validate("t", &profile("auth SHA512\n", None)).unwrap();
+        assert!(digest.canonical.contains("\nauth SHA512\n"));
+        assert!(!digest.canonical.contains("\nauth SHA256\n"));
+        assert!(validate("t", &profile("", None))
+            .unwrap()
+            .canonical
+            .contains("\nauth SHA256\n"));
+        let redirect = validate(
+            "t",
+            &profile("redirect-gateway block-local def1 ipv6\n", None),
+        )
+        .unwrap();
+        assert!(redirect
+            .canonical
+            .contains("\nredirect-gateway def1 ipv6 block-local\n"));
+        assert_eq!(redirect.summary.tunnel_mode, "full");
+        assert!(validate("t", &profile("redirect-gateway local\n", None)).is_err());
+    }
+
+    #[test]
+    fn plain_tcp_means_a_tcp_client() {
+        let tcp = validate("t", &profile("proto tcp\n", None)).unwrap();
+        assert!(tcp
+            .canonical
+            .contains("\nremote 192.0.2.10 1194 tcp-client\n"));
+        assert_eq!(tcp.summary.remotes[0].protocol, "tcp-client");
+        let both = profile("proto tcp4\n", None).replace(
+            "remote 192.0.2.10 1194\n",
+            "remote 192.0.2.10 1194\nremote 192.0.2.11 443 tcp4\n",
+        );
+        assert_eq!(validate("t", &both).unwrap().summary.remotes.len(), 2);
+        for bad in ["proto tcp-server\n", "proto tls\n"] {
+            assert!(validate("t", &profile(bad, None)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ec_keys_with_their_parameters_block_are_accepted() {
+        let pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let sec1 = pair
+            .serialize_pem()
+            .replace("PRIVATE KEY", "EC PRIVATE KEY");
+        let parameters =
+            "-----BEGIN EC PARAMETERS-----\nBggqhkjOPQMBBw==\n-----END EC PARAMETERS-----\n";
+        let with = validate("t", &profile("", Some(&format!("{parameters}{sec1}")))).unwrap();
+        assert!(with.canonical.contains("EC PARAMETERS"));
+        for bad in [parameters.to_string(), format!("{sec1}{sec1}")] {
+            let error = validate("t", &profile("", Some(&bad))).err().unwrap();
+            assert_eq!(error.to_string(), "Unsupported private key format");
+        }
+    }
+
     #[test]
     fn executable_directives_and_missing_certificates_fail() {
         for s in [
