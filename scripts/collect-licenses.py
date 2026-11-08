@@ -27,7 +27,11 @@ def copy_notices(directory, destination, recursive=False):
 
 
 def main():
-    DEST.mkdir(parents=True, exist_ok=True)
+    # Start empty, so notices of versions that are no longer locked do not stay behind and ship.
+    # The folder holds only generated notices; hand-kept texts are at the top of LICENSES/.
+    if DEST.exists():
+        shutil.rmtree(DEST)
+    DEST.mkdir(parents=True)
     entries = {}
     for manifest in [ROOT / "Cargo.toml", ROOT / "apps/desktop/src-tauri/Cargo.toml"]:
         metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version", "1", "--locked", "--manifest-path", str(manifest)], cwd=ROOT))
@@ -45,7 +49,8 @@ def main():
     listing = subprocess.check_output(go_list + [".", "./cmd/ghostlink-server"], cwd=worker, text=True)
     listing += subprocess.check_output(go_list + [".", "./cmd/ghostlink-server", "./cmd/ghostlink-ipsec-agent", "./cmd/ghostlink-mesh"], cwd=worker, text=True,
                                        env={**os.environ, "GOOS": "linux", "GOARCH": "amd64"})
-    for line in set(listing.splitlines()):
+    # Sorted, so that the inventory comes out in the same order on every run.
+    for line in sorted(set(listing.splitlines())):
         if not line.strip():
             continue
         name, version, directory = line.split("|", 2)
