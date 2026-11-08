@@ -155,8 +155,14 @@ func (d *device) setRoutes(routes []string, endpoints []netip.Addr) ([]string, e
 	return skip, nil
 }
 
-// gone reports that the interface was deleted under the running agent.
+// gone reports that the interface was deleted under the running agent. The link itself is
+// checked too: after the wireguard module was reloaded, the old WireGuard client may fail in
+// other ways.
 func (d *device) gone() bool {
+	var missing netlink.LinkNotFoundError
+	if _, err := d.link(); errors.As(err, &missing) {
+		return true
+	}
 	_, err := d.wg.Device(d.name)
 	return errors.Is(err, os.ErrNotExist)
 }
