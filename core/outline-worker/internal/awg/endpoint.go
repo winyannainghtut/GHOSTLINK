@@ -53,6 +53,7 @@ type Endpoint struct {
 	options        Options
 	localAddresses []netip.Prefix
 	dialer         N.Dialer
+	deviceOptions  wireguard.DeviceOptions
 	tunDevice      wireguard.Device
 	tun            *tunAdapter
 	users          map[netip.Addr]string
@@ -75,6 +76,15 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	if _, err := options.deviceConfig(); err != nil {
 		return nil, err
+	}
+	// The userspace stack is created only in Start, and a repeated address is the one thing in
+	// these options it refuses; check it here so that validating a configuration still does.
+	addresses := make(map[netip.Addr]bool)
+	for _, prefix := range options.Address {
+		if addresses[prefix.Addr()] {
+			return nil, E.New("duplicate address ", prefix.Addr())
+		}
+		addresses[prefix.Addr()] = true
 	}
 	users := make(map[netip.Addr]string)
 	var allowedBuilder netipx.IPSetBuilder
@@ -132,7 +142,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		udpFiltering = tun.NATFilteringAddressAndPortDependent
 	}
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)
-	ep.tunDevice, err = wireguard.NewDevice(wireguard.DeviceOptions{
+	ep.deviceOptions = wireguard.DeviceOptions{
 		Context:         ctx,
 		Logger:          logger,
 		System:          false,
@@ -151,9 +161,6 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		MTU:            mtu,
 		Address:        options.Address,
 		AllowedAddress: allowedSet.Prefixes(),
-	})
-	if err != nil {
-		return nil, E.Cause(err, "create AmneziaWG network stack")
 	}
 	return ep, nil
 }
@@ -163,6 +170,14 @@ func (e *Endpoint) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	resolveLater := e.isClient() && !M.ParseAddr(e.options.Peers[0].Address).IsValid()
 	switch stage {
 	case adapter.StartStateInitialize:
+		// The userspace stack runs goroutines from the moment it exists, and sing-box closes an
+		// endpoint only once it has started. Created in NewEndpoint, it leaked each time the
+		// server validated a new configuration without starting it.
+		tunDevice, err := wireguard.NewDevice(e.deviceOptions)
+		if err != nil {
+			return E.Cause(err, "create AmneziaWG network stack")
+		}
+		e.tunDevice = tunDevice
 		scope.Add(e.close)
 	case adapter.StartStateStart:
 		if !resolveLater {

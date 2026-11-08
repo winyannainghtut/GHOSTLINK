@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,54 @@ func TestServerJudgesEveryUDPDestination(t *testing.T) {
 	}
 	if reply, ok := udpExchange(socket, other, 3); reply != fmt.Sprint("echo to ", other) {
 		t.Fatalf("a second allowed destination from the same socket got no answer: %q %v", reply, ok)
+	}
+}
+
+// validate builds an engine from config without starting it and closes it again, as the server
+// does with each new configuration before it replaces the running engine.
+func validate(t *testing.T, config string) error {
+	t.Helper()
+	ctx := testContext()
+	options, err := boxjson.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		return err
+	}
+	return instance.Close()
+}
+
+// sing-box closes only what has started, so validating a configuration must leave nothing
+// running.
+func TestUnstartedEndpointLeavesNothingRunning(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := serverConfig(server, freePort(t, "udp"), "", []string{peerJSON("alice", alice, "10.88.0.2/32")}, nil)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 10; i++ {
+		if err := validate(t, config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Earlier tests may still be winding down, so give the count a moment to settle.
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("validating a configuration 10 times left %d more goroutines running", after-before)
+	}
+}
+
+// Validation still refuses the one thing the userspace stack would only refuse at start.
+func TestRepeatedAddressFailsValidation(t *testing.T) {
+	server, alice := newKeyPair(t), newKeyPair(t)
+	config := fmt.Sprintf(`{"endpoints":[{"type":"amneziawg","tag":"srv","address":["10.88.0.1/24","10.88.0.1/32"],
+	  "private_key":%q,"listen_port":%d,"peers":[%s]}]}`, server.private, freePort(t, "udp"), peerJSON("alice", alice, "10.88.0.2/32"))
+	if validate(t, config) == nil {
+		t.Fatal("a configuration that repeats an address passed validation")
 	}
 }
 
