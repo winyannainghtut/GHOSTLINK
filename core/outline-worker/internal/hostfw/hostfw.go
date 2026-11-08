@@ -67,6 +67,29 @@ func Detect(ctx context.Context) string {
 	return "nft"
 }
 
+// DetectHost is Detect for an agent running on the host itself (not in a container): it uses
+// the backend the host's iptables command points to, as Docker, ufw and firewalld do. That is
+// known even at boot, before any of them added rules to count.
+func DetectHost(ctx context.Context) string {
+	out, _ := Run(ctx, "", "iptables", "-V")
+	if backend := backendOf(out); backend != "" {
+		return backend
+	}
+	return Detect(ctx)
+}
+
+// backendOf reads the backend from `iptables -V` ("iptables v1.8.7 (nf_tables)"); versions
+// before 1.8 do not say.
+func backendOf(version string) string {
+	switch {
+	case strings.Contains(version, "(nf_tables)"):
+		return "nft"
+	case strings.Contains(version, "(legacy)"):
+		return "legacy"
+	}
+	return ""
+}
+
 func (f *Firewall) iptables(ctx context.Context, args ...string) error {
 	_, err := Run(ctx, "", "iptables-"+f.Backend, append([]string{"-w", "5"}, args...)...)
 	return err
@@ -100,6 +123,16 @@ func (f *Firewall) EnsureJumps(ctx context.Context, jumps []Jump) error {
 		}
 	}
 	return nil
+}
+
+// HasJumps reports whether every jump is in place.
+func (f *Firewall) HasJumps(ctx context.Context, jumps []Jump) bool {
+	for _, j := range jumps {
+		if f.iptables(ctx, j.args("-C")...) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Remove deletes the jumps, then flushes and deletes the chains (table -> chains).

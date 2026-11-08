@@ -106,7 +106,7 @@ func main() {
 func firewall(backend string) *hostfw.Firewall {
 	switch backend {
 	case "auto":
-		backend = hostfw.Detect(context.Background())
+		backend = hostfw.DetectHost(context.Background())
 	case "nft", "legacy":
 	default:
 		fail("--iptables must be auto, nft or legacy")
