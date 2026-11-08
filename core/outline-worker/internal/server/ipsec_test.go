@@ -555,6 +555,8 @@ func TestIPsecTrafficAccounting(t *testing.T) {
 			Remote: "198.51.100.20", Children: []ipsecproto.Child{{UniqueID: child, BytesIn: in, BytesOut: out}}}})
 		server.service.recordIPsec(time.Now())
 	}
+	// The first report after a start only sets the baseline (see TestIPsecRestartDoesNotCountLiveSessionsAgain).
+	report(0, 0, "1")
 	report(1000, 2000, "1")
 	report(1500, 2500, "1") // +500 up, +500 down
 	report(100, 0, "2")     // a rekeyed child starts from zero

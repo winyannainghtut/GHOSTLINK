@@ -134,12 +134,15 @@ func (s *State) NewKeyWith(user *User, protocol string, options KeyOptions) (*Ke
 		if s.IPsec.CAPEM == "" {
 			return nil, errIPsecNotRunning
 		}
-		if options.LocalID != "" {
-			for _, u := range s.Users {
-				for _, k := range u.Keys {
-					if k.isApple() && strings.EqualFold(k.localIdentity(u), options.LocalID) {
-						return nil, fmt.Errorf("identifier %q is already used by another key", options.LocalID)
-					}
+		// The identity is stored with the key, so renaming the user cannot change it later
+		// (a certificate key could not follow: the certificate names it).
+		if key.LocalID == "" {
+			key.LocalID = defaultIdentity(user.Name, key.ID)
+		}
+		for _, u := range s.Users {
+			for _, k := range u.Keys {
+				if k.isApple() && strings.EqualFold(k.localIdentity(u), key.LocalID) {
+					return nil, fmt.Errorf("identifier %q is already used by another key", key.LocalID)
 				}
 			}
 		}
