@@ -161,10 +161,29 @@ func validCertificate(text string, wantCA bool) error {
 	return nil
 }
 
+// privateRanges are where a pool may lie. The agent adds the pool's gateway to this host, so a
+// pool in public space (or the upstream router's range) would make the host claim an address
+// that is not its own.
+var privateRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+}
+
 func validPool(pool, gateway string) error {
 	prefix, err := netip.ParsePrefix(pool)
 	if err != nil || !prefix.Addr().Is4() || prefix.Bits() < 16 || prefix.Bits() > 24 {
 		return errors.New("pool must be an IPv4 range from /16 to /24")
+	}
+	private := false
+	for _, r := range privateRanges {
+		if prefix.Bits() >= r.Bits() && r.Contains(prefix.Addr()) {
+			private = true
+		}
+	}
+	if !private {
+		return errors.New("pool must lie in private address space")
 	}
 	addr, err := netip.ParseAddr(gateway)
 	if err != nil || addr != prefix.Masked().Addr().Next() {
@@ -188,14 +207,61 @@ func validPort(text string) error {
 	return nil
 }
 
-// Validate checks every field the agent will apply.
+// Validate checks every field the agent will apply. The agent applies the firewall in every
+// state, also with both protocols off, so only the certificates and the protocol sections are
+// skipped then; everything else is always checked.
 func (d *Desired) Validate() error {
 	if d.Version != Version {
 		return fmt.Errorf("unsupported version %d", d.Version)
 	}
-	if d.IKEv2 == nil && d.IKEv1 == nil {
-		return nil
+	if d.IKEv2 != nil || d.IKEv1 != nil {
+		if err := d.validateProtocols(); err != nil {
+			return err
+		}
 	}
+	for _, id := range d.Allowed {
+		if !ValidIdentity(id) {
+			return errors.New("invalid allowed identity")
+		}
+	}
+	names := map[string]bool{}
+	for _, l := range d.SpeedLimits {
+		if !limitNamePattern.MatchString(l.Name) || names[l.Name] || l.BytesPerSecond < 1 || l.BytesPerSecond > MaxSpeedLimit {
+			return errors.New("invalid speed limit")
+		}
+		names[l.Name] = true
+		for _, id := range l.Identities {
+			if !ValidIdentity(id) {
+				return errors.New("invalid speed limit identity")
+			}
+		}
+	}
+	f := d.Firewall
+	for _, cidr := range append(append([]string{}, f.Internal...), f.Blocked...) {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("invalid range %q", cidr)
+		}
+	}
+	for _, port := range f.Ports {
+		if err := validPort(port); err != nil {
+			return err
+		}
+	}
+	if f.ServerIP != "" {
+		if _, err := netip.ParseAddr(f.ServerIP); err != nil {
+			return errors.New("invalid server IP")
+		}
+	}
+	// With both protocols off the server has no DNS listener to forward to, and writes 0.
+	if (d.IKEv2 != nil || d.IKEv1 != nil || f.DNSPort != 0) && f.DNSPort < 1024 {
+		return errors.New("invalid DNS port")
+	}
+	return nil
+}
+
+// validateProtocols checks the certificates, the server identity and the sections of the
+// protocols that are on.
+func (d *Desired) validateProtocols() error {
 	if err := validCertificate(d.CA, true); err != nil {
 		return fmt.Errorf("CA: %w", err)
 	}
@@ -235,42 +301,6 @@ func (d *Desired) Validate() error {
 				return errors.New("IPsec: invalid XAuth identity or password")
 			}
 		}
-	}
-	for _, id := range d.Allowed {
-		if !ValidIdentity(id) {
-			return errors.New("invalid allowed identity")
-		}
-	}
-	names := map[string]bool{}
-	for _, l := range d.SpeedLimits {
-		if !limitNamePattern.MatchString(l.Name) || names[l.Name] || l.BytesPerSecond < 1 || l.BytesPerSecond > MaxSpeedLimit {
-			return errors.New("invalid speed limit")
-		}
-		names[l.Name] = true
-		for _, id := range l.Identities {
-			if !ValidIdentity(id) {
-				return errors.New("invalid speed limit identity")
-			}
-		}
-	}
-	f := d.Firewall
-	for _, cidr := range append(append([]string{}, f.Internal...), f.Blocked...) {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("invalid range %q", cidr)
-		}
-	}
-	for _, port := range f.Ports {
-		if err := validPort(port); err != nil {
-			return err
-		}
-	}
-	if f.ServerIP != "" {
-		if _, err := netip.ParseAddr(f.ServerIP); err != nil {
-			return errors.New("invalid server IP")
-		}
-	}
-	if f.DNSPort < 1024 {
-		return errors.New("invalid DNS port")
 	}
 	return nil
 }

@@ -50,6 +50,7 @@ type Agent struct {
 	plugins    []string
 	problem    string // why the last settings were not applied
 	listing    string // why sessions could not be listed
+	limitFault string // why the speed limit rules could not be applied (shown in the status)
 	stamp      string // modification time and size of the settings last read
 	failedAt   time.Time
 	events     chan vici.Event
@@ -267,11 +268,9 @@ func (a *Agent) apply(ctx context.Context, d ipsecproto.Desired) error {
 	if err := a.setGateways(gateways); err != nil {
 		return err
 	}
-	if err := a.FW.Apply(ctx, d, a.sas); err != nil {
-		return err
-	}
-	a.desired, a.limits = d, strings.Join(limitRules(d, a.sas), "\n")
-	// End sessions that lost access before new credentials load, so none slips through.
+	// End sessions that lost access before new credentials load, so none slips through. This
+	// comes before the firewall: if iptables refuses the new rules, a removed or disabled user
+	// is still cut off.
 	allowed, conns := map[string]bool{}, map[string]bool{}
 	for _, id := range d.Allowed {
 		allowed[strings.ToLower(id)] = true
@@ -285,6 +284,10 @@ func (a *Agent) apply(ctx context.Context, d ipsecproto.Desired) error {
 	}
 	a.allowed, a.conns = allowed, conns
 	a.enforce(ctx)
+	if err := a.FW.Apply(ctx, d, a.sas); err != nil {
+		return err
+	}
+	a.desired, a.limits, a.limitFault = d, strings.Join(limitRules(d, a.sas), "\n"), ""
 	cmd := exec.CommandContext(ctx, a.Swanctl, "--load-all", "--clear", "--noprompt")
 	cmd.Env = a.env()
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -387,16 +390,20 @@ func (a *Agent) cycle(ctx context.Context, full bool) {
 	if a.applied != 0 && a.listing == "" {
 		// New or ended sessions of capped clients: the speed limit rules follow them.
 		a.sas = sas
-		if limits := strings.Join(limitRules(a.desired, sas), "\n"); limits != a.limits {
-			if err := a.FW.Apply(ctx, a.desired, sas); err != nil {
-				a.Log.Printf("could not apply speed limits: %v", err)
-			} else {
-				a.limits = limits
-			}
+		limits := strings.Join(limitRules(a.desired, sas), "\n")
+		if limits == a.limits {
+			// The rules in force are the ones wanted, whatever failed before.
+			a.limitFault = ""
+		} else if err := a.FW.Apply(ctx, a.desired, sas); err != nil {
+			// Shown in the status too, so the admin sees that a limit is not enforced.
+			a.Log.Printf("could not apply speed limits: %v", err)
+			a.limitFault = "speed limits not applied: " + err.Error()
+		} else {
+			a.limits, a.limitFault = limits, ""
 		}
 	}
 	problems := []string{}
-	for _, p := range []string{a.problem, a.listing} {
+	for _, p := range []string{a.problem, a.listing, a.limitFault} {
 		if p != "" {
 			problems = append(problems, p)
 		}
