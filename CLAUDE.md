@@ -45,7 +45,7 @@ The full list is in agent.md, *Rules for contributors and AI agents*.
   1. Work on a branch and open a PR.
   2. Wait for CI, and run a dry run with `gh workflow run release.yml --ref <branch>`.
   3. Squash-merge.
-  4. Push an annotated tag `vX.Y.Z` on the merge commit; the release workflow makes a draft.
+  4. When the maintainer asks for a release, push an annotated tag `vX.Y.Z` on the merge commit; the release workflow makes a draft.
   5. Publish only when the maintainer asks, and never edit published notes.
 - **Secrets:**
   - never paste or use access keys, management keys or tokens;
