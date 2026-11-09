@@ -3,10 +3,10 @@
 import { Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button, Card, CardTitle, Meter, Note, Switch, useUI } from '@shared/glass';
-import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type ProtocolId, type Rules, type Server } from '../api';
+import { APPLE, PROTOCOLS, PROTOCOL_HINTS, protocolName, type ProtocolId, type Rules, type Server } from '../api';
 import { turnedOn } from '../protocols';
 import { RulesEditor } from '../RulesEditor';
-import { useStore } from '../store';
+import { useApi, useStore } from '../store';
 import { MeshCard } from './Mesh';
 
 const ORDER: ProtocolId[] = ['amneziawg', 'wireguard', 'vless', 'shadowsocks', 'ikev2', 'ipsec'];
@@ -15,6 +15,7 @@ const TRANSPORT: Record<ProtocolId, string> = { amneziawg: 'UDP', wireguard: 'UD
 export function Network() {
   const { server, setServer } = useStore();
   const { toast, confirm } = useUI();
+  const { api } = useApi();
   const [rules, setRules] = useState<Rules | null>(null);
   useEffect(() => {
     api<Rules>('GET', '/rules').then(setRules).catch(() => {});
@@ -130,11 +131,11 @@ function ProtocolTile({ protocol, server, onToggle, onPort }: { protocol: Protoc
             onSubmit={event => {
               event.preventDefault();
               const n = Number(port);
-              if (n >= 1024 && n <= 65535 && n !== info.port) onPort(n);
+              if (Number.isInteger(n) && n >= 1 && n <= 65535 && n !== info.port) onPort(n);
               setEditing(false);
             }}
           >
-            <input className="field mono h-8 w-24 px-3 py-0 text-[12.5px]" type="number" min={1024} max={65535} value={port} onChange={e => setPort(e.target.value)} autoFocus aria-label={`${PROTOCOLS[protocol]} port`} />
+            <input className="field mono h-8 w-24 px-3 py-0 text-[12.5px]" type="number" min={1} max={65535} value={port} onChange={e => setPort(e.target.value)} autoFocus aria-label={`${PROTOCOLS[protocol]} port`} />
             <Button size="sm" type="submit" variant="cta">
               Save
             </Button>

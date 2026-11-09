@@ -1,6 +1,19 @@
 # Verification ledger
 
-Updated 2026-11-09 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
+Updated 2026-11-10 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
+
+## v0.8.4 Ports below 1024 and the code review of 0.8.3 (2026-11-10, pull request #8)
+
+Asked for after an Outline import on a real server gave all 16 keys on port 443 new keys. The review is `docs/development/code-review-2026-11-09.md` (F1–F6). The F3, F4 and F5 tests were run against 0.8.3 in a separate worktree and fail there (F4's swap returned 200 there, because the test server runs no dashboard listener; the missing refusal is what fails). F1 and F6 are covered by the end-to-end test and the GUI check below, F2 by both the UI tests and the GUI check.
+
+| Check | Result actually observed |
+|---|---|
+| Go suite | All packages pass (the server package in 147 s), `go vet` on Windows and for Linux, `gofmt` clean; the server also builds for linux/arm64 and linux/386 (where it refuses `GHOSTLINK_RUN_AS`). New: `TestParseRunAs`; `TestOutlineImportKeepsLowPorts` (keys on 443 and 80 kept, one on UDP 500 refused while IKEv2 is on); a port below the floor refused with its own message; F3 `TestHeldPortsCountPerTransport` (WireGuard on UDP N with another program on TCP N: VLESS refused, and the other way round); F4 `TestSwappingTheDashboardPortTakesTwoChanges` (refused with what to do, then done in two changes); F5 `TestMeshAddressesDoNotChangeTheEngine` (100.96.0.1, 100.64.0.7 and an fd7a:: address leave the engine configuration byte for byte the same); F1 `TestDockerCopies` (only jumps marked Docker get the DOCKER-USER copy). The existing Outline and port tests now pin the floor, because Windows lets anyone bind port 80 |
+| UI | Typecheck, 22 tests (3 new, F2: with A's answer held back and B opened meanwhile, both requests of a new client go to A; no shared transport is exported; only a transport that can use keys here offers to) and both builds |
+| GUI (WebView2 DevTools, isolated profile, a debug service managing two fresh local servers A and B) | 34 checks. F2 for real: A's answer to the new client held back 5 s, the sheet closed, B opened (B's `info` was call 7, A's `key_create` call 18); both requests went to A, B got none, A has the client with its key and B only Bob. F6 for real: B took A's Shadowsocks port while A was stopped, so A's engine could not start: A's Island says *VPN engine down*, its panel and Overview give the engine's error, nothing outside its box, in Obsidian and Daylight, while B stays *Live*. Then Network took port 443 for A's Shadowsocks (the field now starts at 1): A's engine started, its Island is *Live* again, and Alice's key says `:443`. The 0.8.3 dashboard check (40 checks, three finishes) passes on the new build |
+| Process suite and Rust | 19/19 process tests; Rust workspace 51 tests and the desktop app's 2; `release-version.mjs --tag v0.8.4` |
+| Release CI (to run) | `linux-package.yml` now checks `user=0:0`, the four added capabilities, `no-new-privileges`, and the running server's `/proc/PID/status` (the account's IDs, no groups, `CapEff`/`CapPrm`/`CapBnd`/`CapAmb`/`CapInh` 0x400, `NoNewPrivs` 1), moves Shadowsocks to 443 and checks TCP and UDP 443 and the key; the Outline smoke test now expects the key on 443 kept and served. `tests/mesh/e2e.sh` adds Docker's chains after the agent: the agent's jumps are first in DOCKER-USER within 45 s, the node without a rule can't reach the published port, the one with a rule still can, and the host is clean after the agent stops |
+| Not verified | Docker's own DOCKER-USER handling (the end-to-end test makes the chain as Docker does, without Docker); the capability drop on a real Docker daemon outside CI; the IPsec component's FORWARD jump after a firewalld reload (agent.md, known limits) |
 
 ## v0.8.3 New servers run only Shadowsocks (2026-11-09, pull request #7)
 

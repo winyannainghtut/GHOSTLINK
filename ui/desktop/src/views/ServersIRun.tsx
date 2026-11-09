@@ -2,7 +2,7 @@
 // the local service). Opening one shows the same views as the server's own dashboard.
 import { ArrowLeft, BookOpen, Eye, EyeOff, Plus, Server as ServerIcon, Settings2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { setTransport, type Server } from '@admin/api';
+import type { Server, Transport } from '@admin/api';
 import { Island } from '@admin/Island';
 import { StoreProvider, useStore } from '@admin/store';
 import { Clients } from '@admin/views/Clients';
@@ -109,16 +109,24 @@ export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSi
 const VIEWS = ['overview', 'clients', 'network'] as const;
 type View = (typeof VIEWS)[number];
 
+// Each server's views get their own transport, through their StoreProvider (useApi), so nothing
+// started in one server's workspace reaches another server (code review 2026-11-09, F2).
 function Workspace({ server, onBack }: { server: ManagedServer; onBack: () => void }) {
   const { refresh } = useService();
-  const [info, setInfo] = useState<Server | null>(null);
+  const [open, setOpen] = useState<{ name: string; transport: Transport; info: Server } | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
+    let current = true;
     const transport = serverTransport(server.name, refresh);
-    setTransport(transport);
-    setInfo(null);
+    setOpen(null);
     setError('');
-    transport.call<Server>('GET', '/server').then(setInfo).catch(e => setError(e.message));
+    transport
+      .call<Server>('GET', '/server')
+      .then(info => current && setOpen({ name: server.name, transport, info }))
+      .catch(e => current && setError(e.message));
+    return () => {
+      current = false;
+    };
   }, [server.name, refresh]);
   if (error)
     return (
@@ -131,9 +139,10 @@ function Workspace({ server, onBack }: { server: ManagedServer; onBack: () => vo
         </Empty>
       </Card>
     );
-  if (!info) return <p className="py-16 text-center text-[13px] text-fg-3">Connecting to {server.server_name}…</p>;
+  if (!open || open.name !== server.name) return <p className="py-16 text-center text-[13px] text-fg-3">Connecting to {server.server_name}…</p>;
+  // Keyed by server: another server gets a new store, never this one's state.
   return (
-    <StoreProvider initial={info} onSignedOut={() => {}}>
+    <StoreProvider key={open.name} transport={open.transport} initial={open.info} onSignedOut={() => {}}>
       <WorkspaceBody server={server} onBack={onBack} />
     </StoreProvider>
   );

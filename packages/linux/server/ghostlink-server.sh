@@ -126,10 +126,14 @@ ensure_account() {
     chown -R "$uid:$gid" "$STATE"
 }
 
-# Shared hardening: host networking (as Outline does), no capabilities, read-only root,
-# no privilege escalation; only the state directory is writable.
+# Shared hardening: host networking (as Outline does), read-only root, no privilege escalation;
+# only the state directory is writable. Docker gives a container started as another user no
+# capabilities at all, so this one starts as root with only the four the server needs to keep
+# one: it drops the others, becomes the server account ($uid:$gid, GHOSTLINK_RUN_AS) and runs as
+# it with only NET_BIND_SERVICE, which lets it listen on ports below 1024 such as 443.
 hardening() {
-    printf '%s\n' --network host --user "$uid:$gid" --cap-drop ALL \
+    printf '%s\n' --network host --user 0:0 --env "GHOSTLINK_RUN_AS=$uid:$gid" --cap-drop ALL \
+        --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --cap-add NET_BIND_SERVICE \
         --security-opt no-new-privileges --read-only --volume "$STATE:$STATE"
 }
 

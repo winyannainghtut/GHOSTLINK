@@ -35,7 +35,8 @@ Release CI installs the server `.deb` on each Ubuntu runner with `GHOSTLINK_SERV
 - matches the served certificate against the printed pin;
 - checks that a wrong path gets `404`;
 - creates a user and a key for every protocol;
-- checks the container is running read-only, with all capabilities dropped, as an unprivileged user on host networking;
+- checks the container is running read-only with `no-new-privileges` on host networking, with all capabilities dropped but the four the server needs to start (`SETUID`, `SETGID`, `SETPCAP`, `NET_BIND_SERVICE`), and that the running server is the `ghostlink-server` account with only `NET_BIND_SERVICE` (`/proc/PID/status`: effective, permitted, ambient and bounding sets, and `NoNewPrivs`);
+- moves Shadowsocks to port 443 and checks that it listens there, on TCP and UDP, and that its keys follow;
 - checks the state directory is `700 ghostlink-server`;
 - reinstalls, and confirms users and keys survive;
 - purges, and confirms the container, state and account are gone.

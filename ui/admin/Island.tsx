@@ -3,15 +3,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LiveRates, Switch, cx, useUI } from '@shared/glass';
-import { APPLE, PROTOCOLS, PROTOCOL_HINTS, api, type ProtocolId, type Server } from './api';
+import { APPLE, PROTOCOLS, PROTOCOL_HINTS, type ProtocolId, type Server } from './api';
 import { turnedOn } from './protocols';
-import { useStore } from './store';
+import { useApi, useStore } from './store';
 
 const ORDER: ProtocolId[] = ['amneziawg', 'wireguard', 'vless', 'shadowsocks', 'ikev2', 'ipsec'];
 
 export function Island() {
   const { server, live, stale, setServer } = useStore();
   const { toast, confirm } = useUI();
+  const { api } = useApi();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -34,6 +35,9 @@ export function Island() {
   }, [open]);
   const enabled = ORDER.filter(p => server.protocols[p]?.enabled);
   const active = enabled.length > 0;
+  // The API answers but the VPN engine is down (usually another program holds one of its ports):
+  // not "Live", whatever is switched on.
+  const engineError = live?.health?.engine_error;
 
   useEffect(() => {
     if (!open) return;
@@ -77,12 +81,14 @@ export function Island() {
         onClick={() => setOpen(!open)}
         className="flex h-10 items-center gap-2.5 rounded-full bg-black px-4 text-[12.5px] text-white shadow-[0_10px_30px_-12px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.12)] transition-all duration-500 hover:px-5"
       >
-        <span className={cx('relative inline-flex size-2', stale ? 'text-[#ff6961]' : active ? 'text-[#30d158]' : 'text-white/40')}>
-          {active && !stale && <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-50 motion-reduce:animate-none" />}
+        <span className={cx('relative inline-flex size-2', stale || engineError ? 'text-[#ff6961]' : active ? 'text-[#30d158]' : 'text-white/40')}>
+          {active && !stale && !engineError && <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-50 motion-reduce:animate-none" />}
           <span className="relative size-2 rounded-full bg-current" />
         </span>
         {stale ? (
           <span className="font-medium">Server not answering</span>
+        ) : engineError ? (
+          <span className="font-medium">VPN engine down</span>
         ) : (
           <>
             <span className="font-medium">{active ? 'Live' : 'Paused'}</span>
@@ -94,6 +100,12 @@ export function Island() {
       </button>
       {open && anchor && createPortal(
         <div ref={panel} style={{ top: anchor.top, left: anchor.left }} className="glass-strong fixed z-40 w-[340px] -translate-x-1/2 rounded-[28px] p-3 animate-[sheet-in_0.25s_cubic-bezier(0.2,0.9,0.25,1)]">
+          {engineError && (
+            <p className="mx-2 mb-2 rounded-[18px] bg-bad/10 px-3 py-2 text-[12px] break-words text-bad">
+              The VPN engine is down, so nobody can connect: <span className="mono">{engineError}</span>
+              {/[.!?]$/.test(engineError) ? '' : '.'} The server tries again every 30 s.
+            </p>
+          )}
           <p className="px-2 pt-1 pb-2 text-[12.5px] text-fg-3">Protocols on this server</p>
           {/* grid-cols-1 (minmax(0, 1fr)) keeps rows to the panel's width, so long hints are cut
               short instead of widening every row and pushing the switches out of the panel. */}

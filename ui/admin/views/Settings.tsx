@@ -2,12 +2,12 @@
 // monitoring retention.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Check, Field, Inner, Note, Sheet, useUI } from '@shared/glass';
-import { api } from '../api';
 import { defaultSpeedChange, defaultSpeedText } from '../limits';
-import { useStore } from '../store';
+import { useApi, useStore } from '../store';
 
 export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClose: () => void; footer?: ReactNode }) {
   const { server, reloadServer } = useStore();
+  const { api } = useApi();
   const { toast, confirm } = useUI();
   const [name, setName] = useState(server.name);
   const [hostname, setHostname] = useState(server.hostname);

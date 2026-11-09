@@ -28,12 +28,14 @@ const (
 	chainMSS = "GHOSTLINK-MESH-MSS"
 )
 
-// Jumps are the rules placed first in built-in chains for interface iface.
+// Jumps are the rules placed first in built-in chains for interface iface. The FORWARD ones are
+// also kept first in Docker's DOCKER-USER: FWD ends every packet with ACCEPT or DROP, and OUT
+// only accepts replies, so a packet that passes them twice is not changed.
 func Jumps(iface string) []hostfw.Jump {
 	return []hostfw.Jump{
 		{Table: "filter", Chain: "INPUT", Match: []string{"-i", iface}, Target: chainIn},
-		{Table: "filter", Chain: "FORWARD", Match: []string{"-i", iface}, Target: chainFwd},
-		{Table: "filter", Chain: "FORWARD", Match: []string{"-o", iface}, Target: chainOut},
+		{Table: "filter", Chain: "FORWARD", Match: []string{"-i", iface}, Target: chainFwd, Docker: true},
+		{Table: "filter", Chain: "FORWARD", Match: []string{"-o", iface}, Target: chainOut, Docker: true},
 		{Table: "nat", Chain: "POSTROUTING", Target: chainNAT},
 		{Table: "mangle", Chain: "FORWARD", Target: chainMSS},
 	}

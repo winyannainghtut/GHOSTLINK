@@ -3,6 +3,9 @@ Description=Ghostlink mesh agent (private network between your servers)
 Documentation=https://github.com/winyannainghtut/GHOSTLINK/blob/main/docs/deployment/mesh.md
 After=network-online.target
 Wants=network-online.target
+# After Docker where it is installed (no dependency): its DOCKER-USER chain then exists when the
+# agent first puts its firewall jumps in, so Docker's rules never run ahead of the mesh's.
+After=docker.service
 # Started only after this machine joined a mesh (ghostlink-mesh join).
 ConditionPathExists=/var/lib/ghostlink-mesh/node.json
 

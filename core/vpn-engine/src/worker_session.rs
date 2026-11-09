@@ -22,7 +22,7 @@ use tokio::{
 };
 
 pub const WORKER_VERSION: &str =
-    "Ghostlink tunnel worker 0.8.3; sing-box 1.14.4; amneziawg-go 3.1.20260828";
+    "Ghostlink tunnel worker 0.8.4; sing-box 1.14.4; amneziawg-go 3.1.20260828";
 
 /// Tag of the tunnel outbound or endpoint in every generated configuration.
 pub const PROXY_TAG: &str = "proxy";

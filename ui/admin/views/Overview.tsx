@@ -6,8 +6,8 @@ import { Bars } from '@shared/Bars';
 import { byteRate, bytes, duration, plural, speed } from '@shared/format';
 import { Button, Card, CardTitle, Facts, Meter, Note, Segmented, cx } from '@shared/glass';
 import { usePoll } from '@shared/hooks';
-import { api, protocolName, type Stats } from '../api';
-import { useStore } from '../store';
+import { protocolName, type Stats } from '../api';
+import { useApi, useStore } from '../store';
 
 // The day and week totals change as traffic is recorded: fetch them again while the page is open.
 const STATS_MS = 60_000;
@@ -38,6 +38,7 @@ function BigNumber({ value, unit }: { value: ReactNode; unit?: string }) {
 
 export function Overview({ onNewClient }: { onNewClient: () => void }) {
   const { server, users, live, stale } = useStore();
+  const { api } = useApi();
   const [range, setRange] = useState<Range>('live');
   const [day, setDay] = useState<Stats | null>(null);
   const [week, setWeek] = useState<Stats | null>(null);
@@ -80,6 +81,16 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
       {stale && (
         <Card className="border-bad/40">
           <Note tone="bad">The server is not answering, so live data is paused. It continues when the server answers again.</Note>
+        </Card>
+      )}
+      {!stale && health?.engine_error && (
+        <Card className="border-bad/40">
+          <Note tone="bad">
+            <span className="break-words">
+              The VPN engine is not running, so nobody can connect: <span className="mono">{health.engine_error}</span>
+              {/[.!?]$/.test(health.engine_error) ? '' : '.'} Usually another program holds one of its ports: move that protocol to another port under Network, or stop the other program. The server tries again every 30 s.
+            </span>
+          </Note>
         </Card>
       )}
       {health?.detail_paused && (

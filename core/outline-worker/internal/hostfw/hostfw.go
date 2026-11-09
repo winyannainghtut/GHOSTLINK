@@ -3,9 +3,10 @@
 
 // Package hostfw manages a Ghostlink agent's own iptables chains on a host. An agent renders its
 // chains as iptables-restore input; Restore replaces exactly those chains (atomically per table,
-// with --noflush), EnsureJumps keeps one jump to each from its built-in chain, and Remove takes
-// everything away again. Rules from other software are never touched. It uses the iptables
-// backend the host already uses (nft or legacy), because a packet must pass both backends.
+// with --noflush), EnsureJumps keeps one jump to each from its built-in chain (and from Docker's
+// DOCKER-USER for forwarded traffic), and Remove takes everything away again. Rules from other
+// software are never touched. It uses the iptables backend the host already uses (nft or
+// legacy), because a packet must pass both backends.
 package hostfw
 
 import (
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -23,6 +25,10 @@ type Jump struct {
 	Chain  string
 	Match  []string
 	Target string
+	// Docker: a filter FORWARD jump also kept first in Docker's DOCKER-USER (see dockerChain).
+	// Only for a chain that ends every packet it sees with ACCEPT or DROP, or that does nothing
+	// but accept, since a packet can pass it twice: once from DOCKER-USER, once from FORWARD.
+	Docker bool
 }
 
 func (j Jump) args(op string, position ...string) []string {
@@ -111,10 +117,39 @@ func (f *Firewall) Restore(ctx context.Context, tables map[string]string) error 
 	return nil
 }
 
-// EnsureJumps puts back a jump someone removed (for example a firewall reload), first in its
-// chain.
-func (f *Firewall) EnsureJumps(ctx context.Context, jumps []Jump) error {
+// dockerChain is where Docker lets other software filter forwarded traffic. Docker keeps its
+// jump to DOCKER-USER first in FORWARD, ahead of the rules that accept traffic to its containers'
+// published ports, and never changes what is in it. A jump that is first in FORWARD does not
+// stay first: Docker puts its own rules ahead of it when it starts later. So a filter FORWARD
+// jump marked Docker is also kept first in DOCKER-USER while that chain exists, and the agent's
+// rules run before Docker's accept rules, without competing with Docker for the first place in
+// FORWARD (code review 2026-11-09, F1).
+const dockerChain = "DOCKER-USER"
+
+// withDocker adds the DOCKER-USER copies of the jumps marked Docker, when the host has that chain.
+func (f *Firewall) withDocker(ctx context.Context, jumps []Jump) []Jump {
+	if f.iptables(ctx, "-t", "filter", "-S", dockerChain) != nil {
+		return jumps
+	}
+	return append(slices.Clone(jumps), dockerCopies(jumps)...)
+}
+
+// dockerCopies are the DOCKER-USER copies of the filter FORWARD jumps marked Docker.
+func dockerCopies(jumps []Jump) []Jump {
+	var copies []Jump
 	for _, j := range jumps {
+		if j.Docker && j.Table == "filter" && j.Chain == "FORWARD" {
+			j.Chain = dockerChain
+			copies = append(copies, j)
+		}
+	}
+	return copies
+}
+
+// EnsureJumps puts back a jump someone removed (for example a firewall reload), first in its
+// chain, and adds the DOCKER-USER copies once Docker made that chain.
+func (f *Firewall) EnsureJumps(ctx context.Context, jumps []Jump) error {
+	for _, j := range f.withDocker(ctx, jumps) {
 		if f.iptables(ctx, j.args("-C")...) == nil {
 			continue
 		}
@@ -125,9 +160,9 @@ func (f *Firewall) EnsureJumps(ctx context.Context, jumps []Jump) error {
 	return nil
 }
 
-// HasJumps reports whether every jump is in place.
+// HasJumps reports whether every jump is in place, the DOCKER-USER copies included.
 func (f *Firewall) HasJumps(ctx context.Context, jumps []Jump) bool {
-	for _, j := range jumps {
+	for _, j := range f.withDocker(ctx, jumps) {
 		if f.iptables(ctx, j.args("-C")...) != nil {
 			return false
 		}
@@ -135,9 +170,10 @@ func (f *Firewall) HasJumps(ctx context.Context, jumps []Jump) bool {
 	return true
 }
 
-// Remove deletes the jumps, then flushes and deletes the chains (table -> chains).
+// Remove deletes the jumps (also from DOCKER-USER), then flushes and deletes the chains
+// (table -> chains).
 func (f *Firewall) Remove(ctx context.Context, jumps []Jump, chains map[string][]string) {
-	for _, j := range jumps {
+	for _, j := range append(slices.Clone(jumps), dockerCopies(jumps)...) {
 		for i := 0; i < 8 && f.iptables(ctx, j.args("-D")...) == nil; i++ {
 		}
 	}
