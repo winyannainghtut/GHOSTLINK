@@ -5,13 +5,13 @@ import { BarChart, fillBuckets } from '@shared/BarChart';
 import { Bars } from '@shared/Bars';
 import { ago, bytes, dateTime, plural, speed } from '@shared/format';
 import { Button, Check, Field, Inner, Note, Segmented, Sheet, StatusDot, useUI } from '@shared/glass';
-import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, protocolName, type Client, type Key, type ProtocolId, type Stats, type User } from '../api';
+import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, protocolName, type Client, type Key, type ProtocolId, type Stats, type User } from '../api';
 import { hasConf, isApple, tunnelAddress, useKeyTools } from '../keys';
 import { dataLimitValue } from '../limits';
 import { firstKeyProtocol } from '../protocols';
 import { RulesEditor } from '../RulesEditor';
 import { SpeedLimitField, speedChange, speedChoice } from '../SpeedLimit';
-import { clientStatus, statusLabel, useStore } from '../store';
+import { clientStatus, statusLabel, useApi, useStore } from '../store';
 
 type Tab = 'keys' | 'usage' | 'rules' | 'settings';
 
@@ -63,6 +63,7 @@ export function ClientSheet({ user, onClose }: { user: User | null; onClose: () 
 function KeysTab({ user }: { user: User }) {
   const { reloadUsers, server } = useStore();
   const { toast } = useUI();
+  const { api } = useApi();
   const [keys, setKeys] = useState<Key[] | null>(null);
   const load = () => api<Key[]>('GET', `/users/${user.id}/keys`).then(setKeys).catch(e => toast(e.message, 'bad'));
   const tools = useKeyTools(() => (load(), reloadUsers()));
@@ -239,6 +240,7 @@ function KeysTab({ user }: { user: User }) {
 }
 
 function UsageTab({ user }: { user: User }) {
+  const { api } = useApi();
   const [range, setRange] = useState<'24h' | '7d' | '30d' | '90d'>('7d');
   const [stats, setStats] = useState<Stats | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
@@ -250,7 +252,7 @@ function UsageTab({ user }: { user: User }) {
     return () => {
       current = false;
     };
-  }, [range, user.id]);
+  }, [api, range, user.id]);
   return (
     <div className="grid grid-cols-1 gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -306,6 +308,7 @@ function UsageTab({ user }: { user: User }) {
 function RulesTab({ user }: { user: User }) {
   const { reloadUsers } = useStore();
   const { toast } = useUI();
+  const { api } = useApi();
   return (
     <div className="grid gap-3">
       <Note>These apply only to {user.name}, in addition to the rules for everyone{user.exempt_from_global_rules ? ' (from which this client is exempt)' : ''}.</Note>
@@ -324,6 +327,7 @@ function RulesTab({ user }: { user: User }) {
 function SettingsTab({ user, onRemoved }: { user: User; onRemoved: () => void }) {
   const { server, reloadUsers } = useStore();
   const { toast, confirm } = useUI();
+  const { api } = useApi();
   const [name, setName] = useState(user.name);
   const [limit, setLimit] = useState(user.data_limit_bytes ? String(user.data_limit_bytes / 1e9) : '');
   const [speedLimit, setSpeedLimit] = useState(speedChoice(user.speed_limit_bps));

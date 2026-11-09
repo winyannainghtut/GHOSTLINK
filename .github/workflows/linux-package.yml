@@ -136,8 +136,29 @@ jobs:
           for protocol in amneziawg wireguard vless shadowsocks; do
             curl -sk --fail -X POST -d "{\"protocol\":\"$protocol\"}" "$url/users/$user/keys" | jq -e '.access_key | length > 20'
           done
-          docker inspect ghostlink-server --format '{{.State.Running}} readonly={{.HostConfig.ReadonlyRootfs}} capdrop={{.HostConfig.CapDrop}} user={{.Config.User}} net={{.HostConfig.NetworkMode}}' | tee container.txt
-          grep -q '^true readonly=true capdrop=\[ALL\] user=[0-9]*:[0-9]* net=host$' container.txt
+          docker inspect ghostlink-server --format '{{.State.Running}} readonly={{.HostConfig.ReadonlyRootfs}} capdrop={{.HostConfig.CapDrop}} add={{.HostConfig.CapAdd}} user={{.Config.User}} net={{.HostConfig.NetworkMode}} nnp={{.HostConfig.SecurityOpt}}' | tee container.txt
+          grep -q '^true readonly=true capdrop=\[ALL\] add=\[[A-Z_ ]*\] user=0:0 net=host nnp=\[no-new-privileges\]$' container.txt
+          added=$(sed -n 's/.* add=\[\([^]]*\)\].*/\1/p' container.txt | tr ' ' '\n' | sed 's/^CAP_//' | sort | tr '\n' ' ')
+          test "$added" = "NET_BIND_SERVICE SETGID SETPCAP SETUID "
+          # The container starts as root only so that the server can keep NET_BIND_SERVICE: the
+          # running server is the server account, holds that one capability and nothing else, and
+          # cannot gain more (bounding set, no_new_privs).
+          pid=$(docker inspect --format '{{.State.Pid}}' ghostlink-server)
+          grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs):' "/proc/$pid/status" | tee process.txt
+          account=$(id -u ghostlink-server)
+          group=$(id -g ghostlink-server)
+          grep -Pq "^Uid:\t$account\t$account\t$account\t$account$" process.txt
+          grep -Pq "^Gid:\t$group\t$group\t$group\t$group$" process.txt
+          grep -Pq '^Groups:\s*$' process.txt
+          for set in CapPrm CapEff CapBnd CapAmb; do grep -Pq "^$set:\t0000000000000400$" process.txt; done
+          grep -Pq '^CapInh:\t0000000000000400$' process.txt
+          grep -Pq '^NoNewPrivs:\t1$' process.txt
+          # So it listens on ports below 1024: Shadowsocks moves to 443, TCP and UDP, and its keys follow.
+          curl -sk --fail -X PATCH -d '{"protocols":{"shadowsocks":{"port":443}}}' "$url/server" | jq -e '.protocols.shadowsocks.port == 443'
+          for i in $(seq 1 20); do ss -ltn | grep -q ':443 ' && break; sleep 0.5; done
+          ss -ltn | grep ':443 ' > /dev/null
+          ss -lun | grep ':443 ' > /dev/null
+          sudo ghostlink-server keys ci --show | grep -E 'ss://[^@]+@127\.0\.0\.1:443/' > /dev/null
           sudo stat -c '%a %U' /var/lib/ghostlink-server | grep -qx '700 ghostlink-server'
           # Root never follows a symlink in the state, which the container account controls:
           # "ipsec enable" refuses one in place of the ipsec directory and changes nothing.
@@ -286,7 +307,8 @@ jobs:
           cat scripts/install-server.sh | sudo bash -s -- --package "./$deb" --hostname 127.0.0.1 --migrate-outline --check | tee check.txt
           grep -q 'Check only' check.txt
           grep -q '4 clients' check.txt
-          grep -q 'Old: it uses port 443' check.txt
+          # Old's key on 443, a port below 1024, is kept as it is: every key is.
+          grep -q '4 keep their Outline key as it is' check.txt
           test "$(docker inspect --format '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' shadowbox)" = "true always"
           # grep reads its whole input here: with pipefail, grep -q quitting at its first match can kill the writer with SIGPIPE (exit 141).
           sudo ghostlink-server users | grep 'No users yet' > /dev/null
@@ -305,6 +327,7 @@ jobs:
           grep -q 'Imported from Outline' migrate.txt
           grep -q 'To go back to Outline' migrate.txt
           grep -q '45679/udp  Shadowsocks (keys from Outline)' migrate.txt
+          grep -q '443/udp  Shadowsocks (keys from Outline)' migrate.txt
           # The server is new, so only Shadowsocks is on: the protocols that are off are not listed (or opened).
           if grep -Eq '^  [0-9]+/(tcp|udp)  (VLESS-REALITY|WireGuard|AmneziaWG)$' migrate.txt; then echo "the installer lists a protocol that is off" >&2; exit 1; fi
           grep -q 'off for now: amneziawg, wireguard, vless' migrate.txt
@@ -315,11 +338,14 @@ jobs:
           ss -lun > udp.txt
           grep -q ':45678 ' tcp.txt
           grep -q ':45679 ' tcp.txt
+          grep -q ':443 ' tcp.txt
+          grep -q ':443 ' udp.txt
           grep -q ':45678 ' udp.txt
           sudo ghostlink-server --json users | jq -e '[.[].name] == ["Phone", "Key 1", "Router", "Old"] and .[0].data_limit_bytes == 50000000000'
           credential() { printf '%s' "$1" | base64 -w0 | tr '+/' '-_' | tr -d '='; }
           sudo ghostlink-server keys Phone --show | grep -F "ss://$(credential chacha20-ietf-poly1305:cGhvbmUtcGFzc3dvcmQ)@127.0.0.1:45678/" > /dev/null
           sudo ghostlink-server keys Router --show | grep -F "ss://$(credential aes-256-gcm:cm91dGVyLXBhc3M)@127.0.0.1:45679/" > /dev/null
+          sudo ghostlink-server keys Old --show | grep -F "ss://$(credential chacha20-ietf-poly1305:b2xkLXBhc3M)@127.0.0.1:443/" > /dev/null
           sudo ghostlink-server settings | grep '45679 for keys from Outline' > /dev/null
           # The private copies are gone; Outline's own files are as they were.
           sudo test ! -e /var/lib/ghostlink-server/outline-import

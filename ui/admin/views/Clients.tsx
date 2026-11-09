@@ -4,10 +4,10 @@ import { useMemo, useState } from 'react';
 import { ago, bytes, plural, speed } from '@shared/format';
 import { Button, Card, Empty, IconButton, Meter, Segmented, StatusDot, Switch, cx, useUI, type Status } from '@shared/glass';
 import { useNow, useStoredState } from '@shared/hooks';
-import { api, protocolName, type User } from '../api';
+import { protocolName, type User } from '../api';
 import { DeviceIcon, hasConf, isApple, primaryKey, tunnelAddress, useKeyTools } from '../keys';
 import { speedLabel } from '../SpeedLimit';
-import { clientStatus, statusLabel, useStore } from '../store';
+import { clientStatus, statusLabel, useApi, useStore } from '../store';
 import { ClientSheet } from './ClientSheet';
 
 type Filter = 'all' | 'online' | 'idle' | 'paused';
@@ -16,6 +16,7 @@ const FILTERS = ['all', 'online', 'idle', 'paused'] as const;
 export function Clients({ onNewClient }: { onNewClient: () => void }) {
   const { users, liveById, lastClient, reloadUsers, loaded, stale } = useStore();
   const { toast } = useUI();
+  const { api } = useApi();
   const now = useNow(1000);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useStoredState<Filter>('ghostlink-client-filter', 'all', FILTERS);

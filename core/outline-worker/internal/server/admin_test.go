@@ -222,6 +222,8 @@ func TestAdminCommands(t *testing.T) {
 	// Outline's files, imported from a directory (which is left as it was).
 	dir := t.TempDir()
 	refused("cannot read Outline's shadowbox_config.json", "import-outline", "--dir", dir)
+	// As on a server that cannot listen below 1024: Old, on port 80, gets a new key.
+	withLowestPort(t, 1024)
 	port := freeSharedPort(t)
 	serverJSON, keysJSON := outlineFiles("127.0.0.1", port, nil,
 		map[string]any{"name": "Phone", "password": "cGhvbmUtcGFzc3dvcmQ", "port": port},

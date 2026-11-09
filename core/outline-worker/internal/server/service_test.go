@@ -182,6 +182,8 @@ func TestTurningAProtocolOnTriesItsPort(t *testing.T) {
 // A protocol that is off keeps its port: the dashboard and the other protocols cannot take it,
 // and moving it is checked as for a protocol that is on.
 func TestPortsOfAProtocolThatIsOffStayReserved(t *testing.T) {
+	// As a server not started by the host script: it cannot listen below 1024.
+	withLowestPort(t, 1024)
 	server := newTestServer(t, func(s *State) {
 		onlyShadowsocks(s)
 		// As the server picks it (10000-32000): never one of the free ports the system hands out
@@ -210,6 +212,7 @@ func TestPortsOfAProtocolThatIsOffStayReserved(t *testing.T) {
 		{move(VLESS, before.APIPort), "api and vless cannot share port", kept},
 		{move(VLESS, before.DashboardPort), "dashboard and vless cannot share port", kept},
 		{move(VLESS, busy.Addr().(*net.TCPAddr).Port), "vless cannot use TCP port", "another program uses it"},
+		{move(VLESS, 443), "vless cannot use port 443", "this server cannot listen below port 1024"},
 	} {
 		if status := server.call(t, "PATCH", "/server", refused.patch, nil); status != http.StatusBadRequest ||
 			!strings.Contains(server.last, refused.want) || !strings.Contains(server.last, refused.also) {
@@ -247,9 +250,83 @@ func TestHeldPortsAreThoseThatListenNow(t *testing.T) {
 		u.Keys = append(u.Keys, key)
 	}
 	state.Users = append(state.Users, u)
-	want := map[uint16]bool{state.API.Port: true, state.Dashboard.Port: true, state.Shadowsocks.Port: true, state.AmneziaWG.Port: true}
+	want := map[heldPort]bool{{"tcp", state.API.Port}: true, {"tcp", state.Dashboard.Port}: true,
+		{"tcp", state.Shadowsocks.Port}: true, {"udp", state.Shadowsocks.Port}: true, {"udp", state.AmneziaWG.Port}: true}
 	if held := state.heldPorts(); !maps.Equal(held, want) {
 		t.Fatalf("held ports %v, want %v", held, want)
+	}
+}
+
+// Holding a port on one transport says nothing about the other: with WireGuard on UDP N and
+// another program on TCP N, VLESS cannot be turned on on N, and the other way round
+// (code review 2026-11-09, F3).
+func TestHeldPortsCountPerTransport(t *testing.T) {
+	var shared uint16
+	server := newTestServer(t, func(s *State) {
+		onlyShadowsocks(s)
+		port, err := pickPort(s.usedPorts(), portFree, "tcp", "udp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		shared = port
+		s.WireGuard.Enabled, s.WireGuard.Port, s.VLESS.Port = true, port, port
+	})
+	user := server.user(t, map[string]any{"name": "Shared"})
+	server.key(t, user, WireGuard)
+	busy, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", shared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := func(protocol string, enabled bool) map[string]any {
+		return map[string]any{"protocols": map[string]any{protocol: map[string]any{"enabled": enabled}}}
+	}
+	want := fmt.Sprintf("vless cannot use TCP port %d: another program uses it", shared)
+	if status := server.call(t, "PATCH", "/server", on(VLESS, true), nil); status != http.StatusBadRequest || !strings.Contains(server.last, want) {
+		t.Fatalf("VLESS on TCP %d, which another program holds, beside WireGuard on UDP %d: %d %s", shared, shared, status, server.last)
+	}
+	busy.Close()
+	// The other way round: VLESS holds TCP N, another program UDP N, and WireGuard is off.
+	server.must(t, http.StatusOK, "PATCH", "/server", on(VLESS, true), nil)
+	server.key(t, user, VLESS)
+	server.must(t, http.StatusOK, "PATCH", "/server", on(WireGuard, false), nil)
+	udp, err := net.ListenPacket("udp4", fmt.Sprintf("127.0.0.1:%d", shared))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	want = fmt.Sprintf("wireguard cannot use UDP port %d: another program uses it", shared)
+	if status := server.call(t, "PATCH", "/server", on(WireGuard, true), nil); status != http.StatusBadRequest || !strings.Contains(server.last, want) {
+		t.Fatalf("WireGuard on UDP %d, which another program holds, beside VLESS on TCP %d: %d %s", shared, shared, status, server.last)
+	}
+}
+
+// The dashboard moves only after the engine restarts, so swapping its port with a protocol's in
+// one change is refused with what to do instead, and doing that works (code review
+// 2026-11-09, F4).
+func TestSwappingTheDashboardPortTakesTwoChanges(t *testing.T) {
+	server := newTestServer(t, func(s *State) {
+		onlyShadowsocks(s)
+		if _, err := s.ensureDashboard(portFree); err != nil {
+			t.Fatal(err)
+		}
+	})
+	user := server.user(t, map[string]any{"name": "Swap"})
+	server.key(t, user, Shadowsocks)
+	var before serverInfo
+	server.must(t, http.StatusOK, "GET", "/server", nil, &before)
+	dashboard, shadowsocks := before.DashboardPort, before.Protocols[Shadowsocks].Port
+	swap := map[string]any{"dashboard_port": shadowsocks, "protocols": map[string]any{Shadowsocks: map[string]any{"port": dashboard}}}
+	want := fmt.Sprintf("shadowsocks cannot take port %d from the dashboard in the same change: move the dashboard to another port first", dashboard)
+	if status := server.call(t, "PATCH", "/server", swap, nil); status != http.StatusBadRequest || !strings.Contains(server.last, want) {
+		t.Fatalf("a swap in one change: %d %s", status, server.last)
+	}
+	// The dashboard first, to a third port; then Shadowsocks onto its old port, while the
+	// dashboard takes Shadowsocks's.
+	server.must(t, http.StatusOK, "PATCH", "/server", map[string]any{"dashboard_port": freeTCPPort(t)}, nil)
+	var after serverInfo
+	server.must(t, http.StatusOK, "PATCH", "/server", swap, &after)
+	if after.DashboardPort != shadowsocks || after.Protocols[Shadowsocks].Port != dashboard {
+		t.Fatalf("after the two changes: dashboard %d, Shadowsocks %d", after.DashboardPort, after.Protocols[Shadowsocks].Port)
 	}
 }
 

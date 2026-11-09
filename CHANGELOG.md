@@ -4,6 +4,32 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-10
+
+Servers can now listen on ports below 1024, the well-known ones such as 443 too, so Outline keys on those ports keep working after a move. This release also fixes what a code review of 0.8.3 found (`docs/development/code-review-2026-11-09.md`): two serious issues, mesh access rules that Docker could get around and an action in the app that could reach the wrong server, and four smaller ones. Upgrade the server package and, on mesh nodes, the mesh agent.
+
+### Added
+
+- **Ports below 1024:** Shadowsocks, VLESS-REALITY, WireGuard and AmneziaWG can use any port from 1 to 65535, the well-known ones below 1024 too, such as 443 (HTTPS), 80 or 53: `sudo ghostlink-server set --port shadowsocks=443`, or the port in Network, which now takes them. A port another program uses is still refused. The dashboard and the mesh coordinator keep to 1024–65535 and never take 443.
+  - **Moving from Outline:** keys on ports below 1024, usually 443, now keep their key as they are. Before, each got a new key. Already moved, and those keys got new keys? [Move from Outline](docs/deployment/migrate-from-outline.md#moved-before-084-and-keys-on-port-443-got-new-keys) says how to do the move again.
+  - **How:** Docker gives a container started as another user no capabilities at all, so the server's container now starts as root with only `SETUID`, `SETGID`, `SETPCAP` and `NET_BIND_SERVICE`. Before it does anything else, the server drops every capability but `NET_BIND_SERVICE`, becomes the `ghostlink-server` account and starts again as it. It then runs as that account with that one capability, which it can't add to; `no-new-privileges` and the read-only root stay. `docker inspect` now shows `User 0:0` and the four capabilities, and the running process (`/proc/PID/status`) shows the account and the one capability.
+
+### Fixed
+
+From the code review of 0.8.3:
+
+- **Mesh access rules and Docker (F1):** when Docker started after the mesh agent, at boot for example, its rules that accept traffic to its containers' published ports ran ahead of the agent's, so every mesh node could reach those ports whatever the access rules said. The agent now also keeps its rules first in Docker's `DOCKER-USER` chain, which Docker checks before its own rules and leaves alone. The agent adds them within 30 seconds of Docker making that chain, and at boot it starts after Docker. The mesh end-to-end test now has Docker's rules come first.
+- **Managing several servers in the app (F2):** an action with several requests, such as a new client (the client, then its key), could send its later requests to another server if you opened another server in *Servers I run* before the first answer came back. Each server's views now have their own connection, so every request of an action goes to the server it started on.
+- **Ports on TCP and UDP (F3):** a port Ghostlink held on one transport counted as its own on the other, so turning on VLESS on TCP N, while WireGuard served UDP N and another program held TCP N, was accepted and its first key then failed. The port is now tried on each transport the protocol uses.
+- **The dashboard's port and a protocol's in one change (F4):** a change that gave a protocol the dashboard's port, and the dashboard another port, failed with an engine error, because the dashboard moves only after the VPN engine has restarted. It is now refused with what to do instead: move the dashboard first, then the protocol.
+- **Mesh addresses restarted the VPN engine (F5):** an address in 100.64.0.0/10, such as the mesh's, counted as one of the host's public addresses, so a mesh node on the server joining, leaving or restarting restarted the VPN engine and disconnected everyone. Those addresses are blocked for VPN users anyway, and no longer change the engine's configuration.
+- **"Live" while the VPN engine was down (F6):** when the engine could not start, usually because another program holds one of its ports, the Island still showed *Live*. It now shows *VPN engine down*, its panel and the Overview say why, and the server keeps trying every 30 seconds.
+
+### Changed
+
+- **Port errors:** a port that can't be used now says why: "another program uses it", or, on a server that can't listen below 1024 (one not started by the package), "this server cannot listen below port 1024". Before, both said "another program uses it, or it is below 1024".
+- **Outline import:** a key on UDP 500 is no longer kept while IKEv2/IPsec is on (it uses that port), as for UDP 4500.
+
 ## [0.8.3] - 2026-11-09
 
 New servers run only Shadowsocks (Outline-compatible), with the other protocols a switch away, and turning a protocol on now checks its port and says which port to allow. Existing servers keep their settings.

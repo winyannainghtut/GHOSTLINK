@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default.
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`).
 
 ### Design decisions to keep
 
@@ -65,14 +65,12 @@ A report on a running server and a second full review, reviewed area by area and
      - an IKEv2 profile on an iPhone or Mac.
    - **Code signing is the maintainer's decision:** the Windows builds are unsigned, so SmartScreen says "Unknown publisher" (Azure Trusted Signing costs about $10 a month).
 2. **Follow-ups worth offering:**
-   - Outline keys on ports below 1024, often 443, could be kept if the server container got `NET_BIND_SERVICE`. Today they get new keys.
    - Separate download and upload caps.
    - Windows mesh nodes.
    - The Linux desktop app, blocked by the GTK `glib` advisory.
-3. **Limits found while checking the 0.8.1 notes** (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
-   - **Mesh and Docker:** the agent puts its `FORWARD` jump first only when it adds it (`hostfw.EnsureJumps`), and its 30 s check only tests that the jump exists. Docker puts its own rules first when it starts after the agent, and then every node reaches published container ports whatever the access rules say. Keep the agent's rules ahead of Docker's (for example through `DOCKER-USER`) without fighting kube-proxy or Calico, and add Docker's chains to the mesh end-to-end test.
-   - **An engine that cannot start** (new in 0.8.1, where `serve` no longer exits): `setup`, the installer and `status` say the server is running, and the app and the dashboard show nothing; only the log and `GET /live` (`health.engine_error`) tell. Show it.
-   - **Engine restarts from host addresses** (new in 0.8.1, a side effect of blocking every host address): addresses in 100.64.0.0/10, the mesh's default 100.96.0.0/16 included, count as public host addresses. So the coordinator's own mesh node restarts the VPN engine when it joins or leaves, and can when `ghostlink-mesh` restarts: the agent removes `glmesh0` while it restarts, and the server checks the addresses every 30 s. Those ranges are blocked anyway.
+3. **Known limits**, found while checking the 0.8.1 notes and in the 2026-11-09 code review (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
+   - **Docker after a firewall reload, for the IPsec component:** since 0.8.4 the mesh agent keeps its FORWARD jumps first in Docker's `DOCKER-USER` too (`hostfw`, `Jump.Docker`), so Docker's accept rules can't run ahead of the mesh's rules. The IPsec component's FORWARD jump does not get that copy: its chain starts with the speed limits (`hashlimit`), which a packet passing it twice would count twice. The component starts after Docker, so its jump is first, unless something (a firewalld reload) makes Docker put its rules first again while the jump stays. Software that keeps putting its own rules first in FORWARD (Calico) is not handled for the mesh either.
+   - **An engine that cannot start:** since 0.8.4 the app and the dashboard show it (Island: *VPN engine down*; an Overview banner with the reason). `setup`, the installer and `status` still say the server is running.
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
    - **Engine log:** the packaged server has no switch for it.
@@ -222,7 +220,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.3 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.4 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -354,7 +352,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.3; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.4; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -723,7 +721,7 @@ No successful full TUN connection, all-application routing, full/split route com
 
 `core/outline-worker/cmd/ghostlink-server` + `internal/server` (GPL, same Go module as the worker) is an Outline-style server:
 - **Protocols and API:** one sing-box instance serves Shadowsocks, VLESS-REALITY, and WireGuard/AmneziaWG through `internal/awg` (a new server has only Shadowsocks on), with an HTTPS management API (TLS 1.3, self-signed P-256, secret path, `certSha256` pin).
-- **Packaging:** `.deb`/`.rpm` (`packages/linux/server/`, `scripts/build-linux-server.sh`) carry the image (`docker save`); the postinst loads it and prints the management key. The container runs with host networking, no capabilities, a read-only root and a dedicated host account.
+- **Packaging:** `.deb`/`.rpm` (`packages/linux/server/`, `scripts/build-linux-server.sh`) carry the image (`docker save`); the postinst loads it and prints the management key. The container runs with host networking, a read-only root, `no-new-privileges` and a dedicated host account. It starts as root with only SETUID, SETGID, SETPCAP and NET_BIND_SERVICE; the server's first step (`cmd/ghostlink-server/account_linux.go`, `GHOSTLINK_RUN_AS=uid:gid`) drops the bounding set to NET_BIND_SERVICE, becomes the account keeping that one capability as ambient, and re-execs itself, so it serves ports below 1024 (443) without being root. Docker sets no ambient capabilities, so `--user` with `--cap-add` alone would not do.
 - **Rules:** always-on internal blocks, then per-user (`auth_user`), exempt and global rules; usage via a router `ConnectionTracker`; data limits.
 
 Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) for operation and the API.

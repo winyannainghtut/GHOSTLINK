@@ -247,8 +247,9 @@ func (a *Agent) firewall(ctx context.Context, c *meshproto.Config) error {
 }
 
 // keepFirewall puts the firewall back when something on the host removed it (a firewall reload,
-// netfilter-persistent, iptables -F). While a configuration is applied it checks the jumps every
-// 30 seconds; what removes them removes the chains too, so both are restored.
+// netfilter-persistent, iptables -F), and adds the jumps in Docker's DOCKER-USER once Docker has
+// made that chain (see hostfw). While a configuration is applied it checks the jumps every 30
+// seconds; what removes them removes the chains too, so both are restored.
 func (a *Agent) keepFirewall(ctx context.Context) {
 	if a.applied == nil || time.Since(a.fwChecked) < 30*time.Second {
 		return
@@ -258,7 +259,7 @@ func (a *Agent) keepFirewall(ctx context.Context) {
 		a.fwProblem = ""
 		return
 	}
-	a.Log.Printf("the mesh firewall rules were removed from this machine; restoring them")
+	a.Log.Printf("the mesh firewall rules are missing on this machine (a firewall reload, or Docker started); restoring them")
 	if err := a.firewall(ctx, a.applied); err != nil {
 		a.fwProblem = "could not restore the " + err.Error()
 		a.Log.Printf("%s", a.fwProblem)

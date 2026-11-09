@@ -78,6 +78,10 @@ func detectPublicAddress() (string, error) {
 }
 
 func main() {
+	// First of all: a server started as root becomes the server account (account_linux.go).
+	if err := becomeAccount(); err != nil {
+		fail("%v", err)
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

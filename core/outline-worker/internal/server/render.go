@@ -24,10 +24,28 @@ var internalRanges = []string{
 	"fc00::/7", "fe80::/10", "ff00::/8",
 }
 
+// internalPrefixes are internalRanges, parsed.
+var internalPrefixes = func() []netip.Prefix {
+	prefixes := make([]netip.Prefix, len(internalRanges))
+	for i, cidr := range internalRanges {
+		prefixes[i] = netip.MustParsePrefix(cidr)
+	}
+	return prefixes
+}()
+
+// isInternal reports an address that internalRanges block already.
+func isInternal(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return slices.ContainsFunc(internalPrefixes, func(p netip.Prefix) bool { return p.Contains(addr) })
+}
+
 type object = map[string]any
 
 // listenAddress is where inbounds listen; tests use loopback so no firewall prompt appears.
 var listenAddress = "::"
+
+// lowestPort is the lowest port the server can listen on (lowport_linux.go); tests replace it.
+var lowestPort = listenFloor
 
 // ipsecDNSSources may use the IPsec DNS listener: the pools (tests add loopback).
 var ipsecDNSSources = []string{ikev2Pool, ipsecPool}
@@ -293,15 +311,17 @@ var hostAddresses = func() []netip.Addr {
 }
 
 // serverAddresses are the addresses VPN users must not reach the server itself at: its
-// hostname when that is an address, and every public address of the host (private and
-// reserved ones are blocked anyway).
+// hostname when that is an address, and every public address of the host. Addresses the
+// internal ranges block anyway (private and reserved ones, and the mesh's 100.64.0.0/10) are
+// left out, so that one coming or going, as when this host joins or leaves a mesh, does not
+// change the engine's configuration and restart it (code review 2026-11-09, F5).
 func (s *State) serverAddresses() []netip.Addr {
 	var addrs []netip.Addr
 	if addr, err := netip.ParseAddr(s.Hostname); err == nil {
 		addrs = append(addrs, addr)
 	}
 	for _, addr := range hostAddresses() {
-		if N.IsPublicAddr(addr) && !slices.Contains(addrs, addr) {
+		if N.IsPublicAddr(addr) && !isInternal(addr) && !slices.Contains(addrs, addr) {
 			addrs = append(addrs, addr)
 		}
 	}
@@ -465,23 +485,40 @@ func (s *State) checkReservedPorts() error {
 	return nil
 }
 
-// heldPorts are the ports this server's own listeners hold now: the API, the dashboard, the mesh
-// while it is on, and what the engine binds (the protocols that are on and have keys, and the
-// IKEv2/IPsec DNS listener while IKEv2 or IPsec is on). A change may move a service onto one of
-// them, as when two services swap ports. A protocol that is off, or has no keys yet, holds no
-// port, so turning it on tries its port: another program may have taken it since the server was
-// created. Every listen_port in inbounds and endpoints is a uint16.
-func (s *State) heldPorts() map[uint16]bool {
-	held := map[uint16]bool{s.API.Port: true}
+// heldPort is a port on one transport, "tcp" or "udp": TCP and UDP can share a port number, so
+// holding one of them says nothing about the other.
+type heldPort struct {
+	network string
+	port    uint16
+}
+
+// listenerNetworks are the transports each kind of engine listener binds.
+var listenerNetworks = map[string][]string{"shadowsocks": {"tcp", "udp"}, "vless": {"tcp"}, "direct": {"tcp", "udp"}, "amneziawg": {"udp"}}
+
+// heldPorts are the ports this server's own listeners hold now, per transport: the API, the
+// dashboard, the mesh while it is on (TCP), and what the engine binds (the protocols that are on
+// and have keys, and the IKEv2/IPsec DNS listener while IKEv2 or IPsec is on). A change may move
+// a service onto one of them on the same transport, as when two services swap ports. A protocol
+// that is off, or has no keys yet, holds no port, so turning it on tries its port: another
+// program may have taken it since the server was created. Every listen_port in inbounds and
+// endpoints is a uint16.
+func (s *State) heldPorts() map[heldPort]bool {
+	held := map[heldPort]bool{{"tcp", s.API.Port}: true}
 	if s.Dashboard.Port != 0 {
-		held[s.Dashboard.Port] = true
+		held[heldPort{"tcp", s.Dashboard.Port}] = true
 	}
 	if s.meshEnabled() {
-		held[s.Mesh.Port] = true
+		held[heldPort{"tcp", s.Mesh.Port}] = true
 	}
 	for _, listener := range append(s.inbounds(), s.endpoints()...) {
-		if port, ok := listener.(object)["listen_port"].(uint16); ok {
-			held[port] = true
+		listener := listener.(object)
+		port, ok := listener["listen_port"].(uint16)
+		kind, _ := listener["type"].(string)
+		if !ok {
+			continue
+		}
+		for _, network := range listenerNetworks[kind] {
+			held[heldPort{network, port}] = true
 		}
 	}
 	return held

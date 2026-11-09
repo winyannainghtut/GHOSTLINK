@@ -197,7 +197,9 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 		return report, InputError{fmt.Errorf("the Outline server has %d access keys; a Ghostlink server can have at most %d clients", len(keys), MaxUsers)}
 	}
 
-	// Which keys can keep their port, cipher and password, and why the others cannot.
+	// Which keys can keep their port, cipher and password, and why the others cannot. Ports
+	// below 1024, such as 443, are kept too: the host script's container may listen there.
+	floor := int(lowestPort())
 	reasons := make([]string, len(keys))
 	candidates := make([]outlineCandidate, len(keys))
 	for i, k := range keys {
@@ -212,15 +214,15 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 			reasons[i] = "its password is empty, too long or not plain text"
 		case k.Port < 1 || k.Port > 65535:
 			reasons[i] = "it has no valid port"
-		case k.Port < 1024:
-			reasons[i] = fmt.Sprintf("it uses port %d; Ghostlink cannot serve ports below 1024", k.Port)
+		case k.Port < floor:
+			reasons[i] = fmt.Sprintf("it uses port %d, and this server cannot listen below port %d", k.Port, floor)
 		default:
 			candidates[i] = outlineCandidate{uint16(k.Port), method}
 		}
 	}
 
 	// Ghostlink ports that cannot move: the management API (its key is pinned to the port),
-	// the dashboard, the mesh and the IKEv2/IPsec DNS listener.
+	// the dashboard, the mesh and IKEv2/IPsec (its DNS listener, and UDP 500 and 4500 while on).
 	fixed := map[uint16]string{s.API.Port: "the management API"}
 	if s.Dashboard.Port != 0 {
 		fixed[s.Dashboard.Port] = "the dashboard"
@@ -234,6 +236,7 @@ func (s *State) importOutline(server outlineServer, keys []outlineKey, free func
 		fixed[s.IPsec.DNSPort] = "the IKEv2/IPsec DNS listener"
 	}
 	if s.appleEnabled() {
+		fixed[500] = "IKEv2/IPsec (UDP 500)"
 		fixed[4500] = "IKEv2/IPsec (UDP 4500)"
 	}
 	for i, c := range candidates {

@@ -5,7 +5,8 @@ import { Copy, Globe, Laptop, Smartphone, UserRound } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { confName, fileSafe } from '@shared/format';
 import { Button, Sheet, useUI } from '@shared/glass';
-import { APPLE, api, apiText, canUseHere, protocolName, saveFile, svgURL, useHere, type Key, type KeySummary, type User } from './api';
+import { APPLE, protocolName, svgURL, type Key, type KeySummary, type ServerApi, type User } from './api';
+import { useApi } from './store';
 
 export const isApple = (protocol: string) => (APPLE as string[]).includes(protocol);
 export const hasConf = (protocol: string) => protocol === 'wireguard' || protocol === 'amneziawg';
@@ -30,13 +31,14 @@ export function DeviceIcon({ user, size = 18 }: { user: User; size?: number }) {
 
 const saved = (where: string | null, what: string) => (where ? `${what} saved to ${where}.` : `${what} downloaded.`);
 
-export async function saveConf(user: User, key: Key): Promise<string> {
+// Each takes the API of the server the key is on (useApi).
+export async function saveConf({ saveFile }: ServerApi, user: User, key: Key): Promise<string> {
   if (!key.config) throw new Error('This key has no .conf file.');
   const where = await saveFile({ name: confName(user.name, key.protocol, key.id), extension: 'conf', content: key.config, mime: 'text/plain' });
   return saved(where, '.conf') + ' Import it in the WireGuard or AmneziaWG app.';
 }
 
-export async function saveProfile(user: User, key: Key, askPassword = false): Promise<string> {
+export async function saveProfile({ apiText, saveFile }: ServerApi, user: User, key: Key, askPassword = false): Promise<string> {
   const content = await apiText(`/users/${user.id}/keys/${key.id}/profile${askPassword ? '?prompt_password=1' : ''}`);
   const where = await saveFile({ name: `${fileSafe(user.name)}-${key.protocol}-${key.id}`, extension: 'mobileconfig', content, mime: 'application/x-apple-aspen-config' });
   return askPassword
@@ -44,12 +46,12 @@ export async function saveProfile(user: User, key: Key, askPassword = false): Pr
     : `${saved(where, 'Profile')} Send it privately (AirDrop, Mail or Files); opening it installs the VPN.`;
 }
 
-export async function saveKit(user: User): Promise<string> {
+export async function saveKit({ apiText, saveFile }: ServerApi, user: User): Promise<string> {
   const where = await saveFile({ name: `${fileSafe(user.name)}-vpn`, extension: 'html', content: await apiText(`/users/${user.id}/kit`), mime: 'text/html' });
   return `${saved(where, 'Connection kit')} It contains ${user.name}'s keys: send it privately.`;
 }
 
-export async function qrFor(user: User, key: Key, content: 'conf' | 'key'): Promise<string> {
+export async function qrFor({ apiText }: ServerApi, user: User, key: Key, content: 'conf' | 'key'): Promise<string> {
   return svgURL(await apiText(`/users/${user.id}/keys/${key.id}/qr?format=svg&content=${content}`));
 }
 
@@ -64,6 +66,8 @@ const scanHint = (key: Key, content: string) =>
 
 export function useKeyTools(onChanged?: () => void) {
   const { toast, confirm } = useUI();
+  const server = useApi();
+  const { api } = server;
   const [qr, setQr] = useState<{ url: string; title: string; note: string } | null>(null);
   // A profile saved without its password: the password stays on screen until the admin is done,
   // rather than in a toast that disappears.
@@ -84,14 +88,14 @@ export function useKeyTools(onChanged?: () => void) {
   };
 
   const tools = {
-    canUseHere: canUseHere(),
+    canUseHere: server.canUseHere,
     showQR: (user: User, id: string, content: 'auto' | 'conf' | 'key' = 'auto') =>
       run(async () => {
         const key = await full(user, id);
         const kind = content === 'auto' ? (key.config ? 'conf' : 'key') : content;
-        setQr({ url: await qrFor(user, key, kind), title: `${protocolName(key.protocol)} · ${user.name}`, note: scanHint(key, kind) });
+        setQr({ url: await qrFor(server, user, key, kind), title: `${protocolName(key.protocol)} · ${user.name}`, note: scanHint(key, kind) });
       }),
-    downloadConf: (user: User, id: string) => run(async () => toast(await saveConf(user, await full(user, id)))),
+    downloadConf: (user: User, id: string) => run(async () => toast(await saveConf(server, user, await full(user, id)))),
     copyKey: (user: User, id: string) =>
       run(async () => {
         const key = await full(user, id);
@@ -101,14 +105,14 @@ export function useKeyTools(onChanged?: () => void) {
     downloadProfile: (user: User, id: string, askPassword = false) =>
       run(async () => {
         const key = await full(user, id);
-        const note = await saveProfile(user, key, askPassword);
+        const note = await saveProfile(server, user, key, askPassword);
         if (askPassword && key.certificate_password) setSecret({ title: `Password for ${user.name}'s profile`, note, password: key.certificate_password });
         else toast(note);
       }),
-    downloadKit: (user: User) => run(async () => toast(await saveKit(user))),
+    downloadKit: (user: User) => run(async () => toast(await saveKit(server, user))),
     useHere: (user: User, id: string) =>
       run(async () => {
-        await useHere(user, await full(user, id));
+        await server.useHere(user, await full(user, id));
         toast('Saved under My servers on this device.');
       }),
     revoke: (user: User, key: KeySummary) =>

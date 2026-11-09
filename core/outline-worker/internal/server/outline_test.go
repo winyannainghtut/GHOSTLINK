@@ -82,6 +82,9 @@ func shadowsocksEndpointOf(t *testing.T, accessKey string) (string, string, stri
 
 // What an import keeps, what it cannot, and how it fits Outline's ports around Ghostlink's.
 func TestOutlineImportPlan(t *testing.T) {
+	// A server that cannot listen below 1024 (one not started by the host script): the key on
+	// 443 gets a new key. TestOutlineImportKeepsLowPorts covers the host script's server.
+	withLowestPort(t, 1024)
 	state, err := NewState(InitOptions{Hostname: "198.51.100.1", PortFree: func(string, uint16) bool { return true }})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +145,7 @@ func TestOutlineImportPlan(t *testing.T) {
 	for _, k := range report.NewKeys {
 		reasons[k.Client] = k.Reason
 	}
-	for name, want := range map[string]string{"Low": "below 1024", "Mixed": "another cipher", "Api": "management API",
+	for name, want := range map[string]string{"Low": "cannot listen below port 1024", "Mixed": "another cipher", "Api": "management API",
 		"Odd": "cipher", "Sneaky name": "password"} {
 		if !strings.Contains(reasons[name], want) {
 			t.Fatalf("%s should get a new key (%q), got %q (all: %v)", name, want, reasons[name], reasons)
@@ -290,7 +293,9 @@ func TestOutlineImportRefusals(t *testing.T) {
 	if _, err := fresh().importOutline(server, many, free, time.Now()); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Fatalf("too many keys: %v", err)
 	}
-	// Every key below 1024: the server keeps its own port and everyone gets a new key.
+	// Every key below 1024 on a server that cannot listen there: the server keeps its own port
+	// and everyone gets a new key.
+	withLowestPort(t, 1024)
 	state = fresh()
 	port := state.Shadowsocks.Port
 	serverJSON, keysJSON = outlineFiles("not a host!", 443, nil, map[string]any{"name": "A", "password": "apass", "port": 443})
@@ -301,6 +306,45 @@ func TestOutlineImportRefusals(t *testing.T) {
 	}
 	if report.Port != port || report.Kept != 0 || len(report.NewKeys) != 1 || report.HostnameChanged || state.Hostname != "198.51.100.1" || len(report.Notes) != 1 {
 		t.Fatalf("all keys below 1024: %+v", report)
+	}
+}
+
+// withLowestPort makes the server able to listen only from port floor up, for one test.
+func withLowestPort(t *testing.T, floor uint16) {
+	saved := lowestPort
+	lowestPort = func() uint16 { return floor }
+	t.Cleanup(func() { lowestPort = saved })
+}
+
+// The host script's server may listen below 1024: Outline keys on 443, Outline's usual port,
+// keep their key, and so does one on another low port. Only a port Ghostlink uses itself, here
+// IKEv2/IPsec's UDP 500, still needs a new key.
+func TestOutlineImportKeepsLowPorts(t *testing.T) {
+	withLowestPort(t, 1)
+	state, err := NewState(InitOptions{Hostname: "198.51.100.1", PortFree: func(string, uint16) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.IPsec.IKEv2Enabled = true
+	serverJSON, keysJSON := outlineFiles("203.0.113.7", 443, nil,
+		map[string]any{"name": "Father", "password": "fatherpass", "port": 443},
+		map[string]any{"name": "Mother", "password": "motherpass", "port": 443},
+		map[string]any{"name": "Web", "password": "webpass", "port": 80},
+		map[string]any{"name": "Ike", "password": "ikepass", "port": 500},
+	)
+	server, keys := decodeOutline(t, serverJSON, keysJSON)
+	report, err := state.importOutline(server, keys, func(string, uint16) bool { return true }, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CheckPorts(); err != nil {
+		t.Fatal(err)
+	}
+	if report.Port != 443 || state.Shadowsocks.Port != 443 || !slices.Equal(report.ExtraPorts, []uint16{80}) || report.Kept != 3 {
+		t.Fatalf("ports %d (state %d), extra %v, kept %d", report.Port, state.Shadowsocks.Port, report.ExtraPorts, report.Kept)
+	}
+	if len(report.NewKeys) != 1 || report.NewKeys[0].Client != "Ike" || !strings.Contains(report.NewKeys[0].Reason, "IKEv2/IPsec (UDP 500)") {
+		t.Fatalf("new keys: %+v", report.NewKeys)
 	}
 }
 

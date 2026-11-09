@@ -10,8 +10,8 @@
 # nata and natb can't reach each other directly, so their traffic must go through the relay.
 # Checked: joining, every pair pings, paths (direct vs relay), names (<node>.mesh), access rules,
 # a published port (DNAT, as Docker does), subnet sharing only after approval and the router's
-# own address in it, disabling and removing nodes, an interface deleted under its agent, the
-# firewall after a reload, and a clean host afterwards.
+# own address in it, Docker's rules ahead of the agent's, disabling and removing nodes, an
+# interface deleted under its agent, the firewall after a reload, and a clean host afterwards.
 # Usage: sudo tests/mesh/e2e.sh DIR-WITH-ghostlink-server-AND-ghostlink-mesh
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
@@ -159,6 +159,18 @@ wait_for 20 "web (nata) reaches pub's published port" published nata
 if http pub 8080; then fail "web reached db:8080, which no rule allows"; fi
 if http relay 5432; then fail "relay (not web) reached db:5432"; fi
 if published relay; then fail "relay (not web) reached pub's published port"; fi
+# Docker starting after the agent puts its own rules ahead of the agent's FORWARD jump: its
+# DOCKER-USER chain first, then rules that accept traffic to its containers' published ports.
+in_ns pub iptables -N DOCKER-USER
+in_ns pub iptables -A DOCKER-USER -j RETURN
+in_ns pub iptables -I FORWARD 1 -d 192.168.50.10/32 -p tcp --dport 8000 -j ACCEPT
+in_ns pub iptables -I FORWARD 1 -j DOCKER-USER
+docker_jump() { in_ns pub iptables -C DOCKER-USER -i glmesh0 -j GHOSTLINK-MESH-FWD 2>/dev/null; }
+wait_for 45 "pub's agent puts its jump first in DOCKER-USER" docker_jump
+test "$(in_ns pub iptables -S DOCKER-USER | sed -n 2p)" = "-A DOCKER-USER -o glmesh0 -j GHOSTLINK-MESH-OUT" ||
+    fail "the agent's jumps are not first in DOCKER-USER: $(in_ns pub iptables -S DOCKER-USER)"
+if published relay; then fail "relay (not web) reached pub's published port once Docker's rules came first"; fi
+wait_for 20 "web (nata) still reaches pub's published port" published nata
 reaches relay "$(address natb)" || fail "ping must still pass"
 admin mesh rules clear
 

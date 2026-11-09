@@ -66,9 +66,7 @@ func newBlockList(rules Rules) blockList {
 // newUDPGuard builds the guard for the engine configuration of s (see routeRules).
 func newUDPGuard(s *State) *udpGuard {
 	g := &udpGuard{ports: s.privatePorts(), global: newBlockList(s.Rules), users: map[string]userGuard{}}
-	for _, cidr := range internalRanges {
-		g.internal = append(g.internal, netip.MustParsePrefix(cidr))
-	}
+	g.internal = append(g.internal, internalPrefixes...)
 	for _, addr := range s.serverAddresses() {
 		g.internal = append(g.internal, netip.PrefixFrom(addr, addr.BitLen()))
 	}

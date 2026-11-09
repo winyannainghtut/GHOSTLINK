@@ -340,7 +340,7 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 		}
 		// New ports to try binding, and the ports this server's listeners held before the change.
 		var tryPorts []portTry
-		ours := s.heldPorts()
+		ours, dashboardBefore := s.heldPorts(), s.Dashboard.Port
 		if patch.DashboardPort != nil {
 			if *patch.DashboardPort != s.Dashboard.Port {
 				tryPorts = append(tryPorts, portTry{"the dashboard", *patch.DashboardPort, []string{"tcp"}})
@@ -389,7 +389,8 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 		}
 		// The engine binds a protocol's port only once the protocol has keys, and the dashboard
 		// moves only after the change is saved, so a port that cannot be bound (another program
-		// holds it, or it is below 1024) is tried here and refused now rather than failing later.
+		// holds it, or the server cannot listen that low) is tried here and refused now rather
+		// than failing later.
 		// A protocol that is off keeps its port for when it is turned on: nothing else may take it.
 		if len(tryPorts) > 0 {
 			if err := s.checkReservedPorts(); err != nil {
@@ -397,11 +398,24 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 			}
 		}
 		for _, try := range tryPorts {
+			// The dashboard moves only after the VPN engine has restarted, so a protocol cannot
+			// take the dashboard's port in the change that moves the dashboard away.
+			if try.service != "the dashboard" && dashboardBefore != 0 && try.port == dashboardBefore && slices.Contains(try.networks, "tcp") {
+				return InputError{fmt.Errorf("%s cannot take port %d from the dashboard in the same change: move the dashboard to another port first, then %s", try.service, try.port, try.service)}
+			}
 			for _, network := range try.networks {
-				// A port this server held before the change (two services swapping ports) is
-				// busy now, but free once the engine restarts.
-				if !ours[try.port] && !portFree(network, try.port) {
-					return InputError{fmt.Errorf("%s cannot use %s port %d: another program uses it, or it is below 1024", try.service, strings.ToUpper(network), try.port)}
+				// A port this server held before the change on the same transport (two services
+				// swapping ports) is busy now, but free once the engine restarts.
+				if ours[heldPort{network, try.port}] {
+					continue
+				}
+				// The host script's container may listen on any port, 443 too; a server run some
+				// other way may not have the capability for ports below 1024.
+				if floor := lowestPort(); try.port < floor {
+					return InputError{fmt.Errorf("%s cannot use port %d: this server cannot listen below port %d", try.service, try.port, floor)}
+				}
+				if !portFree(network, try.port) {
+					return InputError{fmt.Errorf("%s cannot use %s port %d: another program uses it", try.service, strings.ToUpper(network), try.port)}
 				}
 			}
 		}

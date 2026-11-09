@@ -13,7 +13,7 @@ import { WaveBackground } from '@shared/WaveBackground';
 import { FinishPicker, Mark, MotionButton, useAppearance, type Appearance } from '@shared/appearance';
 import { Button, Card, IconButton, Segmented, UIProvider } from '@shared/glass';
 import { useStoredState } from '@shared/hooks';
-import { loginToken, signIn, signOut } from './session';
+import { dashboardTransport, loginToken, signIn, signOut } from './session';
 
 const VIEWS = ['overview', 'clients', 'network'] as const;
 type View = (typeof VIEWS)[number];
@@ -59,6 +59,7 @@ export function App() {
         {phase === 'signin' && <SignIn message={message} />}
         {phase === 'ready' && server && (
           <StoreProvider
+            transport={dashboardTransport}
             initial={server}
             onSignedOut={text => {
               setMessage(text);

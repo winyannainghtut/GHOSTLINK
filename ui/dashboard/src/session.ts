@@ -1,6 +1,6 @@
 // The dashboard's connection to its server: same-origin /api with the session cookie and the
 // CSRF header, and the sign-in with the token after # in the login link.
-import { SignedOut, setTransport, type Server, type Transport } from '@admin/api';
+import { SignedOut, type Server, type Transport } from '@admin/api';
 import { saveBlob } from '@shared/format';
 
 async function request(method: string, path: string, body?: unknown): Promise<Response> {
@@ -43,7 +43,6 @@ export function loginToken(): string | null {
 }
 
 export async function signIn(): Promise<{ server: Server | null; error: string }> {
-  setTransport(dashboardTransport);
   const token = loginToken();
   if (token) {
     history.replaceState(null, '', location.pathname);

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -135,6 +136,32 @@ func TestEngineBlocksEveryAddressOfTheHost(t *testing.T) {
 	state.Hostname = "203.0.113.9"
 	if addrs := state.serverAddresses(); !slices.Contains(addrs, netip.MustParseAddr("203.0.113.9")) || len(addrs) != 3 {
 		t.Fatalf("server addresses: %v", addrs)
+	}
+}
+
+// An address the internal ranges block anyway, such as the mesh's, is not blocked again on its
+// own: this host joining or leaving a mesh does not change the engine's configuration, so the
+// engine is not restarted and nobody is disconnected (code review 2026-11-09, F5).
+func TestMeshAddressesDoNotChangeTheEngine(t *testing.T) {
+	withHostAddresses(t, "192.0.2.10")
+	state := guardState(t)
+	before, err := state.EngineConfig("off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withHostAddresses(t, "192.0.2.10", "100.96.0.1", "100.64.0.7", "fd7a:115c:a1e0::1")
+	after, err := state.EngineConfig("off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a mesh address changed the engine's configuration")
+	}
+	if addrs := state.serverAddresses(); len(addrs) != 1 || addrs[0] != netip.MustParseAddr("192.0.2.10") {
+		t.Fatalf("server addresses: %v", addrs)
+	}
+	if !isInternal(netip.MustParseAddr("::ffff:100.96.0.1")) || isInternal(netip.MustParseAddr("192.0.2.10")) {
+		t.Fatal("isInternal")
 	}
 }
 

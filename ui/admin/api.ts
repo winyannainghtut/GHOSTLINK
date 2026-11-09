@@ -103,6 +103,11 @@ export type Health = {
   engine_reloads: number;
   detail_paused: boolean;
   history_bytes: number;
+  // Why the VPN engine is not running (another program holds one of its ports, usually). The
+  // management API, the dashboard and the server commands keep working so it can be fixed;
+  // the server tries the engine again every 30 s. Missing while the engine runs, and on
+  // servers before 0.8.1.
+  engine_error?: string;
 };
 export type Live = { time_unix: number; up_bps: number; down_bps: number; active: number; online_users: number; series: Rate[]; minutes?: Rate[]; users: LiveUser[]; health: Health };
 export type LabelBytes = { label: string; bytes: number };
@@ -138,20 +143,27 @@ export type Transport = {
   useHere?: (user: User, key: Key) => Promise<void>;
 };
 
-let transport: Transport | null = null;
-export function setTransport(next: Transport): void {
-  transport = next;
-}
-function current(): Transport {
-  if (!transport) throw new Error('No server connection');
-  return transport;
-}
+// One server's API, bound to its transport. Each view of a server gets its own (useApi in
+// store.tsx) and there is no shared current server, so every step of an action goes to the
+// server it started on: leaving server A for server B while A's new client is still being created
+// cannot send A's next request, its key, to B (code review 2026-11-09, F2).
+export type ServerApi = {
+  api: <T>(method: string, path: string, body?: unknown) => Promise<T>;
+  apiText: (path: string) => Promise<string>;
+  saveFile: (file: SavedFile) => Promise<string | null>;
+  canUseHere: boolean;
+  useHere: (user: User, key: Key) => Promise<void>;
+};
 
-export const api = <T,>(method: string, path: string, body?: unknown): Promise<T> => current().call<T>(method, path, body);
-export const apiText = (path: string): Promise<string> => current().text(path);
-export const saveFile = (file: SavedFile): Promise<string | null> => current().save(file);
-export const canUseHere = (): boolean => !!transport?.useHere;
-export const useHere = (user: User, key: Key): Promise<void> => current().useHere!(user, key);
+export function bindApi(transport: Transport): ServerApi {
+  return {
+    api: <T,>(method: string, path: string, body?: unknown) => transport.call<T>(method, path, body),
+    apiText: path => transport.text(path),
+    saveFile: file => transport.save(file),
+    canUseHere: !!transport.useHere,
+    useHere: (user, key) => (transport.useHere ? transport.useHere(user, key) : Promise.reject(new Error('Only the desktop app can use a key on this device.'))),
+  };
+}
 
 // QR codes come back as SVG text; a data: URL shows them under both apps' CSPs.
 export const svgURL = (svg: string): string => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);

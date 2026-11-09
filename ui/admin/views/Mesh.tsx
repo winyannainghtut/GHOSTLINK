@@ -6,10 +6,12 @@ import { MeshMap, type MeshNode, type Topology } from '@shared/MeshMap';
 import { ago, dateTime, plural, words } from '@shared/format';
 import { Button, Card, CardTitle, Check, Facts, Field, IconButton, Inner, Note, Segmented, Sheet, StatusDot, Switch, useUI } from '@shared/glass';
 import { usePoll } from '@shared/hooks';
-import { api, type MeshInfo, type MeshRule } from '../api';
+import { type MeshInfo, type MeshRule } from '../api';
+import { useApi } from '../store';
 
 export function MeshCard() {
   const { toast } = useUI();
+  const { api } = useApi();
   const [info, setInfo] = useState<MeshInfo | null>(null);
   const [topology, setTopology] = useState<Topology | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -300,6 +302,7 @@ function NodePanel({ node, topology, onClose, change }: { node: MeshNode; topolo
 
 function InviteSheet({ open, info, onClose }: { open: boolean; info: MeshInfo; onClose: () => void }) {
   const { toast } = useUI();
+  const { api } = useApi();
   const [tags, setTags] = useState('');
   const [uses, setUses] = useState('1');
   const [hours, setHours] = useState('24');
@@ -402,6 +405,7 @@ const PROTOCOL_LABELS: Record<MeshRule['protocol'], string> = { tcp: 'TCP', udp:
 
 function RulesSheet({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useUI();
+  const { api } = useApi();
   const [rules, setRules] = useState<DraftRule[]>([]);
   const [error, setError] = useState('');
   useEffect(() => {

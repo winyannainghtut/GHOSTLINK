@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePoll } from '@shared/hooks';
 import type { Status } from '@shared/glass';
-import { api, SignedOut, type Client, type Live, type LiveUser, type Server, type User } from './api';
+import { bindApi, SignedOut, type Client, type Live, type LiveUser, type Server, type ServerApi, type Transport, type User } from './api';
 
 // How long live readings may fail before the views stop showing the last one as current.
 const STALE_MS = 5000;
@@ -25,11 +25,20 @@ type Store = {
 };
 
 const StoreContext = createContext<Store | null>(null);
+const ApiContext = createContext<ServerApi | null>(null);
 
 export function useStore(): Store {
   const store = useContext(StoreContext);
   if (!store) throw new Error('useStore outside StoreProvider');
   return store;
+}
+
+// The API of the server this view shows (see bindApi). A function that keeps it, as an action
+// with several requests does, keeps talking to that server.
+export function useApi(): ServerApi {
+  const api = useContext(ApiContext);
+  if (!api) throw new Error('useApi outside StoreProvider');
+  return api;
 }
 
 export function clientStatus(user: User, live?: LiveUser): Status {
@@ -40,7 +49,9 @@ export function clientStatus(user: User, live?: LiveUser): Status {
 
 export const statusLabel: Record<Status, string> = { online: 'Online', idle: 'Idle', paused: 'Paused', limit: 'Limit reached', pending: 'Waiting', offline: 'Offline' };
 
-export function StoreProvider({ initial, onSignedOut, children }: { initial: Server; onSignedOut: (message: string) => void; children: ReactNode }) {
+export function StoreProvider({ transport, initial, onSignedOut, children }: { transport: Transport; initial: Server; onSignedOut: (message: string) => void; children: ReactNode }) {
+  const bound = useMemo(() => bindApi(transport), [transport]);
+  const { api } = bound;
   const [server, setServer] = useState(initial);
   const [users, setUsers] = useState<User[]>([]);
   const [live, setLive] = useState<Live | null>(null);
@@ -65,12 +76,12 @@ export function StoreProvider({ initial, onSignedOut, children }: { initial: Ser
     const list = await guard(() => api<User[]>('GET', '/users'));
     if (list) setUsers(list);
     setLoaded(true);
-  }, [guard]);
+  }, [guard, api]);
   const reloadServer = useCallback(async () => {
     const next = (await guard(() => api<Server>('GET', '/server')))!;
     setServer(next);
     return next;
-  }, [guard]);
+  }, [guard, api]);
 
   usePoll(async () => {
     try {
@@ -105,5 +116,9 @@ export function StoreProvider({ initial, onSignedOut, children }: { initial: Ser
     () => ({ server, users, live: stale ? null : live, stale, liveById, lastClient, reloadUsers, reloadServer, setServer, loaded }),
     [server, users, live, stale, liveById, lastClient, reloadUsers, reloadServer, loaded],
   );
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return (
+    <ApiContext.Provider value={bound}>
+      <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+    </ApiContext.Provider>
+  );
 }

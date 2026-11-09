@@ -4,18 +4,22 @@
 import { Check as CheckIcon, Copy, FileDown, KeyRound, MonitorDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Field, Inner, Note, Sheet, cx, useUI } from '@shared/glass';
-import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, api, canUseHere, useHere, type Key, type ProtocolId, type User } from '../api';
+import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, type Key, type ProtocolId, type User } from '../api';
 import { hasConf, isApple, qrFor, saveConf, saveKit, saveProfile } from '../keys';
 import { dataLimitValue } from '../limits';
 import { firstKeyProtocol } from '../protocols';
 import { SpeedLimitField, speedValue, type SpeedChoice } from '../SpeedLimit';
-import { useStore } from '../store';
+import { useApi, useStore } from '../store';
 
 type Created = { user: User; key: Key; qr?: string };
 
 export function NewClient({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { server, reloadUsers, reloadServer } = useStore();
   const { toast } = useUI();
+  // The server this sheet was opened for: both requests of a new client go to it (code review
+  // 2026-11-09, F2), whatever the user opens meanwhile.
+  const remote = useApi();
+  const { api } = remote;
   const available = KEY_PROTOCOLS.filter(p => server.protocols[p]?.enabled);
   const [name, setName] = useState('');
   // New clients start on Shadowsocks, the one protocol a new server has on. While the protocol
@@ -78,7 +82,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
       user = await api<User>('POST', '/users', body);
       const key = await api<Key>('POST', `/users/${user.id}/keys`, isApple(protocol) ? { protocol, auth } : { protocol });
       let qr: string | undefined;
-      if (!isApple(protocol)) qr = await qrFor(user, key, key.config ? 'conf' : 'key');
+      if (!isApple(protocol)) qr = await qrFor(remote, user, key, key.config ? 'conf' : 'key');
       setCreated({ user, key, qr });
       if (key.warning) toast(key.warning, 'info');
       await Promise.all([reloadUsers(), reloadServer()]);
@@ -122,7 +126,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
             </p>
             <div className="flex flex-wrap gap-2">
               {hasConf(key.protocol) && key.config && (
-                <Button icon={<FileDown size={14} />} onClick={() => run(() => saveConf(user, key))}>
+                <Button icon={<FileDown size={14} />} onClick={() => run(() => saveConf(remote, user, key))}>
                   Download .conf
                 </Button>
               )}
@@ -130,7 +134,7 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                 <Button
                   variant="cta"
                   icon={<FileDown size={14} />}
-                  onClick={() => run(() => saveProfile(user, key))}
+                  onClick={() => run(() => saveProfile(remote, user, key))}
                 >
                   Download profile
                 </Button>
@@ -139,12 +143,12 @@ export function NewClient({ open, onClose }: { open: boolean; onClose: () => voi
                   Copy key
                 </Button>
               )}
-              {canUseHere() && !isApple(key.protocol) && (
-                <Button icon={<MonitorDown size={14} />} onClick={() => run(async () => (await useHere(user, key), 'Saved under My servers on this device.'))}>
+              {remote.canUseHere && !isApple(key.protocol) && (
+                <Button icon={<MonitorDown size={14} />} onClick={() => run(async () => (await remote.useHere(user, key), 'Saved under My servers on this device.'))}>
                   Use on this device
                 </Button>
               )}
-              <Button variant="ghost" icon={<FileDown size={14} />} onClick={() => run(() => saveKit(user))}>
+              <Button variant="ghost" icon={<FileDown size={14} />} onClick={() => run(() => saveKit(remote, user))}>
                 Connection kit
               </Button>
             </div>

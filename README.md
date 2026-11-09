@@ -196,7 +196,7 @@ curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scri
 curl -fsSL https://raw.githubusercontent.com/winyannainghtut/GHOSTLINK/main/scripts/install-server.sh | sudo bash -s -- --migrate-outline
 ```
 
-Every access key becomes a client with the same password, port and cipher, plus its name and data limit. Keys on ports below 1024 (for example 443) can't be kept and get a new key, which the check lists. If anything fails, or the command is interrupted, Outline is put back as it was, unless the import was already saved: then Ghostlink keeps the clients and Outline stays stopped. On a server with under 900 MB of memory and swap, add `--add-swap`.
+Every access key becomes a client with the same password, port and cipher, plus its name and data limit, also keys on ports below 1024 such as 443 (from 0.8.4 on). A key that can't be kept gets a new key, which the check lists. If anything fails, or the command is interrupted, Outline is put back as it was, unless the import was already saved: then Ghostlink keeps the clients and Outline stays stopped. On a server with under 900 MB of memory and swap, add `--add-swap`.
 
 The installer picks the right package for Debian/Ubuntu or Fedora/RHEL on x86_64 or arm64, installs Docker if needed, verifies the download's checksum, and prints the management key and the ports to open. Run it again to upgrade. You can also install a downloaded package by hand: `sudo apt install ./ghostlink-server_<version>-1_amd64.deb`, or the `.rpm` with `dnf`. `sudo ghostlink-server show-key` prints the key again.
 

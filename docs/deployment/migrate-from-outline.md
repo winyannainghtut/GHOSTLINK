@@ -23,11 +23,11 @@ The report looks like this:
 ```text
 Check only: nothing has changed yet. The import would do this:
   12 clients, one per Outline access key; 11 keep their Outline key as it is.
-  Shadowsocks: port 41234, plus 9000 for keys on other ports (cipher chacha20-ietf-poly1305).
+  Shadowsocks: port 443, plus 9000 for keys on other ports (cipher chacha20-ietf-poly1305).
   Server: My Outline, address in keys 203.0.113.7.
   VLESS moves off port 9000 to make way for Outline's (to a free port picked during the import). It is off; its port is ready for when you turn it on.
   These clients get a new key, which you need to send them:
-    Office: it uses port 443; Ghostlink cannot serve ports below 1024
+    Office: it shares port 9000 with keys that use another cipher
 ```
 
 It never shows a password.
@@ -61,8 +61,8 @@ Outline's Shadowsocks ports are already open in your firewall and cloud security
 
 A client gets a **new** Shadowsocks key, listed in the report, when its Outline key:
 
-- has no valid port (1-65535), or uses a port below 1024 (for example 443). The Ghostlink container runs without capabilities, so it cannot listen there;
-- uses the port of Ghostlink's management API, dashboard, mesh (also while the mesh is off) or IKEv2/IPsec DNS listener (also while IKEv2/IPsec is off), or UDP 4500 while IKEv2/IPsec is on;
+- has no valid port (1-65535);
+- uses the port of Ghostlink's management API, dashboard, mesh (also while the mesh is off) or IKEv2/IPsec DNS listener (also while IKEv2/IPsec is off), or UDP 500 or 4500 while IKEv2/IPsec is on;
 - shares a port with keys that use another cipher, or uses a cipher Outline does not offer;
 - has an empty or unusual password (more than 256 characters, or not plain text).
 
@@ -81,6 +81,16 @@ sudo ghostlink-server stop && sudo docker update --restart=always shadowbox watc
 ```
 
 Ghostlink stays installed but stopped, and its clients and keys are kept. `sudo ghostlink-server setup` starts it again (after stopping Outline).
+
+## Moved before 0.8.4, and keys on port 443 got new keys?
+
+Up to 0.8.3, Ghostlink could not listen on ports below 1024, so every Outline key on such a port, usually 443, got a new key. From 0.8.4 on, those keys can keep working as they are. The import only runs on a Ghostlink server with no clients, so do the move again:
+
+1. If people still use their Outline keys, go back to Outline first (above), so they keep working meanwhile.
+2. Remove Ghostlink with its state, which deletes the clients from the first move and their new keys: `sudo apt purge ghostlink-server`. On RPM systems: `sudo dnf remove ghostlink-server && sudo rm -rf /var/lib/ghostlink-server`. Outline's files in `/opt/outline` are not touched.
+3. Check, then move again with 0.8.4 or later, as above: `--migrate-outline --check`, then `--migrate-outline`. The report should now say that the keys on 443 keep their Outline key as it is.
+
+The server gets a new management key, so add it to the app again. Send no one the new keys from the first move: they stopped working when Ghostlink was removed.
 
 ## Remove Outline for good
 
