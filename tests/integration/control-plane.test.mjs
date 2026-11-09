@@ -148,7 +148,8 @@ test('OpenVPN routes that cover the internet are a full tunnel, refused without 
     assert.equal(gaps.success, false); assert.equal(gaps.error.code, 'invalid_profile');
     if (!windows) {
       for (const name of ['halves', 'quarters']) {
-        const refused = await cli(['connect', '--profile', name, '--timeout', '5'], 1);
+        // Exit 3 is the CLI's code for a refused permission (as in the unprivileged test below).
+        const refused = await cli(['connect', '--profile', name, '--timeout', '5'], 3);
         assert.equal(refused.error.code, 'permission_denied', name); assert.match(refused.error.message, /Full tunnel is disabled/);
       }
       assert.equal((await cli(['status'])).data.status, 'disconnected', 'a refused full tunnel starts nothing');
