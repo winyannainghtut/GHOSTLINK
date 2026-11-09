@@ -22,7 +22,7 @@ import (
 // bounding set, becomes that account keeping NET_BIND_SERVICE as an ambient capability, and
 // starts again as it. From then on it is not root and holds one capability: the one that lets it
 // listen on ports below 1024, such as 443. no-new-privileges stays on throughout. A server
-// started as any other user runs as it is.
+// started without GHOSTLINK_RUN_AS, as root or as any other user, runs as it is.
 func becomeAccount() error {
 	spec, named := os.LookupEnv(runAsVariable)
 	if os.Getuid() != 0 && os.Geteuid() != 0 {
@@ -40,7 +40,9 @@ func becomeAccount() error {
 		return nil
 	}
 	if !named {
-		return fmt.Errorf("will not run as root: set %s=UID:GID to the account to become", runAsVariable)
+		// Root with no account to become (a server run by hand, or by the mesh end-to-end test):
+		// it runs as it is, as before. The host script always names the account.
+		return nil
 	}
 	uid, gid, err := parseRunAs(spec)
 	if err != nil {
