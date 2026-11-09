@@ -22,7 +22,19 @@ impl Drop for PrivateConfig {
     }
 }
 
+/// This process's effective user ID.
+#[cfg(unix)]
+pub fn effective_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions, cannot fail and reads no memory of ours.
+    unsafe { libc::geteuid() }
+}
+
 /// Service-private state; never call this on an arbitrary user-supplied file.
+///
+/// # Errors
+/// Fails if the directory cannot be created, if it exists but belongs to another, untrusted
+/// identity (another user on Unix; anyone but this user, SYSTEM or Administrators on Windows),
+/// or if its permissions (mode 0700) or private ACL cannot be set.
 pub fn private_dir(path: &Path) -> Result<()> {
     if path.exists() {
         ensure!(
@@ -44,7 +56,7 @@ pub fn private_dir(path: &Path) -> Result<()> {
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         ensure!(
-            fs::metadata(path)?.uid() == unsafe { libc::geteuid() },
+            fs::metadata(path)?.uid() == effective_uid(),
             "State directory has a different owner"
         );
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
@@ -63,6 +75,11 @@ fn check_owner(path: &Path) -> Result<()> {
     };
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let current = current_sid()?;
+    // SAFETY: `name` is a NUL-terminated UTF-16 path that outlives the call. On success
+    // GetNamedSecurityInfoW sets `descriptor` to a LocalAlloc'd security descriptor and `owner`
+    // to a SID inside it; both are read only before `descriptor` is freed, once, below. The
+    // string ConvertSidToStringSidW returns is NUL-terminated (the loop stops at the NUL), read
+    // only while allocated, and freed once. Every early return happens before an allocation.
     unsafe {
         let mut owner = std::ptr::null_mut();
         let mut descriptor = std::ptr::null_mut();
@@ -129,6 +146,8 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             let from: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
             let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
             ensure!(
+                // SAFETY: both paths are NUL-terminated UTF-16 buffers that outlive the call,
+                // which only reads them.
                 unsafe {
                     MoveFileExW(
                         from.as_ptr(),
@@ -161,6 +180,12 @@ pub fn current_sid() -> Result<String> {
         Security::{Authorization::ConvertSidToStringSidW, *},
         System::Threading::*,
     };
+    // SAFETY: the token handle is closed once, right after its last use. The first
+    // GetTokenInformation call only reports the size needed; the buffer for the second holds at
+    // least that many bytes and is made of usize words, so it is aligned for TOKEN_USER (which
+    // holds pointers; a Vec<u8> need not be). TOKEN_USER is read only after that call succeeded,
+    // and its SID points into `data`, which lives until the end of the block. The string
+    // ConvertSidToStringSidW returns is NUL-terminated, read only while allocated, and freed once.
     unsafe {
         let mut token = std::ptr::null_mut();
         ensure!(
@@ -169,7 +194,7 @@ pub fn current_sid() -> Result<String> {
         );
         let mut size = 0;
         GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
-        let mut data = vec![0u8; size as usize];
+        let mut data = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
         let ok = GetTokenInformation(token, TokenUser, data.as_mut_ptr().cast(), size, &mut size);
         CloseHandle(token);
         ensure!(ok != 0, "Cannot inspect user SID");
@@ -198,6 +223,9 @@ pub fn restrict_acl(path: &Path) -> Result<()> {
     let sddl = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{})", current_sid()?);
     let wide: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` and `name` are NUL-terminated UTF-16 buffers that outlive the calls. On
+    // success `sd` is a LocalAlloc'd security descriptor, passed to SetFileSecurityW while it
+    // is allocated and freed once afterwards; the failed conversion returns before allocating.
     unsafe {
         let mut sd = std::ptr::null_mut();
         ensure!(
@@ -248,6 +276,10 @@ fn dpapi(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         cbData: 0,
         pbData: std::ptr::null_mut(),
     };
+    // SAFETY: `input` points at `bytes`, which outlives the call; DPAPI only reads it (the
+    // `*mut` is the C struct's type). On success DPAPI sets `output` to a LocalAlloc'd buffer of
+    // `cbData` bytes, which is copied out while allocated and then freed once; on failure it
+    // allocates nothing and the function returns before reading it.
     unsafe {
         let ok = if encrypt {
             CryptProtectData(

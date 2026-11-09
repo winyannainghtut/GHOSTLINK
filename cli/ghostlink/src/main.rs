@@ -488,6 +488,9 @@ enum ServerMeshCommand {
     },
     /// Show the access rules, or replace them with --rule "FROM TO PROTOCOL [PORTS]" (repeatable)
     /// or --clear. Without rules every node reaches every node.
+    // The comment above is this command's --help text, so `[PORTS]` stays as the user should
+    // type it rather than becoming a rustdoc link (code review 2026-11-10, Rust finding 6).
+    #[allow(rustdoc::broken_intra_doc_links)]
     Rules {
         #[arg(long)]
         server: String,

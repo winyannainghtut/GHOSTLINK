@@ -126,6 +126,39 @@ test('expired certificates are rejected at import', async () => {
   const r = await rpc({schema_version: 1, action: {type: 'profile_import', name: 'expired', content: profile.replace(/<cert>[\s\S]*?<\/cert>/, `<cert>\n${expired}</cert>`)}});
   assert.equal(r.error.code, 'invalid_profile'); assert.match(r.error.message, /expired/);
 });
+// OpenVPN routes that together cover every public IPv4 address make a full tunnel, as
+// redirect-gateway does (code review 2026-11-10, Rust finding 1). On Unix the service, started
+// here without --allow-full-tunnel, refuses to connect it before OpenVPN starts. On Windows
+// nothing is connected, so this machine's routes are never touched.
+test('OpenVPN routes that cover the internet are a full tunnel, refused without --allow-full-tunnel', async () => {
+  const profiles = [
+    ['halves', 'route 0.0.0.0 128.0.0.0\nroute 128.0.0.0 128.0.0.0\n', 'full'],
+    ['quarters', 'route 0.0.0.0 192.0.0.0\nroute 64.0.0.0 192.0.0.0\nroute 128.0.0.0 192.0.0.0 vpn_gateway\nroute 192.0.0.0 192.0.0.0\n', 'full'],
+    ['office', 'route 192.168.50.0 255.255.255.0\nroute 203.0.113.7\n', 'split'],
+    ['bypass', 'route 0.0.0.0 128.0.0.0 net_gateway\nroute 128.0.0.0 128.0.0.0 net_gateway\n', 'split'],
+  ];
+  try {
+    for (const [name, routes, mode] of profiles) {
+      const r = await rpc({schema_version: 1, action: {type: 'profile_import', name, content: profile + routes}});
+      assert.equal(r.success, true, `${name}: ${JSON.stringify(r.error)}`);
+    }
+    const listed = Object.fromEntries((await cli(['profile', 'list'])).data.profiles.map(p => [p.name, p.tunnel_mode]));
+    for (const [name, , mode] of profiles) assert.equal(listed[name], mode, `${name} is ${listed[name]}`);
+    const gaps = await rpc({schema_version: 1, action: {type: 'profile_import', name: 'gaps', content: profile + 'route 10.0.0.0 255.0.255.0\n'}});
+    assert.equal(gaps.success, false); assert.equal(gaps.error.code, 'invalid_profile');
+    if (!windows) {
+      for (const name of ['halves', 'quarters']) {
+        // Exit 3 is the CLI's code for a refused permission (as in the unprivileged test below).
+        const refused = await cli(['connect', '--profile', name, '--timeout', '5'], 3);
+        assert.equal(refused.error.code, 'permission_denied', name); assert.match(refused.error.message, /Full tunnel is disabled/);
+      }
+      assert.equal((await cli(['status'])).data.status, 'disconnected', 'a refused full tunnel starts nothing');
+    }
+  } finally {
+    for (const [name] of profiles) await rpc({schema_version: 1, action: {type: 'profile_remove', name}});
+  }
+  assert.equal((await cli(['profile', 'list'])).data.profiles.length, 1);
+});
 test('32 concurrent status commands return valid real state', async () => {
   const results = await Promise.all(Array.from({length: 32}, () => cli(['status'])));
   assert.ok(results.every(r => validateStatus(r.data)));
@@ -235,7 +268,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.8.4');
+  assert.equal((await cli(['version'])).data.version, '0.8.5');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -269,6 +302,11 @@ test('Outline access keys import privately, rename, select default and remove th
       assert.equal(failure.error.code,'connection_failed');
       const status = (await cli(['status'])).data;
       assert.equal(status.status,'failed'); assert.equal(status.vpn_ip,null);
+      // The worker reported this failed start as clean (it undid what it changed), so no
+      // inspection is asked for: trying again fails the same way, not with cleanup_unverified
+      // (code review 2026-11-10, Rust finding 2).
+      assert.ok(!/cleanup_unverified/.test(status.last_error ?? ''), status.last_error);
+      assert.equal((await cli(['connect','--profile','outline-singapore','--timeout','25'],1)).error.code,'connection_failed');
       await cli(['disconnect']);
     } else {
       // Linux refuses a full tunnel before any engine starts unless the administrator allowed it.

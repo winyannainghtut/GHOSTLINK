@@ -252,8 +252,32 @@ func TestHeldPortsAreThoseThatListenNow(t *testing.T) {
 	state.Users = append(state.Users, u)
 	want := map[heldPort]bool{{"tcp", state.API.Port}: true, {"tcp", state.Dashboard.Port}: true,
 		{"tcp", state.Shadowsocks.Port}: true, {"udp", state.Shadowsocks.Port}: true, {"udp", state.AmneziaWG.Port}: true}
-	if held := state.heldPorts(); !maps.Equal(held, want) {
+	config, err := state.EngineConfig("off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held := state.heldPorts(config); !maps.Equal(held, want) {
 		t.Fatalf("held ports %v, want %v", held, want)
+	}
+	// An engine that is down holds none of its ports (code review 2026-11-10, R2).
+	if held := state.heldPorts(nil); !maps.Equal(held, map[heldPort]bool{{"tcp", state.API.Port}: true, {"tcp", state.Dashboard.Port}: true}) {
+		t.Fatalf("held ports while the engine is down: %v", held)
+	}
+}
+
+// An engine that could not start holds none of its ports. With Shadowsocks's port N held by
+// another program, so the engine is down, one change that turns Shadowsocks off, moves it to a
+// free port and turns VLESS on, on TCP N, is refused. Before, it was accepted, because the saved
+// state said the engine held N, and VLESS's first key then failed (code review 2026-11-10, R2).
+func TestAnEngineThatIsDownHoldsNoPorts(t *testing.T) {
+	server, _, port := busyServer(t)
+	patch := map[string]any{"protocols": map[string]any{
+		Shadowsocks: map[string]any{"enabled": false, "port": freeSharedPort(t)},
+		VLESS:       map[string]any{"enabled": true, "port": port},
+	}}
+	want := fmt.Sprintf("vless cannot use TCP port %d: another program uses it", port)
+	if status := server.call(t, "PATCH", "/server", patch, nil); status != http.StatusBadRequest || !strings.Contains(server.last, want) {
+		t.Fatalf("VLESS onto the port another program holds, while the engine is down: %d %s", status, server.last)
 	}
 }
 

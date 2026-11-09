@@ -30,8 +30,8 @@ This is a layer-3 network in the style of ZeroTier, Tailscale or Nebula. It is n
   - It creates the kernel WireGuard interface `glmesh0`, its peers and routes.
   - It sets up firewall chains (`GHOSTLINK-MESH-*`) and an `/etc/hosts` block with the `<node>.mesh` names.
     - The firewall goes in first, before the interface carries any traffic.
-    - Its filter chains see only traffic on `glmesh0`. Its nat and mangle chains only masquerade mesh traffic to shared subnets and clamp TCP on `glmesh0`.
-    - If a firewall reload removes the chains, the agent puts them back within about 30 seconds.
+    - Its filter chains see only traffic on `glmesh0`. Its nat and mangle chains only masquerade mesh traffic to shared subnets, clamp TCP on `glmesh0`, and guard what arrives on `glmesh0`: two `mangle` chains apply the access rules to every packet a peer sends that is not a reply, before the filter table, so Docker's accept rules can't come first (since 0.8.5).
+    - If a firewall reload removes the chains, the agent puts them back within about 30 seconds, and a connection opened from the mesh in the meantime that the rules don't allow ends then.
   - It reports handshakes, traffic and ping latency to the coordinator. The node's WireGuard private key **never leaves the node**.
 - **Paths: direct first, then the relay.** Every pair of nodes connects directly when at least one of them can be reached. The coordinator decides every 5 seconds:
   - A pair with no handshake 90 seconds after both nodes are up goes **through the relay**. So does an established direct pair whose newest handshake is more than 3 minutes old.
@@ -164,7 +164,7 @@ In the app and the dashboard, the editor is **Access rules** on the Mesh card.
 
 Rules are enforced by the **receiving** node's firewall. The coordinator compiles them into the exact source addresses each node accepts, so a node needs no knowledge of tags.
 
-- **Containers:** ports a node publishes for containers (Docker, Podman, Kubernetes NodePorts) are part of the node. Rules match the port the connection was made to. Docker puts its own accept rules ahead of the agent's `FORWARD` jump when it starts after the agent, so from 0.8.4 the agent also keeps its jumps first in Docker's `DOCKER-USER` chain, which Docker always checks before its own rules and never changes. The agent starts after Docker at boot, and checks every 30 seconds, so after Docker starts later (or a firewall reload) the rules apply again within 30 seconds. Software that keeps putting its own rules first in `FORWARD` itself, as Calico can, is not handled.
+- **Containers:** ports a node publishes for containers (Docker, Podman, Kubernetes NodePorts) are part of the node. Rules match the port the connection was made to. Docker puts its own accept rules ahead of the agent's `FORWARD` jump when it starts after the agent. Since 0.8.5 that opens nothing: the agent's guard in the `mangle` table checks every packet from the mesh before the `filter` table, where Docker's rules are. The agent also keeps its filter jumps first in Docker's `DOCKER-USER` chain (since 0.8.4). Software that accepts mesh traffic in the `mangle` table's `FORWARD` chain ahead of the guard would get around it; Docker, kube-proxy and Calico don't.
 - **Shared subnets:** as a destination (*to*), a node's shared subnets count as part of that node, including its own address in them. As a source (*from*), only nodes' own mesh addresses match: once rules exist, connections that hosts in a shared subnet start are refused by the receiving node, and only replies pass.
 
 ## Shared subnets (site-to-site)

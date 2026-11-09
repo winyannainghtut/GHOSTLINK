@@ -1,8 +1,10 @@
 [package]
 name = "ghostlink-desktop"
-version = "0.8.4"
+version = "0.8.5"
 edition = "2021"
 license = "MIT"
+# Built and tested with exactly this compiler in CI (desktop.yml).
+rust-version = "1.92"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -14,3 +16,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["time"] }
 
 [workspace]
+
+# As in the root workspace (its lint table).
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

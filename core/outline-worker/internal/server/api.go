@@ -338,9 +338,14 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 			}
 			s.Monitor.HistoryMaxMB = *patch.HistoryMaxMB
 		}
-		// New ports to try binding, and the ports this server's listeners held before the change.
+		// New ports to try binding, and the ports this server's listeners hold now: the engine's
+		// only while it runs, from the configuration it runs.
 		var tryPorts []portTry
-		ours, dashboardBefore := s.heldPorts(), s.Dashboard.Port
+		engineRuns, engineConfig := a.service.engine.Running()
+		if !engineRuns {
+			engineConfig = nil
+		}
+		ours, dashboardBefore := s.heldPorts(engineConfig), s.Dashboard.Port
 		if patch.DashboardPort != nil {
 			if *patch.DashboardPort != s.Dashboard.Port {
 				tryPorts = append(tryPorts, portTry{"the dashboard", *patch.DashboardPort, []string{"tcp"}})

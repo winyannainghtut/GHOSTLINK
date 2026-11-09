@@ -22,7 +22,7 @@ use tokio::{
 };
 
 pub const WORKER_VERSION: &str =
-    "Ghostlink tunnel worker 0.8.4; sing-box 1.14.4; amneziawg-go 3.1.20260828";
+    "Ghostlink tunnel worker 0.8.5; sing-box 1.14.4; amneziawg-go 3.1.20260828";
 
 /// Tag of the tunnel outbound or endpoint in every generated configuration.
 pub const PROXY_TAG: &str = "proxy";
@@ -63,22 +63,59 @@ impl Event {
     }
 }
 
-/// Reads the worker's remaining status lines until it closes them (it exits) and reports
-/// whether one was a cleanup failure. `frame` may hold a line the session loop started reading.
-async fn reported_cleanup_failure<R: AsyncBufRead + Unpin>(
-    logs: &mut R,
-    frame: &mut Vec<u8>,
-) -> bool {
-    let mut failed = false;
+/// What the worker's status lines say about how it ended, weakest first. Only `CleanFailure`
+/// lets a worker that did not exit successfully go without the cleanup barrier: the worker
+/// failed and says it undid every route, filter and DNS setting it changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Report {
+    /// No failure reported. An abnormal exit then leaves cleanup unverified, also before
+    /// `started`: the worker may have begun changing the network before it could say so.
+    #[default]
+    Nothing,
+    /// `failed` with any code but a cleanup one.
+    CleanFailure,
+    /// `failed` with a code that says cleanup could not be confirmed.
+    CleanupFailed,
+}
+
+impl Report {
+    fn of(event: &Event) -> Self {
+        match event.event.as_str() {
+            "failed" if event.cleanup_failed() => Self::CleanupFailed,
+            "failed" => Self::CleanFailure,
+            _ => Self::Nothing,
+        }
+    }
+}
+
+/// Reads the worker's remaining status lines until it closes them (it exits) and returns the
+/// strongest report among them. `frame` may hold a line the session loop started reading.
+async fn remaining_report<R: AsyncBufRead + Unpin>(logs: &mut R, frame: &mut Vec<u8>) -> Report {
+    let mut report = Report::Nothing;
     loop {
         match logs.read_until(b'\n', frame).await {
-            Ok(0) | Err(_) => return failed,
+            Ok(0) | Err(_) => return report,
             Ok(_) => {}
         }
         if frame.len() <= 4096 {
-            failed |= serde_json::from_slice::<Event>(frame).is_ok_and(|e| e.cleanup_failed());
+            if let Ok(event) = serde_json::from_slice::<Event>(frame) {
+                report = report.max(Report::of(&event));
+            }
         }
         frame.clear();
+    }
+}
+
+/// The cleanup barrier for how a worker ended: `exited_ok` is whether it exited successfully, or
+/// None when it had to be killed. None means no inspection is needed. Any abnormal end, also
+/// before `started`, needs one unless the worker reported a clean failure (code review
+/// 2026-11-10, Rust finding 2).
+fn unverified_cleanup(report: Report, exited_ok: Option<bool>) -> Option<&'static str> {
+    match (report, exited_ok) {
+        (_, None) => Some("forced_stop_network_cleanup_unverified"),
+        (Report::CleanupFailed, _) => Some("network_cleanup_unverified"),
+        (_, Some(true)) | (Report::CleanFailure, Some(false)) => None,
+        (Report::Nothing, Some(false)) => Some("network_cleanup_unverified"),
     }
 }
 
@@ -339,6 +376,8 @@ pub async fn start(
         let _config_guard = config_guard;
         let mut logs = BufReader::new(stderr);
         let mut initialized = false;
+        // What a `failed` event in the loop said (see Report).
+        let mut report = Report::Nothing;
         let mut reason = None;
         let mut stopping = false;
         let deadline = tokio::time::sleep(timeout);
@@ -366,6 +405,7 @@ pub async fn start(
                             initialized = true;
                         }
                         Ok(event) if event.event == "failed" => {
+                            report = Report::of(&event);
                             reason = Some(if event.cleanup_failed() { "network_cleanup_unverified" } else { "outline_engine_start_failed_check_permissions_or_driver" }); break;
                         }
                         _ => { reason = Some("outline_engine_protocol_error"); break; }
@@ -424,21 +464,18 @@ pub async fn start(
         // exit can end the loop above while it is still starting, and the cleanup failure it
         // reports on the way out would otherwise go unnoticed.
         let exit = async {
-            let cleanup_failed = reported_cleanup_failure(&mut logs, &mut frame).await;
-            (cleanup_failed, child.wait().await)
+            let later = remaining_report(&mut logs, &mut frame).await;
+            (report.max(later), child.wait().await)
         };
-        match tokio::time::timeout(Duration::from_secs(12), exit).await {
-            Ok((true, _)) => reason = Some("network_cleanup_unverified"),
-            Ok((false, Ok(status))) if status.success() => {}
-            Ok((false, _)) => {
-                if initialized {
-                    reason = Some("network_cleanup_unverified");
-                }
-            }
+        let ended = match tokio::time::timeout(Duration::from_secs(12), exit).await {
+            Ok((report, status)) => (report, Some(status.is_ok_and(|s| s.success()))),
             Err(_) => {
                 let _ = child.kill().await;
-                reason = Some("forced_stop_network_cleanup_unverified");
+                (Report::Nothing, None)
             }
+        };
+        if let Some(barrier) = unverified_cleanup(ended.0, ended.1) {
+            reason = Some(barrier);
         }
         let _ = child.wait().await;
         let mut snapshot = shared.write().await;
@@ -522,19 +559,64 @@ mod tests {
         // The session loop may have stopped in the middle of the line.
         let mut frame = b"{\"event\":\"fai".to_vec();
         let mut rest: &[u8] = b"led\",\"code\":\"engine_close_failed\"}\n";
-        assert!(reported_cleanup_failure(&mut rest, &mut frame).await);
+        assert_eq!(
+            remaining_report(&mut rest, &mut frame).await,
+            Report::CleanupFailed
+        );
+        // The strongest report wins, whatever the order.
         let mut later: &[u8] =
-            b"{\"event\":\"closed\"}\n{\"event\":\"failed\",\"code\":\"engine_start_cancel_timeout\"}\n";
-        assert!(reported_cleanup_failure(&mut later, &mut Vec::new()).await);
+            b"{\"event\":\"failed\",\"code\":\"engine_start_failed\"}\n{\"event\":\"failed\",\"code\":\"engine_start_cancel_timeout\"}\n";
+        assert_eq!(
+            remaining_report(&mut later, &mut Vec::new()).await,
+            Report::CleanupFailed
+        );
+        let mut clean: &[u8] =
+            b"{\"event\":\"closed\"}\n{\"event\":\"failed\",\"code\":\"engine_start_failed_check_permissions\"}\n";
+        assert_eq!(
+            remaining_report(&mut clean, &mut Vec::new()).await,
+            Report::CleanFailure
+        );
         for lines in [
             &b"{\"event\":\"closed\"}\n"[..],
-            b"{\"event\":\"failed\",\"code\":\"engine_start_failed_check_permissions\"}\n",
             b"{\"event\":\"started\",\"code\":\"engine_close_failed\"}\nnot json\n",
             b"",
         ] {
             let mut reader = lines;
-            assert!(!reported_cleanup_failure(&mut reader, &mut Vec::new()).await);
+            assert_eq!(
+                remaining_report(&mut reader, &mut Vec::new()).await,
+                Report::Nothing
+            );
         }
+    }
+
+    /// A worker that ends abnormally leaves cleanup unverified, also before `started`, unless it
+    /// reported a clean failure (code review 2026-11-10, Rust finding 2).
+    #[test]
+    fn abnormal_worker_exits_need_an_inspection() {
+        use Report::*;
+        // Exits with an error before `started`, having said nothing: it may have changed routes.
+        assert_eq!(
+            unverified_cleanup(Nothing, Some(false)),
+            Some("network_cleanup_unverified")
+        );
+        // A clean exit, also a stop racing the start.
+        assert_eq!(unverified_cleanup(Nothing, Some(true)), None);
+        // A reported cleanup failure, whatever the exit status.
+        assert_eq!(
+            unverified_cleanup(CleanupFailed, Some(true)),
+            Some("network_cleanup_unverified")
+        );
+        assert_eq!(
+            unverified_cleanup(CleanupFailed, Some(false)),
+            Some("network_cleanup_unverified")
+        );
+        // A clean, acknowledged startup failure: the worker exits 1 after reporting it.
+        assert_eq!(unverified_cleanup(CleanFailure, Some(false)), None);
+        // Killed after the stop timeout, whatever was reported.
+        assert_eq!(
+            unverified_cleanup(CleanFailure, None),
+            Some("forced_stop_network_cleanup_unverified")
+        );
     }
 
     #[test]

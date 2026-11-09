@@ -1,18 +1,18 @@
 # Ghostlink — guide for developers and AI coding agents
 
-Updated **2026-11-09**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
+Updated **2026-11-10**; dates in this guide are Asia/Singapore time (UTC+8). Repository `github.com/winyannainghtut/GHOSTLINK`, default branch `main`. Paths are relative to the repository root. [CHANGELOG.md](CHANGELOG.md) says what each version changed; use `git log` and the files for anything newer than this guide.
 
-This guide is for anyone, person or AI coding agent, who builds, tests or changes Ghostlink. Read *Start here* first; the numbered sections below are the detailed reference (some of their tables are older, and say so). Agents that only look for `AGENTS.md` should be pointed at this file.
+This guide is for anyone, person or AI coding agent, who builds, tests or changes Ghostlink. Read *Start here* first; the numbered sections below are the detailed reference (some of their tables are older, and say so). Agents that only look for `AGENTS.md` should be pointed at this file. Claude Code (and its subagents) load [CLAUDE.md](CLAUDE.md) instead, a short summary of the commands, rules and gotchas that points here; keep the two in step.
 
 ## Start here
 
 ### Where things stand
 
-- **Latest release: v0.8.3**, a **pre-release** published on 2026-11-09: new servers run only Shadowsocks, and turning a protocol on checks its port and names it (pull request #7). 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
+- **Latest release: v0.8.5** (pull request #9): the fixes from the follow-up review of 0.8.4 and from the Rust review (`docs/development/code-review-2026-11-10.md`, `rust-code-review-2026-11-10.md`). 0.8.4 (2026-11-10, pull request #8) brought ports below 1024 and the fixes from the review of 0.8.3; 0.8.3 (2026-11-09, pull request #7) made new servers run only Shadowsocks. 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
 - **Other releases:**
-  - v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.8.4, v0.8.3, v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.3:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.5:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`).
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine).
 
 ### Design decisions to keep
 
@@ -45,7 +45,7 @@ A report on a running server and a second full review, reviewed area by area and
 - **Server isolation:** every public address of the host and the dashboard port are always blocked; WireGuard/AmneziaWG server endpoints open one NAT session per UDP destination (`internal/awg/endpoint.go`); the engine log is off by default; an engine that cannot start no longer stops `serve` (`ensureEngine`, every 30 s).
 - **Clients:** WireGuard and AmneziaWG clients refuse flows the far side starts (a route rule in `worker_session.rs`, and `JudgeFlow` in the AmneziaWG endpoint); the TUN collision check accepts a wider network around 172.28.85.0/30 (Hyper-V, WSL, Docker).
 - **IKEv2/IPsec:** identities always start with a letter or digit, are stored with each key and pinned at start (`pinIdentities`), so renames change nothing; `desired.json` is written only when its fingerprint changes; the first report after a start only sets a baseline.
-- **Mesh:** forwarding and relaying need the node's local consent; the agent installs its firewall before the interface and re-checks its jumps every 30 s; relayed pairs probe for a direct path instead of switching blindly.
+- **Mesh:** forwarding and relaying need the node's local consent; the agent installs its firewall before the interface and re-checks its jumps every 30 s; its mangle guards apply the access rules to every non-reply packet from the mesh, so neither Docker's filter rules nor a gap in the rules lets a connection through for good; relayed pairs probe for a direct path instead of switching blindly.
 - **Host scripts:** root never follows a symlink in the state (`in_state_dir`); `setup` stops the server before it changes the state; admin commands refuse words they don't take (`parseFlags`).
 - **Process lesson for agents:** workflow worktrees were created from `main`, not from the working branch; every fixer had to rebase onto the branch first. Check the base of a worktree before building on it.
 
@@ -69,7 +69,8 @@ A report on a running server and a second full review, reviewed area by area and
    - Windows mesh nodes.
    - The Linux desktop app, blocked by the GTK `glib` advisory.
 3. **Known limits**, found while checking the 0.8.1 notes and in the 2026-11-09 code review (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
-   - **Docker after a firewall reload, for the IPsec component:** since 0.8.4 the mesh agent keeps its FORWARD jumps first in Docker's `DOCKER-USER` too (`hostfw`, `Jump.Docker`), so Docker's accept rules can't run ahead of the mesh's rules. The IPsec component's FORWARD jump does not get that copy: its chain starts with the speed limits (`hashlimit`), which a packet passing it twice would count twice. The component starts after Docker, so its jump is first, unless something (a firewalld reload) makes Docker put its rules first again while the jump stays. Software that keeps putting its own rules first in FORWARD (Calico) is not handled for the mesh either.
+   - **Docker after a firewall reload, for the IPsec component:** the mesh is covered: since 0.8.5 its agent checks mesh traffic in the `mangle` table (`GHOSTLINK-MESH-GUARD-*`, every non-reply packet), before the `filter` table where Docker's accept rules are, and also keeps its filter jumps first in `DOCKER-USER` (`hostfw`, `Jump.Docker`). The IPsec component has neither: its FORWARD chain starts with the speed limits (`hashlimit`), which a packet passing it twice would count twice, and it has no mangle guard. The component starts after Docker, so its jump is first, unless something (a firewalld reload) makes Docker put its rules first again while the jump stays. A mangle guard like the mesh's would fit it too. Software that accepts mesh traffic in mangle FORWARD ahead of the guard would get around the mesh's.
+   - **Routes an OpenVPN server pushes:** since 0.8.5 a profile's own `route` lines that cover every public IPv4 address count as a full tunnel (the Unix policy asks for `--allow-full-tunnel`), but routes the server pushes at connect time are not seen by that check. A split profile only filters a pushed `redirect-gateway` (`pull-filter ignore redirect-gateway`); a server pushing `route 0.0.0.0 128.0.0.0` and `route 128.0.0.0 128.0.0.0` would still take all IPv4 traffic. Filtering pushed routes would break split tunnels that rely on them, so it needs a decision.
    - **An engine that cannot start:** since 0.8.4 the app and the dashboard show it (Island: *VPN engine down*; an Overview banner with the reason). `setup`, the installer and `status` still say the server is running.
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
@@ -115,7 +116,7 @@ A report on a running server and a second full review, reviewed area by area and
   Worker build: the same with `-o ../../target/debug/ghostlink-tunnel.exe .`.
 - **Rust:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cargo.ps1 <fmt|clippy|test|build> …`. The desktop app is a separate workspace: `--manifest-path apps/desktop/src-tauri/Cargo.toml`.
 - **UI:** run `cd ui && npm run build && npm test`, and commit the build output in `core/outline-worker/internal/server/dashboard` and `apps/desktop/ui`. The Web UI workflow checks that the committed output matches the build. Rebuild the Go server after a UI build; the dashboard is embedded.
-- **Process tests:** root `npm test`, 19 tests. They need fresh debug builds of `ghostlinkd`, `ghostlink` and `ghostlink-mcp`, plus `target/debug/ghostlink-server.exe` built with `go build` (or `GHOSTLINK_TEST_SERVER`). Without the server binary the managed-server test is skipped. OpenVPN is optional (its test skips without it), and the worker is used only by the opt-in `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED` branch.
+- **Process tests:** root `npm test`, 20 tests. They need fresh debug builds of `ghostlinkd`, `ghostlink` and `ghostlink-mcp`, plus `target/debug/ghostlink-server.exe` built with `go build` (or `GHOSTLINK_TEST_SERVER`). Without the server binary the managed-server test is skipped. OpenVPN is optional (its test skips without it), and the worker is used only by the opt-in `GHOSTLINK_TEST_EXPECT_UNPRIVILEGED` branch.
 - **Real-engine tests:** set **absolute** paths. Cargo runs the test binaries from `core/vpn-engine`, and the worker check refuses relative paths, so relative ones make the tests fail or pass without testing anything. In PowerShell, from the repository root:
   ```powershell
   $env:GHOSTLINK_TEST_SING_BOX = (Resolve-Path .tools\sing-box\sing-box-1.14.4-windows-amd64\sing-box.exe).Path
@@ -220,7 +221,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.4 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.5 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -352,7 +353,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.4; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.5; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -435,7 +436,7 @@ Important daemon flags: `--endpoint`, `--data-dir`, `--openvpn`, `--outline-engi
 - Autoconnect runs at daemon startup using saved policy. An explicit disconnect is respected until restart; it is not an always-on reconnect loop. A failed autoconnect never stops the service: an internal error leaves status `failed` with `last_error: "autoconnect_failed"` and audits `autoconnect`/`error`, so the user can still inspect it and disable autoconnect over IPC.
 - Audit writes have their own lock (`AuditLog`), separate from the daemon state mutex. Engine events are recorded without waiting for a long connect/switch, so accepting clients and shutdown are never stalled by them.
 - Access-key fingerprints (`sha256` in summaries, visible to read-only agents) are keyed with a per-installation `fingerprint_salt` stored only in `state.json`; they are not a plain hash of the credential.
-- Cleanup failure is an error (`cleanup_unverified`) and blocks another connect/switch in the affected daemon state. Verify behavior across process/service crashes; do not treat an in-memory state flag as a persistent firewall guarantee.
+- Cleanup failure is an error (`cleanup_unverified`) and blocks another connect/switch in the affected daemon state. Since 0.8.5 any abnormal worker end counts, also before `started`, unless the worker reported a clean failure (`worker_session::Report`, `unverified_cleanup`; `tests/worker_exit.rs` drives the real session with this test binary as a stand-in worker). Verify behavior across process/service crashes; do not treat an in-memory state flag as a persistent firewall guarantee.
 
 Windows SCM reports Running after state/lock/IPC readiness, and StopPending during stop. The installed lifecycle (stop, restart, crash) has not been exercised as SYSTEM yet.
 

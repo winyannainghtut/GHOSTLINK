@@ -577,6 +577,11 @@ pub fn default_endpoint() -> String {
     }
 }
 
+/// Reads one newline-terminated frame, at most `MAX_FRAME` bytes with its newline.
+///
+/// # Errors
+/// Fails if the peer closes before a whole frame, if the frame would exceed `MAX_FRAME`, or if
+/// the reader fails.
 pub async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> anyhow::Result<Vec<u8>> {
     let mut result = Vec::new();
     loop {
@@ -660,6 +665,13 @@ fn verify_pipe_server(
         Security::{Authorization::*, *},
         System::Threading::*,
     };
+    // SAFETY: the pipe handle stays open for the whole block (`pipe` is borrowed). On success
+    // GetSecurityInfo sets `descriptor` to a LocalAlloc'd security descriptor and `owner` to a
+    // SID inside it; both are used only inside the closure, and `descriptor` is freed once after
+    // it, also when it fails. The token handle is closed once, right after its last use. The
+    // TOKEN_USER buffer is usize words (aligned for its pointers) of at least the size the first
+    // call reported, read only after the second call succeeded; its SID points into `data`,
+    // which lives until EqualSid has compared it.
     unsafe {
         let mut owner: PSID = std::ptr::null_mut();
         let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -690,7 +702,7 @@ fn verify_pipe_server(
             );
             let mut size = 0;
             GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
-            let mut data = vec![0u8; size as usize];
+            let mut data = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
             let read =
                 GetTokenInformation(token, TokenUser, data.as_mut_ptr().cast(), size, &mut size);
             CloseHandle(token);

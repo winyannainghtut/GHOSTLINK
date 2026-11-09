@@ -5,6 +5,11 @@ pub fn verify_listeners(pid: u32, ports: &[u16]) -> Result<()> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::NetworkManagement::IpHelper::*;
+        // SAFETY: the first call only reports the size needed. The buffer for the second is u32
+        // words (MIB_TCPTABLE_OWNER_PID's alignment) with slack, and `size` tells the API its
+        // length in bytes. The table is read only after that call succeeded, and the row count
+        // it states is checked against the buffer before the rows are sliced, so the slice
+        // stays inside `data`, which outlives it.
         unsafe {
             let mut size = 0;
             GetExtendedTcpTable(

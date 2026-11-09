@@ -10,8 +10,9 @@
 # nata and natb can't reach each other directly, so their traffic must go through the relay.
 # Checked: joining, every pair pings, paths (direct vs relay), names (<node>.mesh), access rules,
 # a published port (DNAT, as Docker does), subnet sharing only after approval and the router's
-# own address in it, Docker's rules ahead of the agent's, disabling and removing nodes, an
-# interface deleted under its agent, the firewall after a reload, and a clean host afterwards.
+# own address in it, Docker's rules ahead of the agent's and a connection kept across a gap in
+# the rules, disabling and removing nodes, an interface deleted under its agent, the firewall
+# after a reload, and a clean host afterwards.
 # Usage: sudo tests/mesh/e2e.sh DIR-WITH-ghostlink-server-AND-ghostlink-mesh
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
@@ -35,7 +36,8 @@ cleanup() {
         done
         echo "--- topology"; admin --json mesh map 2>/dev/null
     fi
-    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null; done
+    # A paused agent only ends once it may run again.
+    for pid in "${pids[@]}"; do kill -CONT "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; done
     sleep 2
     for ns in "${namespaces[@]}"; do ip netns del "$ns" 2>/dev/null; rm -rf "/etc/netns/$ns"; done
     ip link del glinet 2>/dev/null
@@ -165,6 +167,12 @@ in_ns pub iptables -N DOCKER-USER
 in_ns pub iptables -A DOCKER-USER -j RETURN
 in_ns pub iptables -I FORWARD 1 -d 192.168.50.10/32 -p tcp --dport 8000 -j ACCEPT
 in_ns pub iptables -I FORWARD 1 -j DOCKER-USER
+# Right away, before the agent has noticed Docker (it is paused, so it can't): the guard in the
+# mangle table refuses the node without a rule, though Docker's accept rule comes first.
+kill -STOP "${agent[pub]}"
+if published relay; then fail "relay (not web) reached pub's published port right after Docker's rules came first"; fi
+published nata || fail "web (nata) lost pub's published port to the guard"
+kill -CONT "${agent[pub]}"
 docker_jump() { in_ns pub iptables -C DOCKER-USER -i glmesh0 -j GHOSTLINK-MESH-FWD 2>/dev/null; }
 wait_for 45 "pub's agent puts its jump first in DOCKER-USER" docker_jump
 test "$(in_ns pub iptables -S DOCKER-USER | sed -n 2p)" = "-A DOCKER-USER -o glmesh0 -j GHOSTLINK-MESH-OUT" ||
@@ -172,6 +180,52 @@ test "$(in_ns pub iptables -S DOCKER-USER | sed -n 2p)" = "-A DOCKER-USER -o glm
 if published relay; then fail "relay (not web) reached pub's published port once Docker's rules came first"; fi
 wait_for 20 "web (nata) still reaches pub's published port" published nata
 reaches relay "$(address natb)" || fail "ping must still pass"
+
+step "A connection opened while the agent's rules were missing ends when they are back"
+# An echo service behind pub, published on pub's mesh address port 9001, which no rule allows to relay.
+in_ns lan python3 -c '
+import socket, threading
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("0.0.0.0", 8001)); s.listen()
+def echo(c):
+    while (data := c.recv(64)):
+        c.sendall(data)
+while True:
+    c, _ = s.accept(); threading.Thread(target=echo, args=(c,), daemon=True).start()
+' >/dev/null 2>&1 & pids+=($!)
+in_ns pub iptables -t nat -A PREROUTING -d "$(address pub)" -p tcp --dport 9001 -j DNAT --to-destination 192.168.50.10:8001
+# A gap in enforcement: the agent (paused, so it can't put them back) has none of its jumps.
+kill -STOP "${agent[pub]}"
+in_ns pub iptables -D INPUT -i glmesh0 -j GHOSTLINK-MESH-IN
+for j in "-i glmesh0 -j GHOSTLINK-MESH-FWD" "-o glmesh0 -j GHOSTLINK-MESH-OUT"; do
+    in_ns pub iptables -D FORWARD $j
+    in_ns pub iptables -D DOCKER-USER $j
+done
+in_ns pub iptables -t mangle -D INPUT -i glmesh0 -j GHOSTLINK-MESH-GUARD-IN
+in_ns pub iptables -t mangle -D FORWARD -i glmesh0 -j GHOSTLINK-MESH-GUARD-FWD
+# relay opens a connection meanwhile and keeps it, sending a byte every half second and noting
+# whether the echo comes back.
+in_ns relay python3 -c '
+import socket, sys, time
+c = socket.create_connection((sys.argv[1], 9001), timeout=4); c.settimeout(1.5)
+with open(sys.argv[2], "a", buffering=1) as out:
+    while True:
+        try:
+            c.sendall(b"x"); ok = c.recv(1) == b"x"
+        except OSError:
+            ok = False
+        out.write("ok\n" if ok else "fail\n"); time.sleep(0.5)
+' "$(address pub)" "$work/held.txt" >/dev/null 2>&1 & held=$!; pids+=($held)
+wait_for 15 "relay's connection carries data while the rules are missing" grep -q '^ok$' "$work/held.txt"
+kill -CONT "${agent[pub]}"
+guard_jump() { in_ns pub iptables -t mangle -C FORWARD -i glmesh0 -j GHOSTLINK-MESH-GUARD-FWD 2>/dev/null; }
+wait_for 60 "pub's agent puts its rules back" guard_jump
+stopped() { [ "$(tail -n 3 "$work/held.txt" | sort -u)" = fail ]; }
+wait_for 20 "relay's connection stops carrying data once the rules are back" stopped
+oks=$(grep -c '^ok$' "$work/held.txt")
+sleep 5
+[ "$(grep -c '^ok$' "$work/held.txt")" = "$oks" ] || fail "the connection relay opened while the rules were missing carries data again"
+kill "$held"
+wait_for 20 "web (nata) still reaches pub's published port" published nata
 admin mesh rules clear
 
 step "Shared subnet only after approval"

@@ -26,6 +26,11 @@ fn create(
         .encode_utf16()
         .chain(Some(0))
         .collect();
+    // SAFETY: `sddl` is a NUL-terminated UTF-16 string that outlives the call. On success
+    // `descriptor` is a LocalAlloc'd security descriptor; `attributes` points at it and lives on
+    // this stack frame while the pipe is created (the call copies the security settings into the
+    // kernel object), and `descriptor` is freed once afterwards, whatever the result. The failed
+    // conversion returns before allocating.
     unsafe {
         let mut descriptor = std::ptr::null_mut();
         ensure!(
@@ -117,15 +122,14 @@ impl Listener {
             .ok_or_else(|| anyhow::anyhow!("Invalid socket directory"))?;
         std::fs::create_dir_all(parent)?;
         let meta = std::fs::symlink_metadata(parent)?;
+        let uid = ghostlink_engine::storage::effective_uid();
         ensure!(
-            !meta.file_type().is_symlink()
-                && meta.uid() == unsafe { libc::geteuid() }
-                && meta.mode() & 0o022 == 0,
+            !meta.file_type().is_symlink() && meta.uid() == uid && meta.mode() & 0o022 == 0,
             "Socket directory must be owned by the daemon and not writable by other users"
         );
-        let owner = args.owner_uid.unwrap_or_else(|| unsafe { libc::geteuid() });
+        let owner = args.owner_uid.unwrap_or(uid);
         ensure!(
-            unsafe { libc::geteuid() } == 0 || owner == unsafe { libc::geteuid() },
+            uid == 0 || owner == uid,
             "Only root may authorize another UID"
         );
         if let Ok(meta) = std::fs::symlink_metadata(&path) {
@@ -144,6 +148,8 @@ impl Listener {
         use std::os::unix::ffi::OsStrExt;
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
         ensure!(
+            // SAFETY: `c_path` is a NUL-terminated path that outlives the call, which only reads
+            // it; a group of u32::MAX (-1) leaves the group as it is.
             unsafe { libc::chown(c_path.as_ptr(), owner, u32::MAX) } == 0,
             "Cannot assign socket owner"
         );
