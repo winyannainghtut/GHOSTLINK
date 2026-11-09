@@ -74,6 +74,48 @@ func TestFirewallRules(t *testing.T) {
 	if !strings.Contains(rules["nat"], "-A GHOSTLINK-MESH-POST -s 100.96.0.0/16 -d 192.168.50.0/24 ! -o glmesh0 -j MASQUERADE") {
 		t.Errorf("nat: %s", rules["nat"])
 	}
+	// The guards (mangle): replies and ICMP errors go on, everything else a peer sends must match
+	// the same rules on every packet, and what does not is dropped before the filter table, where
+	// Docker's accept rules may come first (code review 2026-11-10, R1).
+	mangle := rules["mangle"]
+	for _, want := range []string{
+		":GHOSTLINK-MESH-GUARD-IN - [0:0]",
+		"-A GHOSTLINK-MESH-GUARD-IN -m conntrack --ctdir REPLY -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-IN -m conntrack --ctstate RELATED -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-IN -d 100.96.0.5/32 -p icmp --icmp-type echo-request -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-IN -s 100.96.0.2/32 -d 100.96.0.5/32 -p tcp --dport 8000:8100 -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-IN -s 100.96.0.3/32 -d 192.168.50.0/24 -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-FWD -m conntrack --ctdir REPLY -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-FWD -s 100.96.0.2/32 -m conntrack --ctstate DNAT --ctorigdst 100.96.0.5/32 -p tcp --ctorigdstport 8000:8100 -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-FWD -o glmesh0 -j RETURN",
+		"-A GHOSTLINK-MESH-GUARD-FWD -s 100.96.0.3/32 -d 192.168.50.0/24 -j RETURN",
+	} {
+		if !strings.Contains(mangle, want) {
+			t.Errorf("mangle lacks %q", want)
+		}
+	}
+	for _, chain := range []string{"GHOSTLINK-MESH-GUARD-IN", "GHOSTLINK-MESH-GUARD-FWD"} {
+		if strings.Index(mangle, "-A "+chain+" -j DROP") < strings.LastIndex(mangle, "-A "+chain+" -") {
+			t.Errorf("%s must end with DROP", chain)
+		}
+	}
+	// A guard never lets a connection through for being established: that is how one opened
+	// while the rules were missing would outlive them.
+	if strings.Contains(mangle, "ESTABLISHED") || strings.Contains(mangle, "GUARD-FWD -j ACCEPT") || strings.Contains(mangle, "GUARD-IN -j ACCEPT") {
+		t.Errorf("a guard accepts established connections or ends early:\n%s", mangle)
+	}
+	guards := 0
+	for _, j := range Jumps("glmesh0") {
+		if j.Table == "mangle" && (j.Target == "GHOSTLINK-MESH-GUARD-IN" || j.Target == "GHOSTLINK-MESH-GUARD-FWD") {
+			guards++
+			if strings.Join(j.Match, " ") != "-i glmesh0" || j.Docker {
+				t.Errorf("guard jump %+v", j)
+			}
+		}
+	}
+	if guards != 2 || !slices.Contains(Chains()["mangle"], "GHOSTLINK-MESH-GUARD-FWD") || !slices.Contains(Chains()["mangle"], "GHOSTLINK-MESH-GUARD-IN") {
+		t.Errorf("guard jumps %d, mangle chains %v", guards, Chains()["mangle"])
+	}
 	open := &meshproto.Config{MeshCIDR: "100.96.0.0/16", Address: "100.96.0.5/16", Firewall: meshproto.Firewall{Open: true}}
 	if f := Rules(open, "glmesh0")["filter"]; !strings.Contains(f, "-A GHOSTLINK-MESH-IN -d 100.96.0.5/32 -j ACCEPT") || strings.Contains(f, "-o glmesh0 -j ACCEPT") ||
 		!strings.Contains(f, "-A GHOSTLINK-MESH-FWD -m conntrack --ctstate DNAT --ctorigdst 100.96.0.5/32 -j ACCEPT") {

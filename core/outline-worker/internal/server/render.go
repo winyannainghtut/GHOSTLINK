@@ -496,13 +496,14 @@ type heldPort struct {
 var listenerNetworks = map[string][]string{"shadowsocks": {"tcp", "udp"}, "vless": {"tcp"}, "direct": {"tcp", "udp"}, "amneziawg": {"udp"}}
 
 // heldPorts are the ports this server's own listeners hold now, per transport: the API, the
-// dashboard, the mesh while it is on (TCP), and what the engine binds (the protocols that are on
-// and have keys, and the IKEv2/IPsec DNS listener while IKEv2 or IPsec is on). A change may move
-// a service onto one of them on the same transport, as when two services swap ports. A protocol
-// that is off, or has no keys yet, holds no port, so turning it on tries its port: another
-// program may have taken it since the server was created. Every listen_port in inbounds and
-// endpoints is a uint16.
-func (s *State) heldPorts() map[heldPort]bool {
+// dashboard, the mesh while it is on (TCP), and what the running engine binds, read from the
+// configuration it runs (running: from Engine.Running, nil while the engine is down). A change
+// may move a service onto one of them on the same transport, as when two services swap ports.
+// What the saved state would bind does not count: an engine that could not start (another
+// program holds one of its ports) holds none of its ports, so each is tried again (code review
+// 2026-11-10, R2). A protocol that is off, or has no keys yet, holds no port either, so turning
+// it on tries its port: another program may have taken it since the server was created.
+func (s *State) heldPorts(running []byte) map[heldPort]bool {
 	held := map[heldPort]bool{{"tcp", s.API.Port}: true}
 	if s.Dashboard.Port != 0 {
 		held[heldPort{"tcp", s.Dashboard.Port}] = true
@@ -510,16 +511,24 @@ func (s *State) heldPorts() map[heldPort]bool {
 	if s.meshEnabled() {
 		held[heldPort{"tcp", s.Mesh.Port}] = true
 	}
-	for _, listener := range append(s.inbounds(), s.endpoints()...) {
-		listener := listener.(object)
-		port, ok := listener["listen_port"].(uint16)
-		kind, _ := listener["type"].(string)
-		if !ok {
-			continue
-		}
-		for _, network := range listenerNetworks[kind] {
-			held[heldPort{network, port}] = true
+	var config struct {
+		Inbounds  []engineListener `json:"inbounds"`
+		Endpoints []engineListener `json:"endpoints"`
+	}
+	if len(running) > 0 && json.Unmarshal(running, &config) == nil {
+		for _, listener := range append(config.Inbounds, config.Endpoints...) {
+			for _, network := range listenerNetworks[listener.Type] {
+				if listener.ListenPort != 0 {
+					held[heldPort{network, listener.ListenPort}] = true
+				}
+			}
 		}
 	}
 	return held
+}
+
+// engineListener is what heldPorts reads of an inbound or endpoint in an engine configuration.
+type engineListener struct {
+	Type       string `json:"type"`
+	ListenPort uint16 `json:"listen_port"`
 }

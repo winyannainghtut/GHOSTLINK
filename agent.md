@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`).
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine).
 
 ### Design decisions to keep
 
@@ -45,7 +45,7 @@ A report on a running server and a second full review, reviewed area by area and
 - **Server isolation:** every public address of the host and the dashboard port are always blocked; WireGuard/AmneziaWG server endpoints open one NAT session per UDP destination (`internal/awg/endpoint.go`); the engine log is off by default; an engine that cannot start no longer stops `serve` (`ensureEngine`, every 30 s).
 - **Clients:** WireGuard and AmneziaWG clients refuse flows the far side starts (a route rule in `worker_session.rs`, and `JudgeFlow` in the AmneziaWG endpoint); the TUN collision check accepts a wider network around 172.28.85.0/30 (Hyper-V, WSL, Docker).
 - **IKEv2/IPsec:** identities always start with a letter or digit, are stored with each key and pinned at start (`pinIdentities`), so renames change nothing; `desired.json` is written only when its fingerprint changes; the first report after a start only sets a baseline.
-- **Mesh:** forwarding and relaying need the node's local consent; the agent installs its firewall before the interface and re-checks its jumps every 30 s; relayed pairs probe for a direct path instead of switching blindly.
+- **Mesh:** forwarding and relaying need the node's local consent; the agent installs its firewall before the interface and re-checks its jumps every 30 s; its mangle guards apply the access rules to every non-reply packet from the mesh, so neither Docker's filter rules nor a gap in the rules lets a connection through for good; relayed pairs probe for a direct path instead of switching blindly.
 - **Host scripts:** root never follows a symlink in the state (`in_state_dir`); `setup` stops the server before it changes the state; admin commands refuse words they don't take (`parseFlags`).
 - **Process lesson for agents:** workflow worktrees were created from `main`, not from the working branch; every fixer had to rebase onto the branch first. Check the base of a worktree before building on it.
 
@@ -69,7 +69,7 @@ A report on a running server and a second full review, reviewed area by area and
    - Windows mesh nodes.
    - The Linux desktop app, blocked by the GTK `glib` advisory.
 3. **Known limits**, found while checking the 0.8.1 notes and in the 2026-11-09 code review (the CHANGELOG states each but the upgrade tests; the ledger lists the untested upgrades under *Not verified*):
-   - **Docker after a firewall reload, for the IPsec component:** since 0.8.4 the mesh agent keeps its FORWARD jumps first in Docker's `DOCKER-USER` too (`hostfw`, `Jump.Docker`), so Docker's accept rules can't run ahead of the mesh's rules. The IPsec component's FORWARD jump does not get that copy: its chain starts with the speed limits (`hashlimit`), which a packet passing it twice would count twice. The component starts after Docker, so its jump is first, unless something (a firewalld reload) makes Docker put its rules first again while the jump stays. Software that keeps putting its own rules first in FORWARD (Calico) is not handled for the mesh either.
+   - **Docker after a firewall reload, for the IPsec component:** the mesh is covered: since 0.8.5 its agent checks mesh traffic in the `mangle` table (`GHOSTLINK-MESH-GUARD-*`, every non-reply packet), before the `filter` table where Docker's accept rules are, and also keeps its filter jumps first in `DOCKER-USER` (`hostfw`, `Jump.Docker`). The IPsec component has neither: its FORWARD chain starts with the speed limits (`hashlimit`), which a packet passing it twice would count twice, and it has no mangle guard. The component starts after Docker, so its jump is first, unless something (a firewalld reload) makes Docker put its rules first again while the jump stays. A mangle guard like the mesh's would fit it too. Software that accepts mesh traffic in mangle FORWARD ahead of the guard would get around the mesh's.
    - **An engine that cannot start:** since 0.8.4 the app and the dashboard show it (Island: *VPN engine down*; an Overview banner with the reason). `setup`, the installer and `status` still say the server is running.
    - **firewalld on the coordinator's node:** `install-server.sh --mesh` and `mesh join-here` neither trust the mesh interface nor print the hint that `install-mesh.sh` prints.
    - **Upgrade tests:** no CI job upgrades from the previous release's published packages (the rpm `%posttrans` start, the MSI); `release-version.mjs` could also check both lockfiles' workspace members, the CLI version test and the worker identity in §5.
@@ -220,7 +220,7 @@ This guide is named `agent.md` at the maintainer's request. Agents that only dis
 | MCP/agents | Scoped read/control grants, restricted stdio MCP, audit | Actual MCP process/tool and grant/revocation tests pass; end-to-end privileged agent-controlled routing still pending |
 | Android | Requirements and upstream investigation only | No native app/JNI implementation, APK/AAB or device test |
 | iOS | Requirements and upstream investigation only | No Xcode/Network Extension implementation, signed build or device test |
-| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.4 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
+| Release readiness (updated) | GitHub release workflow for Windows x64, Linux x64 and arm64, with checksums; releases up to v0.8.5 | Unsigned pre-releases. Code signing, an installed-MSI routed test, real-VPS and real-device checks remain before a v1.0.0 |
 
 Last observed implementation state: saved development UI fixture removed, no saved profiles in `.state-dev`, and owned development GUI/daemon processes stopped after testing. These are snapshots, not guarantees about the next session: inspect processes before starting or stopping anything.
 
@@ -352,7 +352,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.4; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.5; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.

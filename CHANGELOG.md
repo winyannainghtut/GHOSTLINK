@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-10
+
+Fixes from a follow-up review of 0.8.4 (`docs/development/code-review-2026-11-10.md`): the mesh's access rules now hold with no gap when Docker starts after the mesh agent, and a port change is checked properly while the VPN engine is down. Upgrade the mesh agent on every mesh node, and the server package.
+
+### Fixed
+
+- **Mesh access rules while Docker starts (R1):** 0.8.4 kept the agent's rules ahead of Docker's, but only within 30 seconds of Docker starting after the agent. During that time any mesh node could open a connection to a published container port, and a connection opened then kept working afterwards, because connections already open were let through without a check. Now:
+  - the agent also checks mesh traffic in the `mangle` table, before the `filter` table where Docker's accept rules are, so Docker's rules can't come first, at any time;
+  - every packet of a connection opened from the mesh must match the access rules, not just its first one. So a connection let through while the agent's rules were missing (a full firewall reload, for example) ends as soon as they are back. Replies to connections this machine opened, and ICMP errors, go through as before.
+  - **What changes for users:** changing the access rules now also ends open connections that the new rules no longer allow. Before, those kept working until they closed.
+- **Port changes while the VPN engine is down (R2):** when the engine could not start, because another program held one of its ports, a change could still give that port to another protocol. The server counted the port as its own because its settings listed it, so the change was accepted, and the new protocol's first key then failed. Now only the ports the running engine really holds count as the server's own; while the engine is down, every port is tried.
+
 ## [0.8.4] - 2026-11-10
 
 Servers can now listen on ports below 1024, the well-known ones such as 443 too, so Outline keys on those ports keep working after a move. This release also fixes what a code review of 0.8.3 found (`docs/development/code-review-2026-11-09.md`): two serious issues, mesh access rules that Docker could get around and an action in the app that could reach the wrong server, and four smaller ones. Upgrade the server package and, on mesh nodes, the mesh agent.

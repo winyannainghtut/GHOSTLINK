@@ -2,6 +2,18 @@
 
 Updated 2026-11-10 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## v0.8.5 The follow-up review of 0.8.4 (2026-11-10, pull request #9)
+
+The review is `docs/development/code-review-2026-11-10.md` (R1: the Docker window of the F1 fix, and connections that outlive it; R2: ports counted as held while the engine is down).
+
+| Check | Result actually observed |
+|---|---|
+| Go suite | All packages pass (the server package in 158 s), `go vet` on Windows and for Linux, `gofmt` clean. New: `TestAnEngineThatIsDownHoldsNoPorts`, the review's R2 reproduction, refused with 400. With the old rule put back (held ports from the saved state), it fails with 200, as the review saw. `TestHeldPortsAreThoseThatListenNow` now also checks that an engine that is down holds no ports. `TestFirewallRules` checks the mesh guards: their rules, the DROP at the end, no acceptance of established traffic, and jumps that match `glmesh0` |
+| UI, Rust, process suite | UI typecheck, 22 tests and both builds; Rust 51 + 2; 19/19 process tests against a fresh server |
+| GUI (WebView2 DevTools, isolated profile, two local servers behind a debug service) | The 0.8.4 check again, 34/34: F2 with the race reproduced, F6 with a real engine failure in two finishes, and Shadowsocks moved to 443 in Network |
+| Release CI (to run) | `tests/mesh/e2e.sh`: right after Docker's rules come first, with pub's agent paused so it can't react, relay (no rule) is refused at once and nata (with a rule) still reaches the published port. With the agent paused and all its jumps removed, a connection from relay to a published echo service carries data. Once the agent has put its rules back, it stops, and no echo comes back afterwards |
+| Not verified | A real Docker daemon starting after the agent (the test builds Docker's chains as Docker does); the IPsec component, which has no guard (agent.md, known limits) |
+
 ## v0.8.4 Ports below 1024 and the code review of 0.8.3 (2026-11-10, pull request #8)
 
 Asked for after an Outline import on a real server gave all 16 keys on port 443 new keys. The review is `docs/development/code-review-2026-11-09.md` (F1–F6). The F3, F4 and F5 tests were run against 0.8.3 in a separate worktree and fail there (F4's swap returned 200 there, because the test server runs no dashboard listener; the missing refusal is what fails). F1 and F6 are covered by the end-to-end test and the GUI check below, F2 by both the UI tests and the GUI check.
