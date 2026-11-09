@@ -96,6 +96,11 @@ pub fn handles(source: &str) -> bool {
 }
 
 /// Parses and validates a credential. Dynamic `ssconf://` keys are fetched over HTTPS each time.
+///
+/// # Errors
+/// Fails if the text is no credential this module handles, if it does not pass validation
+/// (unsupported cipher, transport or option; malformed key or address), or if a dynamic key
+/// cannot be fetched safely (an address that is not public, a redirect, a bad answer).
 pub async fn resolve(source: &str) -> Result<Resolved> {
     let source = source.trim();
     if source.starts_with("ss://") || source.starts_with("ssconf://") {

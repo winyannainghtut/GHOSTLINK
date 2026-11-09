@@ -21,3 +21,11 @@ ghostlink-engine = { path = "core/vpn-engine" }
 [profile.release]
 lto = "thin"
 strip = true
+
+# Every unsafe block says why it is sound (code review 2026-11-10, Rust finding 4). CI runs
+# clippy with -D warnings, so a new one without a SAFETY comment fails the build.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"

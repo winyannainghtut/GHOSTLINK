@@ -328,6 +328,9 @@ fn tcp_peer_pid(stream: &tokio::net::TcpStream) -> Result<u32> {
     let remote = stream.peer_addr()?;
     let local = stream.local_addr()?;
     let mut size = 0u32;
+    // SAFETY: as in process::verify_listeners: the first call only reports the size; the
+    // second fills a u32-aligned buffer of the length `size` gives; the table is read only after
+    // it succeeded, and its row count is checked against the buffer before the rows are sliced.
     unsafe {
         GetExtendedTcpTable(
             std::ptr::null_mut(),

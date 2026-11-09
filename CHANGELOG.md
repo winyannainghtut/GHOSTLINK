@@ -6,7 +6,12 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [0.8.5] - 2026-11-10
 
-Fixes from a follow-up review of 0.8.4 (`docs/development/code-review-2026-11-10.md`): the mesh's access rules now hold with no gap when Docker starts after the mesh agent, and a port change is checked properly while the VPN engine is down. Upgrade the mesh agent on every mesh node, and the server package.
+Fixes from two reviews of 0.8.4: a follow-up review of the server and mesh (`docs/development/code-review-2026-11-10.md`) and a review of the Rust client service, CLI and engine (`docs/development/rust-code-review-2026-11-10.md`).
+- **Mesh:** its access rules now hold with no gap when Docker starts after the mesh agent.
+- **Server:** a port change is checked properly while the VPN engine is down.
+- **Client service:** an OpenVPN profile that takes all traffic through `route` lines now counts as a full tunnel, and a tunnel worker that fails early now blocks the next connection until the network is checked.
+
+Upgrade the mesh agent on every mesh node, the server package, and the app or client package.
 
 ### Fixed
 
@@ -15,6 +20,23 @@ Fixes from a follow-up review of 0.8.4 (`docs/development/code-review-2026-11-10
   - every packet of a connection opened from the mesh must match the access rules, not just its first one. So a connection let through while the agent's rules were missing (a full firewall reload, for example) ends as soon as they are back. Replies to connections this machine opened, and ICMP errors, go through as before.
   - **What changes for users:** changing the access rules now also ends open connections that the new rules no longer allow. Before, those kept working until they closed.
 - **Port changes while the VPN engine is down (R2):** when the engine could not start, because another program held one of its ports, a change could still give that port to another protocol. The server counted the port as its own because its settings listed it, so the change was accepted, and the new protocol's first key then failed. Now only the ports the running engine really holds count as the server's own; while the engine is down, every port is tried.
+
+From the review of the Rust code:
+
+- **OpenVPN routes that take all traffic (finding 1):** a profile could send every IPv4 address into the tunnel with `route` lines, for example `route 0.0.0.0 128.0.0.0` and `route 128.0.0.0 128.0.0.0`, which is what `redirect-gateway def1` itself installs. It was still shown and treated as a split tunnel. On Linux that got around the rule that a full tunnel needs the administrator's `--allow-full-tunnel`, which protects SSH access to the machine.
+  - **Now:** routes that together cover every public IPv4 address, in any number of pieces, make the profile a full tunnel, as `redirect-gateway` does. Routes through `net_gateway` (which bypass the tunnel) don't count.
+  - **What changes:** such a profile is shown as *Full tunnel*, and on Linux connecting it is refused until the administrator allows full tunnels. What the profile does when it connects is unchanged.
+  - **Also new:** a `route` netmask with gaps, such as `255.0.255.0`, is refused at import.
+- **A tunnel worker that fails early (finding 2):** when the Shadowsocks, VLESS, WireGuard or AmneziaWG worker ended with an error before it had said it was started, the next connection was allowed at once. The worker may already have begun changing routes, DNS or the firewall before it could say so.
+  - **Now:** such an end blocks the next connection with *Network cleanup could not be verified* until the network is checked, as a crash after the start already did.
+  - **Unchanged:** a failure the worker reports as clean (it undid what it changed), and a normal disconnect, still let you connect again at once.
+
+### Changed
+
+- **Rust code:** every `unsafe` block in the client service, CLI and engine now states why it is sound, and the workspace's lint table makes a new one without that note fail CI. The two places that read the Windows `TOKEN_USER` structure now use storage aligned for it. Also, from findings 3 to 6 of the Rust review:
+  - `AdminError` is a standard error type;
+  - every package declares the Rust 1.92 minimum that CI builds with;
+  - the security and lifecycle functions document how they fail.
 
 ## [0.8.4] - 2026-11-10
 

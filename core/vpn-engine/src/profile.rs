@@ -176,6 +176,8 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
     let mut proto = "udp".to_string();
     let mut default_port = 1194;
     let mut full = false;
+    // What the profile's own routes send into the tunnel (first and last address).
+    let mut tunnel_routes: Vec<(u32, u32)> = vec![];
     // Kept as the profile gives them: `auth` is also the tls-auth HMAC digest, which must match
     // the server, and the redirect flags change which traffic the tunnel takes.
     let mut digest = "SHA256".to_string();
@@ -217,10 +219,20 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
             }
             "route" => {
                 ensure!((1..=4).contains(&args.len()), "Invalid IPv4 route");
-                args[0].parse::<std::net::Ipv4Addr>().context("Routes must use numeric IPv4 addresses")?;
-                if args.len() >= 2 { args[1].parse::<std::net::Ipv4Addr>().context("Invalid IPv4 netmask")?; }
+                let network = args[0].parse::<std::net::Ipv4Addr>().context("Routes must use numeric IPv4 addresses")?;
+                let mask = match args.get(1) {
+                    Some(mask) => u32::from(mask.parse::<std::net::Ipv4Addr>().context("Invalid IPv4 netmask")?),
+                    None => u32::MAX,
+                };
+                ensure!(mask.leading_ones() + mask.trailing_zeros() == 32, "Invalid IPv4 netmask");
                 if args.len() >= 3 && !matches!(args[2].as_str(), "vpn_gateway" | "net_gateway") { args[2].parse::<std::net::Ipv4Addr>().context("Invalid route gateway")?; }
                 if args.len() == 4 { args[3].parse::<u16>().context("Invalid route metric")?; }
+                // Only net_gateway keeps a route's traffic off the tunnel; any other route may
+                // send it in, so it counts toward what the tunnel takes over.
+                if args.get(2).map(String::as_str) != Some("net_gateway") {
+                    let start = u32::from(network) & mask;
+                    tunnel_routes.push((start, start | !mask));
+                }
                 extra.push_str(&format!("route {}\n", args.join(" ")));
             }
             "dhcp-option" => {
@@ -301,6 +313,11 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
         canonical.push_str(&format!("<{tag}>\n{content}</{tag}>\n"));
     }
     let sha256 = hex::encode(Sha256::digest(canonical.as_bytes()));
+    // A full tunnel, for the summary and the service's policy, is redirect-gateway or routes that
+    // together cover every public IPv4 address (two /1 routes are what def1 itself installs).
+    // `full` alone still decides whether redirect-gateway is written (code review 2026-11-10,
+    // Rust finding 1).
+    let full_tunnel = full || crate::wireguard::covers_public_ipv4(tunnel_routes);
     Ok(ValidatedProfile {
         canonical,
         summary: ProfileSummary {
@@ -308,7 +325,7 @@ pub fn validate(name: &str, input: &str) -> Result<ValidatedProfile> {
             kind: "openvpn".into(),
             display_name: name.into(),
             remotes,
-            tunnel_mode: if full { "full" } else { "split" }.into(),
+            tunnel_mode: if full_tunnel { "full" } else { "split" }.into(),
             certificate_expires_unix: Some(expires),
             sha256,
             is_default: false,
@@ -366,6 +383,49 @@ mod tests {
             .contains("\nredirect-gateway def1 ipv6 block-local\n"));
         assert_eq!(redirect.summary.tunnel_mode, "full");
         assert!(validate("t", &profile("redirect-gateway local\n", None)).is_err());
+    }
+
+    /// Routes that together cover every public IPv4 address make a full tunnel, as
+    /// redirect-gateway does, so the Unix service asks for --allow-full-tunnel: /0, the two /1
+    /// halves, four /2 quarters. Private subnets, one /1 and routes through net_gateway do not
+    /// (code review 2026-11-10, Rust finding 1).
+    #[test]
+    fn routes_that_cover_the_internet_are_a_full_tunnel() {
+        let mode = |routes: &str| {
+            validate("t", &profile(routes, None))
+                .unwrap()
+                .summary
+                .tunnel_mode
+        };
+        for full in [
+            "route 0.0.0.0 0.0.0.0\n",
+            "route 0.0.0.0 128.0.0.0\nroute 128.0.0.0 128.0.0.0\n",
+            "route 0.0.0.0 192.0.0.0\nroute 64.0.0.0 192.0.0.0\nroute 128.0.0.0 192.0.0.0\nroute 192.0.0.0 192.0.0.0\n",
+            "route 0.0.0.0 128.0.0.0 vpn_gateway\nroute 128.0.0.0 128.0.0.0 10.8.0.1 5\n",
+        ] {
+            assert_eq!(mode(full), "full", "{full}");
+        }
+        for split in [
+            "",
+            "route 10.20.0.0 255.255.0.0\n",
+            "route 192.168.50.0 255.255.255.0\nroute 203.0.113.7\n",
+            "route 0.0.0.0 128.0.0.0\n",
+            "route 0.0.0.0 128.0.0.0 net_gateway\nroute 128.0.0.0 128.0.0.0 net_gateway\n",
+        ] {
+            assert_eq!(mode(split), "split", "{split}");
+        }
+        assert!(
+            validate("t", &profile("route 10.0.0.0 255.0.255.0\n", None)).is_err(),
+            "a netmask with gaps"
+        );
+        // The routes stay in the profile as written, and no redirect-gateway is added.
+        let halves = validate(
+            "t",
+            &profile("route 0.0.0.0 128.0.0.0\nroute 128.0.0.0 128.0.0.0\n", None),
+        )
+        .unwrap();
+        assert!(halves.canonical.contains("\nroute 128.0.0.0 128.0.0.0\n"));
+        assert!(!halves.canonical.contains("\nredirect-gateway"));
     }
 
     #[test]

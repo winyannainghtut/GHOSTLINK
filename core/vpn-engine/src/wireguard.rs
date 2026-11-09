@@ -40,36 +40,13 @@ impl WgConfig {
     /// private IPs" lists of WireGuard apps). Such a profile carries the internet, and replies
     /// to remote SSH sessions, just like 0.0.0.0/0.
     pub fn full_tunnel(&self) -> bool {
-        // Ranges that no remote internet host uses: this network, private, shared (CGNAT),
-        // loopback, link-local, multicast and reserved.
-        const NOT_PUBLIC: [&str; 8] = [
-            "0.0.0.0/8",
-            "10.0.0.0/8",
-            "100.64.0.0/10",
-            "127.0.0.0/8",
-            "169.254.0.0/16",
-            "172.16.0.0/12",
-            "192.168.0.0/16",
-            "224.0.0.0/3",
-        ];
-        let mut ranges: Vec<(u32, u32)> = self
-            .peer
-            .allowed_ips
-            .iter()
-            .map(String::as_str)
-            .chain(NOT_PUBLIC)
-            .filter_map(ipv4_range)
-            .collect();
-        ranges.sort_unstable();
-        // Walk the sorted ranges and look for the first address none of them contains.
-        let mut next = 0u64;
-        for (start, end) in ranges {
-            if u64::from(start) > next {
-                return false;
-            }
-            next = next.max(u64::from(end) + 1);
-        }
-        next > u64::from(u32::MAX)
+        covers_public_ipv4(
+            self.peer
+                .allowed_ips
+                .iter()
+                .map(String::as_str)
+                .filter_map(ipv4_range),
+        )
     }
     pub fn kind(&self) -> &'static str {
         if self.is_amnezia() {
@@ -103,6 +80,39 @@ pub fn prefix(value: &str) -> Result<String> {
             .context("Invalid prefix length")?
     };
     Ok(format!("{address}/{bits}"))
+}
+
+/// True when the IPv4 ranges (first and last address, inclusive) together contain every public
+/// IPv4 address: what a full tunnel takes over, whether it says `0.0.0.0/0`, splits it into
+/// pieces (`0.0.0.0/1` and `128.0.0.0/1`, as OpenVPN's `redirect-gateway def1` does) or leaves
+/// only private ranges out. Shared by WireGuard's AllowedIPs and OpenVPN's routes.
+pub(crate) fn covers_public_ipv4(ranges: impl IntoIterator<Item = (u32, u32)>) -> bool {
+    // Ranges that no remote internet host uses: this network, private, shared (CGNAT),
+    // loopback, link-local, multicast and reserved.
+    const NOT_PUBLIC: [&str; 8] = [
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "224.0.0.0/3",
+    ];
+    let mut ranges: Vec<(u32, u32)> = ranges
+        .into_iter()
+        .chain(NOT_PUBLIC.into_iter().filter_map(ipv4_range))
+        .collect();
+    ranges.sort_unstable();
+    // Walk the sorted ranges and look for the first address none of them contains.
+    let mut next = 0u64;
+    for (start, end) in ranges {
+        if u64::from(start) > next {
+            return false;
+        }
+        next = next.max(u64::from(end) + 1);
+    }
+    next > u64::from(u32::MAX)
 }
 
 /// The first and last address of an IPv4 prefix in `a.b.c.d/n` form; `None` for IPv6.

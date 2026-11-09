@@ -197,6 +197,11 @@ impl fmt::Display for AdminError {
     }
 }
 
+// Its messages are already sanitized and it wraps no source error, so it can be a standard
+// error (generic bounds, anyhow) without exposing anything (code review 2026-11-10, Rust
+// finding 3).
+impl std::error::Error for AdminError {}
+
 /// Accepts exactly one certificate and still verifies the handshake signature, so a peer that
 /// merely copied the (public) certificate cannot pass.
 #[derive(Debug)]
@@ -693,6 +698,16 @@ mod tests {
     use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::sync::OnceLock;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// AdminError is a standard error, also across threads (code review 2026-11-10, Rust
+    /// finding 3).
+    #[test]
+    fn admin_errors_are_standard_errors() {
+        fn assert_error<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_error::<AdminError>();
+        let error: anyhow::Error = AdminError::Unreachable.into();
+        assert!(error.to_string().starts_with("The server did not answer"));
+    }
 
     /// A self-signed certificate made for this test run only.
     fn identity() -> &'static (Vec<u8>, Vec<u8>) {
