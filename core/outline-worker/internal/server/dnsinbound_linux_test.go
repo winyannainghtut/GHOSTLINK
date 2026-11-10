@@ -45,14 +45,17 @@ func echoFrom(t *testing.T, udp *dnsUDP, fromAsked bool) {
 // echo came back (a datagram from any other source address is dropped by the kernel).
 func roundTrip(t *testing.T, asked string, port uint16) bool {
 	t.Helper()
+	// Called from several goroutines, so it reports with Error, not Fatal.
 	conn, err := net.Dial("udp4", net.JoinHostPort(asked, strconv.Itoa(int(port))))
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return false
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(700 * time.Millisecond))
 	if _, err := conn.Write([]byte("ping")); err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return false
 	}
 	reply := make([]byte, 16)
 	n, err := conn.Read(reply)

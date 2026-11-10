@@ -30,6 +30,8 @@ type rateRig struct {
 	key    keyView
 	tag    string
 	start  time.Time
+	// noMilli writes reports as an agent from before 0.8.6 did: to the second only.
+	noMilli bool
 }
 
 func newRateRig(t *testing.T) *rateRig {
@@ -48,8 +50,12 @@ func (r *rateRig) at(ms int64) time.Time { return r.start.Add(time.Duration(ms) 
 func (r *rateRig) write(ms int64, sas, closed []ipsecproto.SA) {
 	r.t.Helper()
 	when := r.at(ms)
-	data, err := json.Marshal(ipsecproto.Status{Version: 1, UpdatedUnix: when.Unix(), UpdatedMilli: when.UnixMilli(), Running: true,
-		SAs: sas, Closed: closed, Plugins: []string{"vici"}})
+	status := ipsecproto.Status{Version: 1, UpdatedUnix: when.Unix(), UpdatedMilli: when.UnixMilli(), Running: true,
+		SAs: sas, Closed: closed, Plugins: []string{"vici"}}
+	if r.noMilli {
+		status.UpdatedMilli = 0 // an agent from before 0.8.6
+	}
+	data, err := json.Marshal(status)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -199,6 +205,25 @@ func TestIPsecLiveRateUsesTheTimeBetweenReports(t *testing.T) {
 	readings := r.drive(40, []int64{400, 6400, 9400, 15400, 20400, 25400, 32400}, r.steady(100_000, 1_000_000))
 	expect(t, readings, 0, 6, 0, 0)
 	expect(t, readings, 7, 40, 100_000, 1_000_000)
+}
+
+// The windows are measured to the millisecond. Reports whose times fall at different fractions of
+// a second (the agent's cycle is never exactly 5 s) would, cut to whole seconds, give windows of 5
+// and 6 s for real windows of 5.5 and 5.4 s, and rates 10% off in both directions.
+func TestIPsecLiveRateUsesMillisecondStamps(t *testing.T) {
+	r := newRateRig(t)
+	readings := r.drive(30, []int64{400, 5900, 11300, 16900, 22100, 27800}, r.steady(100_000, 1_000_000))
+	expect(t, readings, 0, 5, 0, 0)
+	expect(t, readings, 6, 30, 100_000, 1_000_000)
+}
+
+// An agent from before 0.8.6 stamps its reports to the second only: the windows are then those
+// of whole seconds, which is right for reports that fall on whole seconds.
+func TestIPsecLiveRateOfAnOlderAgentUsesWholeSeconds(t *testing.T) {
+	r := newRateRig(t)
+	r.noMilli = true
+	readings := r.drive(30, every(0, 30000, 5000), r.steady(100_000, 1_000_000))
+	expect(t, readings, 5, 30, 100_000, 1_000_000)
 }
 
 // A report that is read again, as most are (the server reads once a second and the agent writes
