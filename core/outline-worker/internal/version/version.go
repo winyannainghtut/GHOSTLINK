@@ -7,7 +7,7 @@
 package version
 
 const (
-	Ghostlink = "0.8.5"
+	Ghostlink = "0.8.6"
 	// Engines names the unmodified upstream implementations linked into the tunnel worker and
 	// the server.
 	Engines = "sing-box 1.14.4; amneziawg-go 3.1.20260828"

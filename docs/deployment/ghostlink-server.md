@@ -213,7 +213,7 @@ The profile is **unsigned**, so iOS shows it as "Unverified". That is expected: 
 
 | Feature | IKEv2/IPsec |
 |---|---|
-| Data limits, usage, live speed, online state, "connected from" | Yes: the component reports each session's bytes every 5 s |
+| Data limits, usage, live speed, online state, "connected from" | Yes: the component reports each session's bytes every 5 s. Usage counts those bytes exactly. The live speed shows the rate over the time between two reports, steady until the next one (so it follows the traffic with a delay of about one report, 5 to 10 s), not the batch in one second |
 | Speed limits | Yes, by the firewall: each session's virtual IP gets `hashlimit` rules, shared by all of the user's sessions. This is policing: packets above the rate are dropped (TCP slows down to fit) rather than queued, so speeds are less even than with the other protocols |
 | Disable/remove/over the limit | Their sessions end within seconds. Passwords are withdrawn, and certificates are put on hold or revoked in the CRL |
 | Blocked IPs, blocked ports, SMTP block, always-blocked internal ranges and the server itself | Yes (firewall rules) |
@@ -336,7 +336,7 @@ Open the ports of the services you use in the host firewall and any cloud securi
 
 ### Traffic rules, in order
 
-1. With IKEv2/IPsec on, the IPsec DNS listener answers DNS from the IPsec pools only.
+1. With IKEv2/IPsec on, the IPsec DNS listener answers DNS from the IPsec pools only, from the address the client's query was sent to (its pool gateway, or the resolver it asked, after the redirect), so the client accepts the answer.
 2. Sniff protocol and site name (TLS SNI, HTTP Host, QUIC, DNS).
 3. All DNS (protocol DNS or port 53) is answered by the server's resolver, so site blocks cannot be skipped by choosing another resolver.
 4. Names are resolved on the server, so the next blocks also catch names that point inside.

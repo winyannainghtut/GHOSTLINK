@@ -43,13 +43,18 @@ type Monitor struct {
 	minuteCount int64
 	lastUp      map[string]int64
 	lastDown    map[string]int64
-	rates       map[string][2]int64
-	sampleDay   int64
-	historyMu   sync.Mutex
-	history     *History
-	flushedUp   map[string]int64
-	flushedDn   map[string]int64
-	flushedDet  map[detailKey]int64
+	lastExtUp   map[string]int64
+	lastExtDown map[string]int64
+	// external is each client's live IPsec rate, held between the component's reports (see
+	// ExternalRate).
+	external   map[string]externalRate
+	rates      map[string][2]int64
+	sampleDay  int64
+	historyMu  sync.Mutex
+	history    *History
+	flushedUp  map[string]int64
+	flushedDn  map[string]int64
+	flushedDet map[detailKey]int64
 	// siteMark is each site counter's value at the last daily check (see pruneSites).
 	siteMark map[detailKey]int64
 	// speedLimits are the clients' caps in bytes per second (absent: none), applied to their
@@ -62,8 +67,11 @@ type Monitor struct {
 
 type userCounters struct {
 	up, down atomic.Int64 // totals since start
-	pending  atomic.Int64 // both directions since the last Drain
-	active   atomic.Int64 // open connections
+	// extUp and extDown are the part of up and down that came from the IPsec component's
+	// counters (AddExternal), which arrive in batches: see Sample.
+	extUp, extDown atomic.Int64
+	pending        atomic.Int64 // both directions since the last Drain
+	active         atomic.Int64 // open connections
 	// lastSeen is when the client last sent something (unix seconds): see isOnline.
 	lastSeen atomic.Int64
 	// upPace and downPace hold the client to its speed limit, across all its connections.
@@ -122,19 +130,22 @@ var _ adapter.ConnectionTracker = (*Monitor)(nil)
 
 func NewMonitor() *Monitor {
 	return &Monitor{
-		users:      map[string]*userCounters{},
-		detail:     map[detailKey]*atomic.Int64{},
-		sites:      map[string]map[string]bool{},
-		clients:    map[string]map[string]clientSeen{},
-		lastUp:     map[string]int64{},
-		lastDown:   map[string]int64{},
-		rates:      map[string][2]int64{},
-		history:    newHistory(),
-		flushedUp:  map[string]int64{},
-		flushedDn:  map[string]int64{},
-		flushedDet: map[detailKey]int64{},
-		siteMark:   map[detailKey]int64{},
-		peerRx:     map[string]uint64{},
+		users:       map[string]*userCounters{},
+		detail:      map[detailKey]*atomic.Int64{},
+		sites:       map[string]map[string]bool{},
+		clients:     map[string]map[string]clientSeen{},
+		lastUp:      map[string]int64{},
+		lastDown:    map[string]int64{},
+		lastExtUp:   map[string]int64{},
+		lastExtDown: map[string]int64{},
+		external:    map[string]externalRate{},
+		rates:       map[string][2]int64{},
+		history:     newHistory(),
+		flushedUp:   map[string]int64{},
+		flushedDn:   map[string]int64{},
+		flushedDet:  map[detailKey]int64{},
+		siteMark:    map[detailKey]int64{},
+		peerRx:      map[string]uint64{},
 	}
 }
 
@@ -437,15 +448,34 @@ func (m *Monitor) Undrain(counted map[string]uint64) {
 }
 
 // Sample records one per-second rate point. Run it once a second.
+//
+// Each client's byte counts are exact: what a second's counters grew by feeds the online state
+// and the per-minute averages as it is. The live rate shown (m.rates, the series and the headline
+// numbers) is that growth, except that the IPsec component's bytes are not shown in the one
+// second they were reported in. It reports every 5 seconds, so a steady transfer would show
+// four seconds of nothing and one of five times its rate; they are shown as a steady rate
+// instead, the rate of the window they were counted over (ExternalRate).
 func (m *Monitor) Sample(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var totalUp, totalDown int64
+	var totalUp, totalDown, shownUp, shownDown int64
 	for tag, u := range m.users {
 		up, down := u.up.Load(), u.down.Load()
+		extUp, extDown := u.extUp.Load(), u.extDown.Load()
 		dUp, dDown := up-m.lastUp[tag], down-m.lastDown[tag]
+		batchUp, batchDown := extUp-m.lastExtUp[tag], extDown-m.lastExtDown[tag]
 		m.lastUp[tag], m.lastDown[tag] = up, down
-		m.rates[tag] = [2]int64{dUp, dDown}
+		m.lastExtUp[tag], m.lastExtDown[tag] = extUp, extDown
+		liveUp, liveDown := dUp-batchUp, dDown-batchDown
+		if held, ok := m.external[tag]; ok {
+			if now.Before(held.until) {
+				liveUp += int64(held.up)
+				liveDown += int64(held.down)
+			} else {
+				delete(m.external, tag)
+			}
+		}
+		m.rates[tag] = [2]int64{liveUp, liveDown}
 		// What the client sends shows it is there; data written to it only when it is enough
 		// to need its acknowledgements (see liveDownload).
 		if dUp > 0 || dDown >= liveDownload {
@@ -453,8 +483,10 @@ func (m *Monitor) Sample(now time.Time) {
 		}
 		totalUp += dUp
 		totalDown += dDown
+		shownUp += liveUp
+		shownDown += liveDown
 	}
-	m.samples = append(m.samples, rateSample{now.Unix(), totalUp, totalDown})
+	m.samples = append(m.samples, rateSample{now.Unix(), shownUp, shownDown})
 	if len(m.samples) > rateSamples {
 		m.samples = m.samples[len(m.samples)-rateSamples:]
 	}
@@ -565,6 +597,8 @@ func (m *Monitor) AddExternal(tag, protocol string, up, down uint64, remote stri
 	u := m.user(tag)
 	u.up.Add(int64(up))
 	u.down.Add(int64(down))
+	u.extUp.Add(int64(up))
+	u.extDown.Add(int64(down))
 	u.pending.Add(int64(up + down))
 	u.seen(at.Unix())
 	if m.detailPaused.Load() {
@@ -577,6 +611,33 @@ func (m *Monitor) AddExternal(tag, protocol string, up, down uint64, remote stri
 	if addr, err := netip.ParseAddr(remote); err == nil {
 		m.sawClient(tag, addr, protocol, at)
 	}
+}
+
+// externalRate is the live rate of a client's IPsec traffic, in bytes per second, shown until the
+// time given.
+type externalRate struct {
+	up, down float64
+	until    time.Time
+}
+
+// maxExternalHold is the longest a rate is shown without a newer report to replace it.
+const maxExternalHold = 15 * time.Second
+
+// ExternalRate sets a client's live IPsec rate from the bytes the component counted for it over
+// the window since its previous report: they are shown as a steady rate for the time the next
+// report is due, twice the window (at most maxExternalHold), after which the rate falls to zero
+// unless a newer report replaced it. Byte counts are not touched: AddExternal has counted them
+// exactly, and the per-minute averages use those. A window shorter than a second (or none, as
+// for a first report, which only sets a baseline) gives no rate, and so shows nothing.
+func (m *Monitor) ExternalRate(tag string, up, down uint64, window time.Duration, now time.Time) {
+	var rate externalRate
+	if window >= time.Second {
+		seconds := window.Seconds()
+		rate = externalRate{up: float64(up) / seconds, down: float64(down) / seconds, until: now.Add(min(2*window, maxExternalHold))}
+	}
+	m.mu.Lock()
+	m.external[tag] = rate
+	m.mu.Unlock()
 }
 
 // PeerReport is one WireGuard/AmneziaWG peer's status from the engine, with its user's tag.

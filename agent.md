@@ -8,11 +8,11 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 ### Where things stand
 
-- **Latest release: v0.8.5** (pull request #9): the fixes from the follow-up review of 0.8.4 and from the Rust review (`docs/development/code-review-2026-11-10.md`, `rust-code-review-2026-11-10.md`). 0.8.4 (2026-11-10, pull request #8) brought ports below 1024 and the fixes from the review of 0.8.3; 0.8.3 (2026-11-09, pull request #7) made new servers run only Shadowsocks. 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
+- **Latest release: v0.8.6** (pull request #10): the IKEv2/IPsec DNS answers from the address it was asked, and the live IPsec speed is steady (`docs/development/ikev2-findings-v0.8.6-2026-11-10.md`). 0.8.5 (pull request #9) brought the fixes from the follow-up review of 0.8.4 and from the Rust review (`docs/development/code-review-2026-11-10.md`, `rust-code-review-2026-11-10.md`). 0.8.4 (2026-11-10, pull request #8) brought ports below 1024 and the fixes from the review of 0.8.3; 0.8.3 (2026-11-09, pull request #7) made new servers run only Shadowsocks. 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
 - **Other releases:**
-  - v0.8.4, v0.8.3, v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.8.5, v0.8.4, v0.8.3, v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.5:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.6:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine).
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine); 0.8.6 IKEv2/IPsec: DNS answers from the address asked, steady live speed.
 
 ### Design decisions to keep
 
@@ -34,6 +34,8 @@ These came from the maintainer and shape the code. Keep them unless the maintain
 - **Online state:** a client is online while it sends something at least once a minute; open connections alone don't count (see §13).
 - **Small servers:** with under 1 GB of memory and swap the installer stops unless it gets `--add-swap`. Before a real move from Outline, suggest `--migrate-outline --check`.
 - **Default protocols (2026-11-09):** a new server turns on only Shadowsocks (Outline-compatible). AmneziaWG, WireGuard and VLESS-REALITY still get their ports and keys at `init` and stay off until an administrator turns them on (`set --enable P`, or their switch in the app or the dashboard), and turning one on says which port to allow. Upgrades keep each server's switches; nothing is turned off on its own. A protocol that is off keeps its port: `checkReservedPorts` counts it, so the dashboard or another protocol cannot take it, and turning it on tries it (`heldPorts`). New clients in the app start on Shadowsocks. `install-server.sh --enable PROTOCOL` turns protocols on at install time, and the ports it lists and opens are those of protocols that are on.
+- **IPsec DNS (0.8.6):** the DNS of IKEv2/IPsec clients is answered by Ghostlink's own inbound, `ghostlink-dns` (`internal/server/dnsinbound.go`), not sing-box's `direct` inbound. Replies must leave from the address the query was sent to (`IP_PKTINFO`), because the reverse NAT of the agent's DNAT matches them by it and a phone drops an answer from any other address. Do not go back to a plain wildcard UDP socket. `dnsinbound_linux_test.go` shows the failure on a plain socket and the fix, and `tests/ipsec/interop.sh` checks the source of every answer (`dnsquery.py` used to ignore it, which is why 0.8.5's tests passed while an iPhone got no websites).
+- **IPsec live speed (0.8.6):** the component's counters are exact totals and arrive every 5 s. `recordIPsec` counts them exactly (usage, limits and the per-minute averages) and sets the live rate once per new report: the bytes counted since the previous report over the time between the two (`updated_ms`), held until the next one is due (`Monitor.ExternalRate`, `Sample`). Do not feed a report's bytes into one second's reading again. `ipsec_rate_test.go` drives the real path on a virtual clock.
 - **Two packages (2026-11-08):** the server and the mesh agent stay separate packages. A node needs no Docker or VPN server, the server runs in an unprivileged container, and network rights on a host stay with small pieces (the mesh agent, and the IPsec component when it is on). `install-server.sh --mesh` installs both on the coordinator's host.
 - **First stable release:** v1.0.0, after the checks under *Next steps*. Launching with unsigned builds is acceptable.
 
@@ -62,7 +64,7 @@ A report on a running server and a second full review, reviewed area by area and
      - the MSI on a real Windows PC with a real connection;
      - the server on a real VPS with a phone (Outline or WireGuard app). A real VPS was tested on 2026-11-08 (AWS Lightsail, 0.8.2): all four protocols with real traffic, from a PC and, for AmneziaWG, by the maintainer by hand; see the verification ledger. A phone is still to do;
      - `--migrate-outline` on a real Outline server;
-     - an IKEv2 profile on an iPhone or Mac.
+     - an IKEv2 profile on an iPhone or Mac. The 0.8.6 fixes (websites opening over IKEv2 without the manual route, and a steady live speed during a transfer) were tested only in CI and with unit tests; check them on a real iPhone: record the device and iOS versions, browse and download for a minute with the VPN on, and watch the Island and the client's speed
    - **Code signing is the maintainer's decision:** the Windows builds are unsigned, so SmartScreen says "Unknown publisher" (Azure Trusted Signing costs about $10 a month).
 2. **Follow-ups worth offering:**
    - Separate download and upload caps.
@@ -353,7 +355,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.5; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.6; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -1037,7 +1039,7 @@ Requires an authorized Windows test machine and human administrator installation
   - `charon.load` marks critical plugins with a trailing `!`, and a critical plugin also demands its optional features (for example DSA in `pem`), so Ghostlink loads plugins plainly and the agent checks the loaded list over vici.
   - Daemon start-up messages are `dmn`/`lib` level 1; a filelog `default = 0` hides why charon exits with 66.
   - Run charon as `user = root` and `group = root` in strongswan.conf, because the container has no CAP_SETUID/SETGID.
-- **Agent timing:** it applies `desired.json` within a second (it polls the file's mtime), and lists sessions every 5 s. Tests must wait for `status.json` `applied_generation` to equal the desired `generation` before connecting.
+- **Agent timing:** it applies `desired.json` within a second (it polls the file's mtime), and lists sessions every 5 s, stamping each report with `updated_unix` and `updated_ms`; the server reads the report every second and takes the time between two reports from the stamps (0.8.6). Tests must wait for `status.json` `applied_generation` to equal the desired `generation` before connecting.
 - **Alpine sources:** `gitlab.alpinelinux.org` answers automated downloads with HTTP 418. Use the official GitHub mirror `alpinelinux/aports` (sparse, shallow clone). When sourcing an APKBUILD, use `set +u`, and give `abuild` `</dev/null` inside loops.
 - **License inventory:** `collect-licenses.py` must also list Go modules for `GOOS=linux`. Run on Windows, it previously missed the Linux-only dependencies of the server (netlink, nftables, nfqueue, dbus).
 - **Scripts with heredocs:** a node script written through a Bash heredoc ends at its first line that is exactly `EOF`, and the rest runs as shell. Write edit scripts with the Write tool.

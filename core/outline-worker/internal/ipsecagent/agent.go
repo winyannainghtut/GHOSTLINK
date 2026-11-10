@@ -434,8 +434,9 @@ func (a *Agent) writeStatusWith(running bool, problem string, sas []ipsecproto.S
 	if sas == nil {
 		sas = []ipsecproto.SA{}
 	}
+	now := time.Now()
 	status := ipsecproto.Status{
-		Version: ipsecproto.Version, UpdatedUnix: time.Now().Unix(), Running: running,
+		Version: ipsecproto.Version, UpdatedUnix: now.Unix(), UpdatedMilli: now.UnixMilli(), Running: running,
 		Applied: a.applied, Error: problem, Plugins: a.plugins, SAs: sas,
 	}
 	for id, c := range a.closed {

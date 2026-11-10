@@ -4,6 +4,27 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-10
+
+Two fixes for IKEv2/IPsec (the built-in VPN of iPhones, iPads and Macs), found on a running server with an iPhone (`docs/development/ikev2-findings-v0.8.6-2026-11-10.md`): websites did not open although the VPN was connected, and the live speed jumped instead of following the traffic. Upgrade the server package: it brings the new IPsec component too.
+
+### Fixed
+
+- **IKEv2/IPsec: connected, but no website opened:** the iPhone connected, a direct IP address such as `https://1.1.1.1` worked, but any site that needs a name lookup did not. It was seen with IKEv2; IKEv1/IPsec uses the same DNS path and the same fix.
+  - **Cause:** the server answers the client's DNS from its own address instead of from the address the client asked. The DNS of every client is redirected to the VPN's gateway address (10.79.0.1 or 10.80.0.1), and an answer has to come back from the address that was asked for the redirect to be undone and for a phone to accept it. A plain listener lets the routing table choose the source of its answers, and strongSwan's route to the client, on the server where this was found, prefers the server's own address. This was found by elimination: the server's DNS received the questions and the host resolved names, and changing only the preferred source of that route made websites open again. The captures did not show the answer at the phone itself. The test of every release only checked that some answer arrived, not where from.
+  - **Now:** the DNS for IPsec clients is answered by Ghostlink's own listener, which reads the address each request was sent to and answers from it. That holds for the gateway and for any other resolver the client asked (those are redirected to the server's DNS as before), over UDP; TCP was never affected. Site blocks, the rule that only the VPN pools may ask, and the isolation of the server are unchanged.
+  - **If you applied the workaround** `ip route replace <client>/32 ... src <gateway> table 220` by hand: it is no longer needed, and it vanishes with the session.
+  - **Not affected:** Shadowsocks, VLESS, WireGuard and AmneziaWG have their own DNS path.
+- **IKEv2/IPsec: the live speed was wrong:** while a client transferred data steadily, the Island, the Overview, the client list and the Live 60 s chart showed four seconds of nothing and then one second at about five times the real speed. The component reports a client's counters every 5 seconds, and the server put each report's whole growth into one second.
+  - **Now:** the bytes of a report are shown as a steady speed over the time between that report and the one before, measured from the reports' own time stamps (in milliseconds; the component now writes `updated_ms`), until the next report is due. The speed follows the traffic with a delay of one report, 5 to 10 seconds, and falls to zero within about 10 seconds of the traffic stopping or the reports ending. The server reads the report every second instead of every five.
+  - **Exact as before:** usage, data limits, the per-minute averages and the statistics are made from the bytes counted, not from the speed shown. Download is still the server's bytes out, upload its bytes in, and every speed is in B/s, KB/s or MB/s. Traffic of other protocols is shown in the second it flows, on top.
+  - **Unchanged:** the first report after a server start only sets a baseline (no burst of old totals), and a counter that went back never gives a negative speed.
+
+### Changed
+
+- **The DNS listener of IPsec clients is Ghostlink's own** (`ghostlink-dns`, IPv4) instead of sing-box's `direct` inbound. Its port and the firewall rules are the same.
+- **Tests:** the IPsec interop test now takes the answer's source into account (`dnsquery.py` ignored it): A, AAAA and HTTPS queries over UDP and TCP, to the gateway and to another resolver, after a reconnect, a server restart and a restart of the IPsec component, for both IKEv2 and IKEv1/IPsec, with a route to the client that prefers another address than the gateway. It also reads `/live` every second during a download held to 300 KB/s for over a minute. A Linux unit test reproduces the wrong source on a plain socket and the right one on the new listener.
+
 ## [0.8.5] - 2026-11-10
 
 Fixes from two reviews of 0.8.4: a follow-up review of the server and mesh (`docs/development/code-review-2026-11-10.md`) and a review of the Rust client service, CLI and engine (`docs/development/rust-code-review-2026-11-10.md`).

@@ -205,13 +205,29 @@ type ipsecBaseline struct {
 // final counters must still find their baseline, or the whole total would be counted again.
 const ipsecKeep = 3 * time.Minute
 
+// ipsecReportTime is when the agent wrote its report: to the millisecond, or to the second for
+// an agent from before 0.8.6.
+func ipsecReportTime(status ipsecproto.Status) time.Time {
+	if status.UpdatedMilli > 0 {
+		return time.UnixMilli(status.UpdatedMilli)
+	}
+	return time.Unix(status.UpdatedUnix, 0)
+}
+
 // recordIPsec turns the agent's per-SA byte counters into per-user traffic. It runs from Run
-// only (and tests), so it needs no lock.
+// every second (and from tests), so it needs no lock. The agent reports every 5 seconds, and a
+// report that was already read changes nothing.
+//
+// The bytes are counted exactly, as they are reported. The live rate is set once per new report,
+// from the bytes counted since the previous one and the time between the two reports (their
+// own time stamps, not when this runs), so a steady transfer shows a steady rate instead of
+// four seconds of nothing and one of five times its rate (v0.8.6, IKE-02).
 func (svc *Service) recordIPsec(now time.Time) {
 	status, fresh := svc.IPsecStatus(now)
 	if !fresh {
 		return
 	}
+	reportAt := ipsecReportTime(status)
 	// The counters are totals since each session began, and the agent and its sessions outlive
 	// this server. The first report after a start (or after a long gap) therefore only sets the
 	// baseline: counting it would add every live session's whole total a second time.
@@ -219,6 +235,19 @@ func (svc *Service) recordIPsec(now time.Time) {
 	svc.ipsecLast = now
 	if baseline {
 		svc.ipsecSeen = map[string]ipsecBaseline{}
+		svc.ipsecPending = map[string]*[2]uint64{}
+		svc.ipsecRateAt = reportAt
+	}
+	// pend adds bytes counted for a client since its live rate was last set; a client that is
+	// connected has an entry even when it counted nothing, so its rate is set to zero.
+	pend := func(tag string, up, down uint64) {
+		p := svc.ipsecPending[tag]
+		if p == nil {
+			p = new([2]uint64)
+			svc.ipsecPending[tag] = p
+		}
+		p[0] += up
+		p[1] += down
 	}
 	users := map[string]string{} // identity -> user tag
 	svc.Read(func(s *State) {
@@ -267,15 +296,27 @@ func (svc *Service) recordIPsec(now time.Time) {
 				continue
 			}
 			svc.monitor.AddExternal(tag, protocol, up, down, remote, now)
+			pend(tag, up, down)
 		}
 		if len(sa.Children) == 0 && !ended {
 			svc.monitor.AddExternal(tag, protocol, 0, 0, remote, now)
+			pend(tag, 0, 0)
 		}
 	}
 	for key, b := range svc.ipsecSeen {
 		if now.Sub(b.at) > ipsecKeep {
 			delete(svc.ipsecSeen, key)
 		}
+	}
+	// A new report, at least a second after the one the rates were last set from: the bytes
+	// counted since then over the time between the two. A report read again has the same time and
+	// changes nothing; a gap shorter than a second waits for the next report.
+	if window := reportAt.Sub(svc.ipsecRateAt); !baseline && window >= time.Second {
+		for tag, p := range svc.ipsecPending {
+			svc.monitor.ExternalRate(tag, p[0], p[1], window, now)
+		}
+		svc.ipsecPending = map[string]*[2]uint64{}
+		svc.ipsecRateAt = reportAt
 	}
 }
 

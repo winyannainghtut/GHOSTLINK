@@ -98,13 +98,16 @@ type Firewall struct {
 
 // Status is what the agent reports every few seconds.
 type Status struct {
-	Version     int      `json:"version"`
-	UpdatedUnix int64    `json:"updated_unix"`
-	Running     bool     `json:"running"`
-	Applied     int64    `json:"applied_generation"`
-	Error       string   `json:"error,omitempty"`
-	Plugins     []string `json:"plugins,omitempty"`
-	SAs         []SA     `json:"sas"`
+	Version     int   `json:"version"`
+	UpdatedUnix int64 `json:"updated_unix"`
+	// UpdatedMilli is the same moment in milliseconds. The server measures the time between two
+	// reports with it, to turn their byte counts into a rate. Absent from an older agent.
+	UpdatedMilli int64    `json:"updated_ms,omitempty"`
+	Running      bool     `json:"running"`
+	Applied      int64    `json:"applied_generation"`
+	Error        string   `json:"error,omitempty"`
+	Plugins      []string `json:"plugins,omitempty"`
+	SAs          []SA     `json:"sas"`
 	// Closed holds CHILD_SAs that ended (or were rekeyed) in the last minute, with their final
 	// byte counts, so traffic since the last report is not lost. Each appears once per child.
 	Closed []SA `json:"closed,omitempty"`
