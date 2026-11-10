@@ -100,6 +100,9 @@ struct ManagedServer {
     host: String,
     port: u16,
     server_name: String,
+    /// What the owner called it on this device (empty: show the ID).
+    #[serde(default)]
+    label: String,
     #[serde(default)]
     version: String,
     added_unix: u64,

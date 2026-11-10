@@ -88,6 +88,10 @@ pub enum Action {
         management_key: String,
         #[serde(default)]
         replace: bool,
+        /// The name the owner gave the server on this device, shown instead of the ID and of the
+        /// server's own name (at most 64 characters; the service trims it). Absent: the ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     ManagedServerList {},
     ManagedServerRemove {
@@ -789,6 +793,7 @@ mod tests {
                 name: "x".into(),
                 management_key: "{}".into(),
                 replace: false,
+                label: Some("My home server".into()),
             },
             Action::ManagedServerList {},
             Action::ManagedServerRemove { name: "x".into() },

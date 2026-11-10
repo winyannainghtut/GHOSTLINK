@@ -100,7 +100,11 @@ If setup cannot finish (for example, Docker is not running), the package still i
    ghostlink server add --name home --key-file management-key.json
    ```
 
+   `--name` is the server's ID on this device (letters, digits, `-` and `_`). Add `--label "My home server"` for the name the app shows; in the app, the name you type in **Add server** is the name shown. The server's own name ("Ghostlink server" unless it was named at install) is only shown next to it.
+
 Ghostlink checks that the server answers with the pinned certificate, then seals the key in the local service. The key is never shown again, and it is never given to AI agents.
+
+A server that no longer answers (switched off, reinstalled with a new management key, or moved to a new address) can still be removed from this device: in the app, **Servers I run** marks its card *Not answering* and the card has a **Forget** button (the server's page, if you open it, offers **Try again** and **Forget this server**); or run `ghostlink server remove --name home`. Forgetting only deletes the key kept on this device. A reinstalled server prints a new key: forget the old entry and add the server again with it.
 
 Then add users and keys:
 

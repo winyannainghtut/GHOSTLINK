@@ -4,6 +4,18 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-11-10
+
+Two fixes for **Servers I run** in the Windows app, found while using it. They change the Rust service and the app only: how the server and the VPN behave is unchanged (the server and its packages only carry the new version number). The Windows client gets them with the new installer.
+
+### Fixed
+
+- **A managed server that does not answer could not be removed:** when a server was switched off, reinstalled (which gives it a new management key) or moved to a new address, its page only said it did not answer, and *Forget server* was inside the page that never opened. The only way out was `ghostlink server remove --name NAME`. Now:
+  - the card of a server that did not answer says **Not answering** (with the reason on hover) and has a **Forget** button next to **Manage**, with the same confirmation as before;
+  - the page of such a server offers **Try again** and **Forget this server**, and says that a reinstalled server has a new key that has to be added again;
+  - forgetting only removes the key kept on this device; the service needs no answer from the server for it.
+- **The name typed when adding a server was replaced by "Ghostlink server":** the app showed the name the server calls itself, which is "Ghostlink server" unless it was named at install, so every server looked alike. The service now keeps the name you give (`label`, any script and spaces, up to 64 characters; the ID stays the limited `name`), and the lists and pages show it, with the server's own name beside it on its page when the two differ. Servers added by an older version have no label and show their ID. `ghostlink server add` takes `--label`; replacing a server's key without a label keeps the one it had.
+
 ## [0.8.6] - 2026-11-10
 
 Two fixes for IKEv2/IPsec (the built-in VPN of iPhones, iPads and Macs), found on a running server with an iPhone (`docs/development/ikev2-findings-v0.8.6-2026-11-10.md`): websites did not open although the VPN was connected, and the live speed jumped instead of following the traffic. Upgrade the server package: it brings the new IPsec component too.

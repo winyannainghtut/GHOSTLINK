@@ -8,11 +8,11 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
 
 ### Where things stand
 
-- **Latest release: v0.8.6** (pull request #10): the IKEv2/IPsec DNS answers from the address it was asked, and the live IPsec speed is steady (`docs/development/ikev2-findings-v0.8.6-2026-11-10.md`). 0.8.5 (pull request #9) brought the fixes from the follow-up review of 0.8.4 and from the Rust review (`docs/development/code-review-2026-11-10.md`, `rust-code-review-2026-11-10.md`). 0.8.4 (2026-11-10, pull request #8) brought ports below 1024 and the fixes from the review of 0.8.3; 0.8.3 (2026-11-09, pull request #7) made new servers run only Shadowsocks. 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
+- **Latest release: v0.8.7** (pull request #11): Servers I run, forget a server that does not answer, and the name you give a server is the name shown. 0.8.6 (pull request #10) fixed the IKEv2/IPsec DNS answers from the address it was asked, and the live IPsec speed (`docs/development/ikev2-findings-v0.8.6-2026-11-10.md`). 0.8.5 (pull request #9) brought the fixes from the follow-up review of 0.8.4 and from the Rust review (`docs/development/code-review-2026-11-10.md`, `rust-code-review-2026-11-10.md`). 0.8.4 (2026-11-10, pull request #8) brought ports below 1024 and the fixes from the review of 0.8.3; 0.8.3 (2026-11-09, pull request #7) made new servers run only Shadowsocks. 0.8.2 (2026-11-08) brought layout fixes for the app and the dashboard (pull request #5); 0.8.1 (the same day) brought the fixes from two reviews of 0.8.0 and from a report on a running server (pull requests #2 and #3); its CHANGELOG section has a *Changed* list of what behaves differently after an upgrade from 0.8.0. The verification ledger's top sections record the checks.
 - **Other releases:**
-  - v0.8.5, v0.8.4, v0.8.3, v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
+  - v0.8.6, v0.8.5, v0.8.4, v0.8.3, v0.8.2, v0.8.1, v0.8.0, v0.7.0 and v0.5.0 are published pre-releases;
   - v0.1.0–v0.4.0 and v0.6.0 are unpublished drafts. A maintainer publishes or deletes releases; an agent publishes one only when a maintainer asks.
-- **`main` after 0.8.6:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
+- **`main` after 0.8.7:** nothing unreleased yet; new changes go under `[Unreleased]` in the CHANGELOG.
 - **Version history in one line each:**
   - 0.1: Windows client;
   - 0.2: four protocols and split tunneling, then Linux client packages;
@@ -21,7 +21,7 @@ This guide is for anyone, person or AI coding agent, who builds, tests or change
   - 0.5: IKEv2/IPsec for Apple devices;
   - 0.6: the mesh of Linux servers;
   - 0.7: the frosted-glass React UI;
-  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine); 0.8.6 IKEv2/IPsec: DNS answers from the address asked, steady live speed.
+  - 0.8: speed limits and the Outline move; 0.8.1 the fixes from two reviews; 0.8.2 layout fixes; 0.8.3 only Shadowsocks on by default; 0.8.4 ports below 1024 (Outline keys on 443 kept) and the fixes from the code review of 2026-11-09 (`docs/development/code-review-2026-11-09.md`); 0.8.5 the fixes from its follow-up review (`code-review-2026-11-10.md`: the mesh guard in mangle, held ports from the running engine); 0.8.6 IKEv2/IPsec: DNS answers from the address asked, steady live speed; 0.8.7 Servers I run: forget a server that does not answer, keep the name you give.
 
 ### Design decisions to keep
 
@@ -357,7 +357,7 @@ ghostlink-tunnel run -c PRIVATE_CONFIG.json
 Exact version identity currently required by Rust (`WORKER_VERSION` in `core/vpn-engine/src/worker_session.rs`; the worker builds the same line from `internal/version/version.go`, and it changes with every version bump):
 
 ```text
-Ghostlink tunnel worker 0.8.6; sing-box 1.14.4; amneziawg-go 3.1.20260828
+Ghostlink tunnel worker 0.8.7; sing-box 1.14.4; amneziawg-go 3.1.20260828
 ```
 
 The Rust check expects that line with a newline, compared byte for byte. A standalone sing-box executable fails this contract. `ghostlinkd --sing-box` is only a legacy alias for `--outline-engine`; it does not restore standalone CLI compatibility.
@@ -768,7 +768,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
 Client side:
 - **Daemon:** `ManagedServerAdd` and typed `ServerCall` are served by `remote::handle` in `services/vpn-daemon/src/remote.rs`, which releases the **daemon lock** during the probe or call. `ManagedServerList` and `ManagedServerRemove` are local arms of `Daemon::dispatch` in `main.rs`.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
-- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`.
+- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`. A managed server has an ID (`name`, limited characters) and, since 0.8.7, a `label`: the name its owner typed (any script, 64 characters), which the lists and pages show (`titleOf` in `ServersIRun.tsx`); the name the server calls itself is `server_name`. Forgetting a server (`managed_server_remove`) needs no answer from it, so the card list (`Not answering`) and the error page of the workspace offer it too.
 - **Access:** everything is owner-only and never exposed over MCP.
 
 Pitfalls found here:

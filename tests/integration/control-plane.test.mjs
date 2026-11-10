@@ -268,7 +268,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.8.6');
+  assert.equal((await cli(['version'])).data.version, '0.8.7');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -411,7 +411,7 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   t.after(() => { if (server.exitCode === null) server.kill(); });
   let added;
   for (let i = 0; i < 60 && !added; i++) {
-    try { added = await cli(['server', 'add', '--name', 'home', '--key-file', keyFile]); }
+    try { added = await cli(['server', 'add', '--name', 'home', '--label', '  My home server  ', '--key-file', keyFile]); }
     catch { await new Promise(resolve => setTimeout(resolve, 100)); }
   }
   assert.ok(added, 'the server did not come up');
@@ -422,6 +422,10 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   assert.equal((await cli(['server', 'add', '--name', 'home', '--key-file', keyFile], 2)).error.code, 'invalid_request', 'no silent overwrite');
   const listed = await cli(['server', 'list']);
   assert.equal(listed.data.servers[0].name, 'home');
+  // The name given on this device is kept (cleaned), apart from the ID and from the server's own name.
+  assert.equal(added.data.label, 'My home server');
+  assert.equal(listed.data.servers[0].label, 'My home server');
+  assert.notEqual(listed.data.servers[0].label, listed.data.servers[0].server_name);
   assert.ok(!JSON.stringify(listed).includes(secret) && !JSON.stringify(listed).includes(management.certSha256));
   if (windows) {
     const persisted = await fs.readFile(path.join(state, 'state.json'), 'utf8');
