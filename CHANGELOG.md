@@ -4,7 +4,9 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
-Two fixes for **Servers I run** in the Windows app, found while using it.
+## [0.8.7] - 2026-11-10
+
+Two fixes for **Servers I run** in the Windows app, found while using it. They change the Rust service and the app only: how the server and the VPN behave is unchanged (the server and its packages only carry the new version number). The Windows client gets them with the new installer.
 
 ### Fixed
 
