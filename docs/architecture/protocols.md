@@ -130,8 +130,8 @@ The client service manages servers through `core/vpn-engine/src/server_admin.rs`
 Open connections are counted by wrappers that embed sing's counter conns and decrement once on `Close`/`CloseFlow`. For TCP they keep the upstream and zero-copy interfaces. For UDP, `policedPacketConn` is deliberately not `ReaderReplaceable` and has no read waiter or batch path, so every packet the client sends goes through its `ReadPacket` (policing and `udpGuard`). It does expose `Upstream`, which sing follows to find the WireGuard stack's handshake reports and NAT timeout, and `UpstreamWriter`, from which sing sizes the header room of the buffers it writes to the client; without it the first Shadowsocks UDP reply overflowed its buffer and crashed the server (an unreleased build only).
 
 Periodic work in `service.go`:
-- **Every second:** a sampler turns totals into per-user rates and a 120-sample server series.
-- **Every 5 s:** a WireGuard/AmneziaWG peer poll, and the IPsec component's session report.
+- **Every second:** the IPsec component's report is read (a report already read changes nothing), and a sampler turns totals into per-user rates and a 120-sample server series. The IPsec bytes are counted exactly when a report arrives, but their live rate is the bytes of the window between two reports (by their own time stamps, in milliseconds since 0.8.6) over its length, shown until the next report is due (twice the window, at most 15 s), so a steady transfer is steady (`Monitor.ExternalRate`).
+- **Every 5 s:** a WireGuard/AmneziaWG peer poll. The IPsec component writes its session report this often.
 - **Every 30 s:** data-limit accounting, `Flush` into `history.go`, another peer poll, a disk check, and `ensureEngine` (start the engine again if it is down, or if the host's addresses changed).
 - **Every 5 min:** a save with rotation.
 
@@ -153,13 +153,13 @@ flowchart LR
   A --> F[iptables GHOSTLINK-IPSEC-*<br/>NAT, blocks, DNS DNAT]
   C --> S[ipsec/status.json<br/>SAs, bytes, closed children]
   S --> M[Monitor.AddExternal<br/>usage, limits, live]
-  F -.DNS :53.-> N[sing-box direct inbound<br/>hijack-dns, global blocks]
+  F -.DNS :53.-> N[ghostlink-dns inbound<br/>hijack-dns, global blocks]
 ```
 
 - **Connections:** four of them (`gl-ikev2-cert`, `gl-ikev2-eap`, `gl-ikev1-cert` and `gl-ikev1-psk` in Aggressive Mode) use fixed proposals. All are UDP-encapsulated (`encap = yes`) and draw from the pools `10.79.0.0/20` and `10.80.0.0/20`.
 - **Identities:** the IKEv2 server identity is `%any`, so the identifier the device requests is answered when the server certificate carries it. Every key's remote identifier is added to that certificate.
 - **Users:** identified by EAP or XAuth name, else by the certificate's identity. A key stores its identity when it is created (`name-ID@ghostlink` unless given), so renaming the user cannot orphan the key or its certificate. The agent refuses a whole settings file for one bad identity, so the default always starts with a letter or digit, and the server leaves out a key whose identity the agent would refuse instead of writing nothing.
-- **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to a sing-box `direct` inbound (high port, allowed only from the pools), whose `hijack-dns` applies the DNS rules for everyone.
+- **DNS:** the pool gateways sit on the dummy `glipsec0`. DNS to any address is DNATed to the pool gateway on a high port, where Ghostlink's own `ghostlink-dns` inbound (`internal/server/dnsinbound.go`, allowed only from the pools) answers, and its `hijack-dns` applies the DNS rules for everyone. The inbound answers UDP from the address the query was sent to (it reads it with `IP_PKTINFO`): the reverse NAT matches the answer by that address and turns it back into an answer from the resolver the client asked. A plain wildcard socket, as sing-box's `direct` inbound has (used up to 0.8.5), lets the routing table choose the source, and strongSwan's route to the client prefers the server's own address, so a phone, which ignores answers from any other address, never saw them (connected, but no website opened). TCP keeps the address of the accepted connection and needed no change.
 - **Accounting:** usage is counted per CHILD_SA unique ID, which survives IKE rekeys. Final counters come from `child-updown`, `ike-updown` and `child-rekey` events, so short sessions and the last seconds of a session are counted. The counters are totals since each session began, and the agent and its sessions outlive the server, so the first report after the server starts only sets the baseline. A child's counters are then remembered for 3 minutes after it last appears: a session that enforcement ended is in no report for a moment and comes back as a closed child, and its final counters must be counted against what was counted already. A closed child that is reported again with no new bytes does not count as the client being seen.
 - **Settings file:** every writer of `desired.json` goes through one lock. Saved changes write only when the agent would be told something new (the CRL's dates and the generation are not changes), because each new generation makes the agent reload strongSwan and its firewall; the daily check and the start of the server always write, which refreshes the CRL.
 

@@ -33,7 +33,7 @@ func EngineContext() context.Context {
 	in := inbound.NewRegistry()
 	shadowsocks.RegisterInbound(in)
 	vless.RegisterInbound(in)
-	direct.RegisterInbound(in) // DNS for IPsec clients only
+	registerDNSInbound(in) // DNS for IPsec clients only (see dnsinbound.go)
 	out := outbound.NewRegistry()
 	direct.RegisterOutbound(out)
 	endpoints := endpoint.NewRegistry()

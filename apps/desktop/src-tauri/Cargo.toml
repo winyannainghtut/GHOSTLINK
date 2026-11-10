@@ -1,6 +1,6 @@
 [package]
 name = "ghostlink-desktop"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2021"
 license = "MIT"
 # Built and tested with exactly this compiler in CI (desktop.yml).

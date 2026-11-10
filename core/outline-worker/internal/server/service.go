@@ -34,6 +34,10 @@ type Service struct {
 	// last report was read (both touched by recordIPsec only: see there).
 	ipsecSeen map[string]ipsecBaseline
 	ipsecLast time.Time
+	// ipsecRateAt is when the live rates were last set from a report, and ipsecPending the bytes
+	// counted for each client since (see recordIPsec).
+	ipsecRateAt  time.Time
+	ipsecPending map[string]*[2]uint64
 	// ipsecMu serializes the writes of the agent's settings; ipsecWritten identifies the ones
 	// written last (see writeIPsecDesired).
 	ipsecMu      sync.Mutex
@@ -381,9 +385,9 @@ func (s *Service) Health() Health {
 	return health
 }
 
-// Run samples rates every second, polls WireGuard/AmneziaWG peers and the IPsec component every
-// 5 s, records and enforces limits every 30 s and saves history every 5 minutes, until ctx
-// ends; then it records and saves once more.
+// Run samples rates every second, reads the IPsec component's report every second, polls
+// WireGuard/AmneziaWG peers every 5 s, records and enforces limits every 30 s and saves history
+// every 5 minutes, until ctx ends; then it records and saves once more.
 func (s *Service) Run(ctx context.Context) {
 	second := time.NewTicker(time.Second)
 	defer second.Stop()
@@ -400,12 +404,15 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case now := <-second.C:
 			ticks++
+			// The IPsec component reports every 5 seconds. Reading its report every second
+			// (a report already read changes nothing) puts a new one on the screen within a
+			// second, and before the sample, so the rate it sets is in that second's reading.
+			s.recordIPsec(now)
 			s.monitor.Sample(now)
 			if ticks%5 == 0 {
 				s.health.Sample(now)
 				// Often enough that a client who left shows as idle within about a minute.
 				s.pollPeers(now)
-				s.recordIPsec(now)
 				s.Read(func(state *State) {
 					if state.meshEnabled() {
 						s.meshLive.Tick(state.Mesh, now)

@@ -5,7 +5,8 @@
 #   IKEv2 + username/password (EAP-MSCHAPv2), IKEv2 + certificate,
 #   IPsec (IKEv1) + certificate + XAuth, IPsec + shared group key + XAuth (Aggressive Mode).
 # Through each tunnel: NAT to an "internet" host works, a blocked port and this host are refused,
-# DNS goes through the server's site blocks. Then: disabled users, removed keys, wrong passwords
+# DNS goes through the server's site blocks and every answer comes from the address that was asked
+# (UDP and TCP; A, AAAA and HTTPS), also after reconnects and restarts. Then: disabled users, removed keys, wrong passwords
 # and data limits are refused, usage is counted, and "ipsec disable" leaves the host clean.
 # Usage: sudo tests/ipsec/interop.sh path/to/ghostlink-server_*.deb
 set -euo pipefail
@@ -121,13 +122,56 @@ swan() { docker exec glclient swanctl "$@"; }
 # by SIGPIPE and, under pipefail, a session that is still up would look like none.
 established() { swan --list-sas | grep -c ESTABLISHED || true; }
 api_port=$(echo "$url" | sed 's|https://[^:]*:\([0-9]*\)/.*|\1|')
+dns_query() { in_client python3 "$here/dnsquery.py" "$@"; }
+# The server's DNS must answer from the address the client asked, over UDP and TCP (v0.8.6, IKE-01).
+# The client's resolver, here dnsquery.py as on a phone, ignores an answer from any other address,
+# and the reply of a wildcard socket leaves from the address the route to the client prefers, which
+# is never the pool gateway. A blocked-name NXDOMAIN alone proves nothing about that, so every
+# answer's source is checked, for A, AAAA and HTTPS queries, and for a resolver other than the
+# gateway (redirected to the server's DNS and answering as the resolver that was asked).
+check_dns() { # NAME GATEWAY
+    local name=$1 gateway=$2 transport type out ok attempt
+    echo "route to the client (table 220), preferred source must not be $gateway:"
+    ip route show table 220 | sed 's/^/    /'
+    if ip route show table 220 | grep -q " src $gateway\( \|$\)"; then
+        fail "$name: strongSwan's route already prefers $gateway, so this test would prove nothing"
+    fi
+    for transport in udp tcp; do
+        flag=(); [ "$transport" = tcp ] && flag=(--tcp)
+        for type in A AAAA HTTPS; do
+            out=$(dns_query "${flag[@]}" --type "$type" "$gateway" www.blocked.example)
+            test "$out" = NXDOMAIN || fail "$name: $type query over $transport to $gateway for a blocked name: $out"
+        done
+        out=$(dns_query "${flag[@]}" 198.51.100.10 www.blocked.example)
+        test "$out" = NXDOMAIN || fail "$name: another resolver over $transport is not redirected to the server's DNS: $out"
+    done
+    # Real answers, from the runner's own resolver (the server resolves through the host).
+    if ! getent hosts example.com >/dev/null 2>&1; then
+        echo "  (the runner cannot resolve names: not checking answers with data)"
+        return 0
+    fi
+    for transport in udp tcp; do
+        flag=(); [ "$transport" = tcp ] && flag=(--tcp)
+        for type in A AAAA HTTPS; do
+            ok=0
+            for attempt in 1 2 3; do
+                out=$(dns_query "${flag[@]}" --count --type "$type" "$gateway" example.com)
+                case "$type:$out" in
+                    A:"NOERROR "[1-9]*) ok=1 ;; # an A record exists
+                    AAAA:NOERROR\ *|HTTPS:NOERROR\ *) ok=1 ;; # a response from the right source
+                esac
+                [ $ok = 1 ] && break
+                sleep 1
+            done
+            [ $ok = 1 ] || fail "$name: $type query over $transport to $gateway for example.com: $out"
+        done
+    done
+}
 check_tunnel() { # NAME GATEWAY
     in_client curl -s --max-time 8 http://198.51.100.10:8080/ | grep -q ghostlink-ok || fail "$1: no internet through the tunnel"
     if in_client curl -s --max-time 4 http://198.51.100.10:8081/ >/dev/null; then fail "$1: blocked port 8081 reachable"; fi
     if in_client curl -sk --max-time 4 "https://10.99.0.1:$api_port/" >/dev/null; then fail "$1: the server itself is reachable from the VPN"; fi
-    test "$(in_client python3 "$here/dnsquery.py" "$2" www.blocked.example)" = NXDOMAIN || fail "$1: DNS at $2 does not apply site blocks"
-    # Any resolver is redirected to the server's DNS.
-    test "$(in_client python3 "$here/dnsquery.py" 198.51.100.10 www.blocked.example)" = NXDOMAIN || fail "$1: other resolvers are not redirected"
+    check_dns "$1" "$2"
     for i in $(seq 1 12); do
         api GET /server | jq -e '.ipsec_component.connections >= 1' >/dev/null && return 0
         sleep 1
@@ -146,6 +190,14 @@ wait_applied() {
     fail "the agent did not apply the new settings"
 }
 
+wait_dns() { # GATEWAY: the server's DNS answers a blocked name (the engine takes a moment to start)
+    for i in $(seq 1 40); do
+        [ "$(dns_query "$1" www.blocked.example)" = NXDOMAIN ] && return 0
+        sleep 1
+    done
+    fail "the DNS at $1 does not answer"
+}
+
 wait_applied
 for spec in ikev2-eap:10.79.0.1 ikev2-cert:10.79.0.1 ipsec-cert:10.80.0.1 ipsec-psk:10.80.0.1; do
     IFS=: read -r name gateway <<<"$spec"
@@ -155,6 +207,36 @@ for spec in ikev2-eap:10.79.0.1 ikev2-cert:10.79.0.1 ipsec-cert:10.80.0.1 ipsec-
     check_tunnel "$name" "$gateway"
     swan --terminate --ike "$name" --timeout 15 >/dev/null
 done
+
+step "DNS keeps answering from the right address after a reconnect and after restarts"
+# A reconnect (a new SA, and a new virtual IP lease)...
+connect ikev2-eap
+check_dns ikev2-eap 10.79.0.1
+swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
+connect ikev2-eap
+check_dns ikev2-eap 10.79.0.1
+# ...the server, and with it the DNS inbound, restarting while the session stays up...
+ghostlink-server restart >/dev/null
+wait_dns 10.79.0.1
+check_dns ikev2-eap 10.79.0.1
+# ...and the IPsec component restarting: its gateways and rules come back, the client connects again.
+since=$(date +%s)
+docker restart ghostlink-ipsec >/dev/null
+swan --terminate --ike ikev2-eap --timeout 10 >/dev/null 2>&1 || true
+for i in $(seq 1 60); do
+    [ "$(jq -r --argjson since "$since" 'if .running and .updated_unix >= $since then 1 else 0 end' "$state/ipsec/status.json" 2>/dev/null || echo 0)" = 1 ] && break
+    sleep 1
+done
+wait_applied
+connect ikev2-eap
+wait_dns 10.79.0.1
+check_dns ikev2-eap 10.79.0.1
+swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
+# IKEv1/IPsec shares the DNS path, with its own pool and gateway.
+connect ipsec-cert
+wait_dns 10.80.0.1
+check_dns ipsec-cert 10.80.0.1
+swan --terminate --ike ipsec-cert --timeout 15 >/dev/null
 
 step "Refusals: wrong password, disabled user, removed key"
 refused ikev2-wrong "wrong password"
@@ -203,6 +285,44 @@ wait_applied
 for i in $(seq 1 20); do [ "$(limit_rules "[0-9]*")" = 0 ] && break; sleep 1; done
 [ "$(limit_rules "[0-9]*")" = 0 ] || fail "the speed limit rules stayed after the cap was removed"
 swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
+
+step "Live rate: a sustained transfer shows a steady rate, and the rate returns to zero when it stops"
+# The component reports every 5 s; the server must spread what a report counted over its window
+# (v0.8.6, IKE-02). A download held to 300 KB/s runs for over a minute while /live is read every
+# second for the client's down_bps; an idle client then reads zero.
+head -c 30000000 /dev/urandom > "$work/www/long.bin"
+api PATCH "/users/$user" '{"speed_limit_bps":300000}' >/dev/null
+wait_applied
+connect ikev2-eap
+for i in $(seq 1 20); do [ "$(limit_rules)" = 2 ] && break; sleep 1; done
+[ "$(limit_rules)" = 2 ] || fail "the session has no speed limit rules for the live rate test"
+live_down() { api GET /live | jq -r --arg u "$user" '.users[] | select(.id == $u) | .down_bps'; }
+in_client curl -s --max-time 85 -o /dev/null http://198.51.100.10:8080/long.bin &
+download=$!
+readings=()
+for i in $(seq 1 80); do
+    readings+=("$(live_down)")
+    sleep 1
+done
+wait "$download" || true # curl ends at its own time limit
+python3 "$here/liverate.py" 300000 "${readings[@]}" || { echo "readings: ${readings[*]}"; fail "the live rate of a steady transfer is not steady"; }
+idle=
+for i in $(seq 1 30); do
+    idle=$(live_down)
+    [ "$idle" = 0 ] && break
+    sleep 1
+done
+[ "$idle" = 0 ] || fail "the live rate did not return to zero after the transfer stopped (still $idle B/s)"
+# The bytes were counted exactly all the same: usage covers what was downloaded (a lower bound
+# only, because the cap drops packets and the count includes retransmissions).
+[ "$(api GET "/users/$user" | jq .usage_bytes)" -gt 10000000 ] || fail "the sustained transfer was not counted"
+swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
+connect ikev2-eap # after the idle time, the client connects again and shows a rate again
+download_check=$(in_client curl -s --fail --max-time 30 -o /dev/null -w '%{size_download}' http://198.51.100.10:8080/big.bin) || fail "no download after the reconnect"
+[ "$download_check" -gt 0 ] || fail "nothing downloaded after the reconnect"
+swan --terminate --ike ikev2-eap --timeout 15 >/dev/null
+api PATCH "/users/$user" '{"speed_limit_bps":0}' >/dev/null
+wait_applied
 
 step "Usage is counted and the data limit cuts the user off"
 connect ipsec-cert

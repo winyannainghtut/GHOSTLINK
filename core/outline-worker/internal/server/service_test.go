@@ -42,6 +42,20 @@ func busyServer(t *testing.T) (*testServer, net.Listener, uint16) {
 	return server, busy, port
 }
 
+// unreservedPort is a port free on TCP and UDP on the host and not one of the server's own: the
+// ports of a protocol that is off, of the API and of the dashboard are reserved, and a random
+// pick can land on one (freeSharedPort alone does not know them), which a change then refuses.
+func (s *testServer) unreservedPort(t *testing.T) uint16 {
+	t.Helper()
+	var port uint16
+	var err error
+	s.service.Read(func(state *State) { port, err = pickPort(state.usedPorts(), portFree, "tcp", "udp") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 // A port another program holds when the server starts keeps the VPN engine down, but not the
 // management API: the server's own commands can fix it, and the engine starts once it can.
 func TestEngineThatCannotStartLeavesTheAPIUp(t *testing.T) {
@@ -75,7 +89,7 @@ func TestEngineThatCannotStartLeavesTheAPIUp(t *testing.T) {
 // The busy port can be moved with the server's own API, which brings the engine up at once.
 func TestABusyPortCanBeMovedAway(t *testing.T) {
 	server, _, _ := busyServer(t)
-	move := map[string]any{"protocols": map[string]any{Shadowsocks: map[string]any{"port": freeSharedPort(t)}}}
+	move := map[string]any{"protocols": map[string]any{Shadowsocks: map[string]any{"port": server.unreservedPort(t)}}}
 	server.must(t, http.StatusOK, "PATCH", "/server", move, nil)
 	if running, _ := server.service.engine.Running(); !running || server.service.Health().EngineError != "" {
 		t.Fatalf("the engine is not up after the port moved: %s", server.service.Health().EngineError)
@@ -272,7 +286,7 @@ func TestHeldPortsAreThoseThatListenNow(t *testing.T) {
 func TestAnEngineThatIsDownHoldsNoPorts(t *testing.T) {
 	server, _, port := busyServer(t)
 	patch := map[string]any{"protocols": map[string]any{
-		Shadowsocks: map[string]any{"enabled": false, "port": freeSharedPort(t)},
+		Shadowsocks: map[string]any{"enabled": false, "port": server.unreservedPort(t)},
 		VLESS:       map[string]any{"enabled": true, "port": port},
 	}}
 	want := fmt.Sprintf("vless cannot use TCP port %d: another program uses it", port)

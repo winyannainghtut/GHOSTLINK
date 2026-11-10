@@ -135,7 +135,7 @@ func (s *State) inbounds() []any {
 	}
 	// IPsec clients ask the pool gateway for DNS; the agent forwards gateway:53 here.
 	if s.appleEnabled() && s.IPsec.DNSPort != 0 {
-		inbounds = append(inbounds, object{"type": "direct", "tag": ipsecDNSTag, "listen": listenAddress, "listen_port": s.IPsec.DNSPort})
+		inbounds = append(inbounds, object{"type": ipsecDNSType, "tag": ipsecDNSTag, "listen": listenAddress, "listen_port": s.IPsec.DNSPort})
 	}
 	return inbounds
 }
@@ -493,7 +493,7 @@ type heldPort struct {
 }
 
 // listenerNetworks are the transports each kind of engine listener binds.
-var listenerNetworks = map[string][]string{"shadowsocks": {"tcp", "udp"}, "vless": {"tcp"}, "direct": {"tcp", "udp"}, "amneziawg": {"udp"}}
+var listenerNetworks = map[string][]string{"shadowsocks": {"tcp", "udp"}, "vless": {"tcp"}, ipsecDNSType: {"tcp", "udp"}, "amneziawg": {"udp"}}
 
 // heldPorts are the ports this server's own listeners hold now, per transport: the API, the
 // dashboard, the mesh while it is on (TCP), and what the running engine binds, read from the
