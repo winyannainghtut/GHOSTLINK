@@ -26,6 +26,7 @@ pub(crate) fn is_remote(action: &Action) -> bool {
 
 enum Plan {
     Add {
+        label: Option<String>,
         name: String,
         key: ManagementKey,
         replace: bool,
@@ -56,6 +57,18 @@ fn admin_error(error: AdminError) -> Response {
         AdminError::Invalid(_) => "invalid_request",
     };
     Response::err(code, &error.to_string())
+}
+
+/// The name an owner gave a server on this device: no control characters, trimmed, at most 64
+/// characters. Any script is fine (the ID it is stored under is the one with limits).
+fn clean_label(label: &str) -> String {
+    label
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn text(value: &Value, limit: usize, fallback: &str) -> String {
@@ -98,12 +111,17 @@ pub(crate) async fn handle(daemon: &Mutex<Daemon>, request: Request) -> Response
     };
     // 2. The network call, unlocked.
     let response = match plan {
-        Plan::Add { name, key, replace } => match server_admin::probe(&key).await {
+        Plan::Add {
+            name,
+            key,
+            replace,
+            label,
+        } => match server_admin::probe(&key).await {
             Err(error) => admin_error(error),
             Ok(info) => daemon
                 .lock()
                 .await
-                .finish_add(name, key, replace, &info)
+                .finish_add(name, key, replace, label, &info)
                 .unwrap_or_else(|_| Response::err("internal", "Service storage failed")),
         },
         Plan::Call { key, op, client } => match client.call(&key, &op).await {
@@ -138,6 +156,7 @@ impl Daemon {
                 name,
                 management_key,
                 replace,
+                label,
             } => {
                 if !profile::valid_name(&name) {
                     return Err(Response::err(
@@ -158,7 +177,12 @@ impl Daemon {
                 // Parse errors are fixed messages; they never echo the key.
                 let key = ManagementKey::parse(&management_key)
                     .map_err(|e| Response::err("invalid_request", &e.to_string()))?;
-                Ok(Plan::Add { name, key, replace })
+                Ok(Plan::Add {
+                    name,
+                    key,
+                    replace,
+                    label: label.as_deref().map(clean_label),
+                })
             }
             Action::ServerCall { server, op } => {
                 let managed =
@@ -215,6 +239,7 @@ impl Daemon {
         name: String,
         key: ManagementKey,
         replace: bool,
+        label: Option<String>,
         info: &Value,
     ) -> Result<Response> {
         // Another request may have saved this ID, or other servers, while the server was being
@@ -233,10 +258,21 @@ impl Daemon {
             ));
         }
         let (host, port) = key.host_port();
+        // Replacing a server's key without a new label keeps the name it already had here.
+        let label = label
+            .filter(|label| !label.is_empty())
+            .or_else(|| {
+                self.store
+                    .managed_servers
+                    .get(&name)
+                    .map(|old| old.label.clone())
+            })
+            .unwrap_or_default();
         let managed = ManagedServer {
             sealed_key: storage::seal(&serde_json::to_vec(&key)?)?,
             host,
             port,
+            label,
             server_name: text(&info["name"], 80, "Ghostlink server"),
             version: text(&info["version"], 40, ""),
             added_unix: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -276,6 +312,7 @@ impl ManagedServer {
             "name": name,
             "endpoint": endpoint,
             "server_name": self.server_name,
+            "label": self.label,
             "version": self.version,
             "added_unix": self.added_unix,
         })
@@ -285,6 +322,75 @@ impl ManagedServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_key() -> ManagementKey {
+        ManagementKey::parse(&format!(
+            r#"{{"apiUrl":"https://192.0.2.1:8443/abcdefghijklmnop0123","certSha256":"{}"}}"#,
+            "ab".repeat(32)
+        ))
+        .unwrap()
+    }
+
+    /// The name an owner types is kept as it is (any script, spaces, capitals), cleaned and cut to
+    /// 64 characters; the ID it is saved under is a separate, limited thing.
+    #[test]
+    fn labels_are_cleaned() {
+        assert_eq!(clean_label("  My home server  "), "My home server");
+        assert_eq!(clean_label("ကျွန်ုပ်၏ ဆာဗာ"), "ကျွန်ုပ်၏ ဆာဗာ");
+        assert_eq!(clean_label("a\u{0}b\nc\u{7}"), "abc");
+        assert_eq!(clean_label("   "), "");
+        assert_eq!(clean_label(&"é".repeat(100)).chars().count(), 64);
+    }
+
+    /// The label is saved with the server and shown in its summary; a server added without one
+    /// shows none; replacing its key without a label keeps the one it had; a new label replaces it.
+    #[test]
+    fn the_name_given_on_this_device_is_kept() {
+        let mut daemon = crate::test_daemon("server-label");
+        let info = json!({"name": "Ghostlink server"});
+        daemon
+            .finish_add(
+                "home".into(),
+                test_key(),
+                false,
+                Some("My home".into()),
+                &info,
+            )
+            .unwrap();
+        daemon
+            .finish_add("plain".into(), test_key(), false, None, &info)
+            .unwrap();
+        let summary =
+            |daemon: &crate::Daemon, name: &str| daemon.store.managed_servers[name].summary(name);
+        assert_eq!(summary(&daemon, "home")["label"], "My home");
+        assert_eq!(summary(&daemon, "home")["server_name"], "Ghostlink server");
+        assert_eq!(summary(&daemon, "plain")["label"], "");
+        daemon
+            .finish_add("home".into(), test_key(), true, None, &info)
+            .unwrap();
+        assert_eq!(
+            summary(&daemon, "home")["label"],
+            "My home",
+            "a replaced key keeps its name"
+        );
+        daemon
+            .finish_add(
+                "home".into(),
+                test_key(),
+                true,
+                Some("Home, Singapore".into()),
+                &info,
+            )
+            .unwrap();
+        assert_eq!(summary(&daemon, "home")["label"], "Home, Singapore");
+        // An entry saved by an older version has no label field at all.
+        let old: ManagedServer = serde_json::from_value(json!({
+            "sealed_key": [], "host": "192.0.2.1", "port": 8443, "server_name": "Old", "added_unix": 1
+        }))
+        .unwrap();
+        assert_eq!(old.summary("old")["label"], "");
+        let _ = std::fs::remove_dir_all(&daemon.args.data_dir);
+    }
 
     #[test]
     fn adds_that_overlap_cannot_pass_the_server_limit() {
@@ -298,6 +404,7 @@ mod tests {
                     host: "192.0.2.1".into(),
                     port: 8443,
                     server_name: "test".into(),
+                    label: String::new(),
                     version: String::new(),
                     added_unix: 0,
                 },
@@ -311,14 +418,14 @@ mod tests {
             .unwrap()
         };
         let late = daemon
-            .finish_add("late".into(), key(), false, &json!({}))
+            .finish_add("late".into(), key(), false, None, &json!({}))
             .unwrap();
         assert_eq!(late.error.unwrap().code, "invalid_request");
         assert_eq!(daemon.store.managed_servers.len(), MAX_MANAGED_SERVERS);
         // Replacing a saved server is still possible at the limit.
         assert!(
             daemon
-                .finish_add("s0".into(), key(), true, &json!({}))
+                .finish_add("s0".into(), key(), true, None, &json!({}))
                 .unwrap()
                 .success
         );

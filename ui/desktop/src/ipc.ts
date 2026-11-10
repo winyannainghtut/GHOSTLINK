@@ -65,7 +65,9 @@ export type Profile = {
 };
 export type SplitMode = 'full' | 'bypass' | 'only';
 export type RoutingPolicy = { mode: SplitMode; domains: string[]; ip_ranges: string[]; apps: string[]; lan_direct: boolean };
-export type ManagedServer = { name: string; endpoint: string; server_name: string; version: string; added_unix: number };
+// label: the name its owner gave it on this device (empty for a server added before 0.8.7 or by
+// the CLI without one: the ID is shown then). server_name is the name the server itself reports.
+export type ManagedServer = { name: string; label?: string; endpoint: string; server_name: string; version: string; added_unix: number };
 
 export const KINDS: Record<string, string> = { outline: 'Shadowsocks', wireguard: 'WireGuard', amneziawg: 'AmneziaWG', vless: 'VLESS', openvpn: 'OpenVPN' };
 export const KIND_DETAIL: Record<string, string> = {

@@ -28,8 +28,8 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 
 | Action | Fields | Returns |
 |---|---|---|
-| `managed_server_add` | `name`, `management_key` (the JSON key text), optional `replace` | `{name, endpoint, server_name, version, added_unix, protocols}` after the server answered with the pinned certificate |
-| `managed_server_list` | none | `{servers: [{name, endpoint, server_name, version, added_unix}]}`; never the key |
+| `managed_server_add` | `name` (the ID), `management_key` (the JSON key text), optional `replace`, optional `label` (the name shown for it on this device: any script, up to 64 characters; replacing a key without a label keeps the old one) | `{name, endpoint, label, server_name, version, added_unix, protocols}` after the server answered with the pinned certificate |
+| `managed_server_list` | none | `{servers: [{name, endpoint, label, server_name, version, added_unix}]}` (`label` is empty for a server added without one; `server_name` is the name the server calls itself); never the key |
 | `managed_server_remove` | `name` | `{removed}`; the server itself is unchanged |
 | `server_call` | `server`, `op` | The server's JSON answer for that operation; deletes answer `"data": null` |
 

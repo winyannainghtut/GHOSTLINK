@@ -168,6 +168,9 @@ enum ServerCommand {
         key_stdin: bool,
         #[arg(long)]
         replace: bool,
+        /// The name to show for it on this device (the app shows it; --name stays its ID).
+        #[arg(long)]
+        label: Option<String>,
     },
     /// List managed servers (addresses only; keys are never shown).
     List,
@@ -1045,7 +1048,9 @@ async fn server_action(command: &ServerCommand, timeout: u64) -> Result<Action, 
             key_file,
             key_stdin,
             replace,
+            label,
         } => Action::ManagedServerAdd {
+            label: label.clone(),
             name: name.clone(),
             management_key: read_secret(
                 key_file.as_ref(),

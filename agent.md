@@ -768,7 +768,7 @@ Read [docs/deployment/ghostlink-server.md](docs/deployment/ghostlink-server.md) 
 Client side:
 - **Daemon:** `ManagedServerAdd` and typed `ServerCall` are served by `remote::handle` in `services/vpn-daemon/src/remote.rs`, which releases the **daemon lock** during the probe or call. `ManagedServerList` and `ManagedServerRemove` are local arms of `Daemon::dispatch` in `main.rs`.
 - **Pinned client:** `core/vpn-engine/src/server_admin.rs` (rustls with a custom pin verifier).
-- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`.
+- **CLI and GUI:** CLI `ghostlink server ...`; GUI **Servers I run**, the shared `ui/admin` views mapped onto `server_call` operations by `ui/desktop/src/routes.ts`. A managed server has an ID (`name`, limited characters) and, after 0.8.6, a `label`: the name its owner typed (any script, 64 characters), which the lists and pages show (`titleOf` in `ServersIRun.tsx`); the name the server calls itself is `server_name`. Forgetting a server (`managed_server_remove`) needs no answer from it, so the card list (`Not answering`) and the error page of the workspace offer it too.
 - **Access:** everything is owner-only and never exposed over MCP.
 
 Pitfalls found here:

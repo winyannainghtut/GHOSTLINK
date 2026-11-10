@@ -1,6 +1,6 @@
 // Servers I run: Ghostlink servers this device manages with their management keys (sealed in
 // the local service). Opening one shows the same views as the server's own dashboard.
-import { ArrowLeft, BookOpen, Eye, EyeOff, Plus, Server as ServerIcon, Settings2, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, Eye, EyeOff, Plus, RotateCw, Server as ServerIcon, Settings2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Server, Transport } from '@admin/api';
 import { Island } from '@admin/Island';
@@ -19,6 +19,30 @@ import { useService } from '../service';
 
 type Seen = Record<string, { name: string; version: string }>;
 
+// Forgetting a server only removes its management key from this device: the service needs no
+// answer from the server for it. So it is offered wherever the server is listed, also for one that
+// does not answer (switched off, reinstalled with a new key, its address gone), which no view of
+// the server itself can be opened for. Resolves to whether it was forgotten.
+// What a server is called in the lists and on its pages: the name its owner gave it on this device,
+// else its ID. (Not the name the server calls itself: that is "Ghostlink server" unless it was named
+// at install, so servers would look alike.)
+const titleOf = (s: { name: string; label?: string }) => s.label || s.name;
+
+function useForgetServer() {
+  const { confirm, toast } = useUI();
+  return async (server: { name: string }, title: string): Promise<boolean> => {
+    if (!(await confirm({ title: `Forget ${title}?`, text: 'Ghostlink removes its management key from this device. The server, its clients and their keys keep working. You need the key to add it again.', action: 'Forget server', danger: true }))) return false;
+    try {
+      await request({ type: 'managed_server_remove', name: server.name });
+      toast(`${title} forgotten on this device.`);
+      return true;
+    } catch (e) {
+      toast((e as Error).message, 'bad');
+      return false;
+    }
+  };
+}
+
 // addServerSignal counts presses of the navigation bar's Add server; onAddServerShown clears it
 // once the sheet is open, so coming back to this view later does not open it again.
 export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSignal: number; onAddServerShown: () => void }) {
@@ -27,17 +51,27 @@ export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSi
   // The service keeps each server's name and version from the day it was added; the servers
   // themselves tell the current ones (after a rename or an upgrade).
   const [seen, setSeen] = useState<Seen>({});
+  // Servers that did not answer, with why: the card says so, and offers to forget the server.
+  const [silent, setSilent] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const [help, setHelp] = useState(false);
   const [open, setOpen] = useState<ManagedServer | null>(null);
+  const forget = useForgetServer();
   const load = () =>
     request<{ servers: ManagedServer[] }>({ type: 'managed_server_list' })
       .then(r => {
         setServers(r.servers);
+        // A server forgotten or added since leaves the lists of what was seen and not answered.
+        const names = new Set(r.servers.map(s => s.name));
+        setSeen(all => Object.fromEntries(Object.entries(all).filter(([name]) => names.has(name))));
+        setSilent(all => Object.fromEntries(Object.entries(all).filter(([name]) => names.has(name))));
         for (const s of r.servers) {
           request<Server>({ type: 'server_call', server: s.name, op: { op: 'info' } })
-            .then(info => setSeen(all => ({ ...all, [s.name]: { name: info.name, version: info.version } })))
-            .catch(() => {});
+            .then(info => {
+              setSeen(all => ({ ...all, [s.name]: { name: info.name, version: info.version } }));
+              setSilent(all => Object.fromEntries(Object.entries(all).filter(([name]) => name !== s.name)));
+            })
+            .catch(e => setSilent(all => ({ ...all, [s.name]: (e as Error).message })));
         }
       })
       .catch(e => (toast(e.message, 'bad'), setServers([])));
@@ -84,17 +118,30 @@ export function ServersIRun({ addServerSignal, onAddServerShown }: { addServerSi
                   <ServerIcon size={18} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-[16px]">{s.server_name}</h3>
+                  <h3 className="truncate text-[16px]">{titleOf(s)}</h3>
                   <div className="mono truncate text-[12px] text-fg-3">{s.endpoint}</div>
                 </div>
               </div>
               <div className="flex items-center justify-between gap-3 border-t border-line pt-3 text-[12.5px] text-fg-3">
-                <span>
+                <span className="min-w-0">
+                  {silent[s.name] !== undefined && (
+                    <>
+                      <span className="text-bad" title={silent[s.name]}>
+                        Not answering
+                      </span>
+                      {' · '}
+                    </>
+                  )}
                   {s.version ? `Ghostlink server ${s.version}` : 'Ghostlink server'} · added {dateTime(s.added_unix)}
                 </span>
-                <Button size="sm" variant="cta" onClick={() => setOpen(s)}>
-                  Manage
-                </Button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <IconButton label={`Forget ${titleOf(s)}`} onClick={async () => (await forget(s, titleOf(s))) && load()}>
+                    <Trash2 size={15} />
+                  </IconButton>
+                  <Button size="sm" variant="cta" onClick={() => setOpen(s)}>
+                    Manage
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}
@@ -115,6 +162,9 @@ function Workspace({ server, onBack }: { server: ManagedServer; onBack: () => vo
   const { refresh } = useService();
   const [open, setOpen] = useState<{ name: string; transport: Transport; info: Server } | null>(null);
   const [error, setError] = useState('');
+  // Counts presses of Try again.
+  const [attempt, setAttempt] = useState(0);
+  const forget = useForgetServer();
   useEffect(() => {
     let current = true;
     const transport = serverTransport(server.name, refresh);
@@ -127,19 +177,28 @@ function Workspace({ server, onBack }: { server: ManagedServer; onBack: () => vo
     return () => {
       current = false;
     };
-  }, [server.name, refresh]);
+  }, [server.name, refresh, attempt]);
   if (error)
     return (
       <Card>
-        <Empty icon={<ServerIcon size={22} />} title={`${server.server_name} did not answer`}>
+        <Empty icon={<ServerIcon size={22} />} title={`${titleOf(server)} did not answer`}>
           <p>{error}</p>
-          <Button className="mt-4" icon={<ArrowLeft size={15} />} onClick={onBack}>
-            All servers I run
-          </Button>
+          <p className="mt-2 text-[12.5px] text-fg-3">If you reinstalled the server or it has a new address, its management key changed: forget it here and add it again with the new key.</p>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <Button icon={<ArrowLeft size={15} />} onClick={onBack}>
+              All servers I run
+            </Button>
+            <Button icon={<RotateCw size={15} />} onClick={() => setAttempt(n => n + 1)}>
+              Try again
+            </Button>
+            <Button variant="danger" icon={<Trash2 size={14} />} onClick={async () => (await forget(server, titleOf(server))) && onBack()}>
+              Forget this server
+            </Button>
+          </div>
         </Empty>
       </Card>
     );
-  if (!open || open.name !== server.name) return <p className="py-16 text-center text-[13px] text-fg-3">Connecting to {server.server_name}…</p>;
+  if (!open || open.name !== server.name) return <p className="py-16 text-center text-[13px] text-fg-3">Connecting to {titleOf(server)}…</p>;
   // Keyed by server: another server gets a new store, never this one's state.
   return (
     <StoreProvider key={open.name} transport={open.transport} initial={open.info} onSignedOut={() => {}}>
@@ -150,19 +209,12 @@ function Workspace({ server, onBack }: { server: ManagedServer; onBack: () => vo
 
 function WorkspaceBody({ server, onBack }: { server: ManagedServer; onBack: () => void }) {
   const { server: info } = useStore();
-  const { confirm, toast } = useUI();
+  const forgetServer = useForgetServer();
   const [view, setView] = useStoredState<View>('ghostlink-desktop-admin-view', 'overview', VIEWS);
   const [newClient, setNewClient] = useState(false);
   const [settings, setSettings] = useState(false);
   const forget = async () => {
-    if (!(await confirm({ title: 'Forget this server?', text: 'Ghostlink removes its management key from this device. The server, its clients and their keys keep working. You need the key to add it again.', action: 'Forget server', danger: true }))) return;
-    try {
-      await request({ type: 'managed_server_remove', name: server.name });
-      toast(`${info.name} forgotten on this device.`);
-      onBack();
-    } catch (e) {
-      toast((e as Error).message, 'bad');
-    }
+    if (await forgetServer(server, titleOf(server))) onBack();
   };
   return (
     <div className="grid gap-4">
@@ -171,8 +223,9 @@ function WorkspaceBody({ server, onBack }: { server: ManagedServer; onBack: () =
           <ArrowLeft size={18} />
         </IconButton>
         <div className="min-w-0">
-          <h1 className="truncate text-[17px]">{info.name}</h1>
+          <h1 className="truncate text-[17px]">{titleOf(server)}</h1>
           <div className="mono truncate text-[11.5px] text-fg-3">
+            {info.name !== titleOf(server) ? `${info.name} · ` : ''}
             {info.hostname} · v{info.version}
           </div>
         </div>
@@ -234,7 +287,7 @@ function AddServerSheet({ open, taken, onClose, onAdded }: { open: boolean; take
     setBusy(true);
     setError('');
     try {
-      await request({ type: 'managed_server_add', name: uniqueName(slug(name.trim()).slice(0, 40), taken), management_key: key.trim() });
+      await request({ type: 'managed_server_add', name: uniqueName(slug(name.trim()).slice(0, 40), taken), label: name.trim(), management_key: key.trim() });
       setKey('');
       toast('Server added. Its management key is sealed in the local service.');
       onAdded();
@@ -270,7 +323,7 @@ function AddServerSheet({ open, taken, onClose, onAdded }: { open: boolean; take
         }}
       >
         <Field label="Name on this device">
-          <input className="field" maxLength={40} value={name} onChange={e => setName(e.target.value)} placeholder="For example home" autoComplete="off" data-autofocus />
+          <input className="field" maxLength={64} value={name} onChange={e => setName(e.target.value)} placeholder="For example home" autoComplete="off" data-autofocus />
         </Field>
         <Field label="Management key">
           <div className="relative">

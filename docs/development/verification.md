@@ -2,6 +2,17 @@
 
 Updated 2026-11-10 (Asia/Singapore). A compiled binary or proxy-only traffic test does not meet the original full VPN platform definition of done.
 
+## Unreleased: forgetting a managed server that does not answer, and the name given when adding one (2026-11-10)
+
+Two bugs of **Servers I run** reported on the Windows app: a server that did not answer could not be removed from the app, and the name typed in *Add server* was shown as "Ghostlink server". The changes are in the Rust service and the app (`ui/desktop`), not in the VPN path.
+
+| Check | Result actually observed |
+|---|---|
+| Rust unit tests | `labels_are_cleaned` (trimmed, control characters dropped, 64 characters, Burmese kept); `the_name_given_on_this_device_is_kept` (a label is stored and returned by `summary`, a server added without one has none, replacing a key without a label keeps the old one, a new label replaces it, an entry saved by an older version without the field reads as empty). `cargo fmt --check` and `clippy -D warnings` clean |
+| Desktop GUI, real service and three real local `ghostlink-server` processes (WebView2 DevTools, an isolated profile, no real clicks) | **41/41 checks**: with A up and B and C switched off, B's card says *Not answering* and A's does not; *Forget Home B* asks first, then B is gone from the card list and from the service while A and C stay; C's page offers *Try again* (with C switched on again it opens C) and *Forget this server* (returns to the list without C); A, which answers, is still forgotten from its own settings; the name typed in the sheet (`ကျွန်ုပ်၏ Home Lab`, Burmese and Latin with a space) is stored as typed under the ID `home-lab` and is the card's title, not the server's own name; no element outside its box and no page error in Obsidian, Daylight and Titanium |
+| The same script on the build before the fix | 10 of 16 checks passed; the 6 that failed were those of the missing features |
+| Not verified | **The installed Windows app and its service**, which were not touched (the rule is development runs only): the fix reaches it in the next MSI. **A server whose address no longer routes at all:** the local servers were switched off, which fails at once; for an address that swallows packets the card and the page say *Not answering* only after the service's connect timeout (8 s) or request timeout (25 s). **Narrow windows** of the desktop app beyond the layout checks above. A label longer than 64 characters typed into the sheet cannot occur (the field stops at 64); the service cut at 64 is only covered by the unit test |
+
 ## v0.8.6 IKEv2/IPsec: DNS answers and live speed (2026-11-10, pull request #10)
 
 From `docs/development/ikev2-findings-v0.8.6-2026-11-10.md`: IKE-01 (an iPhone connected over IKEv2, but websites did not open) and IKE-02 (the live speed of an IKEv2 transfer was wrong). Both change how the VPN behaves, so each has a test that fails on 0.8.5: the live speed was also run against a real server process, and the DNS fix against a real strongSwan client in CI, where a throwaway branch with the 0.8.5 listener put back fails the same tests.
