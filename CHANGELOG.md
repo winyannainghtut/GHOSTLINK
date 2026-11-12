@@ -25,7 +25,7 @@ Three additions for servers, asked for after running one: replace the management
 
 ### Changed
 
-- **The build of the IPsec component's source archive asks again** when a download fails (4 tries, 20 s apart): kernel.org timed out twice in one day and a release should not fail for one slow download.
+- **The build of the IPsec component's source archive no longer depends on one upstream site:** it takes each source file from Alpine's own copy first (`distfiles.alpinelinux.org`, checked against the recipe's checksum as before) and from the upstream site only if Alpine has none, and it asks again when a download fails (4 tries, 20 s apart). kernel.org could not be reached from the build machines for hours on 2026-11-13 and failed a release build.
 - **Go 1.26.11** (was 1.26.10) builds the server, the worker and the tests: it fixes GO-2026-6859 in the standard library's `net/http`, which the vulnerability scan of the build now reports for 1.26.10. The pin is in `go.mod` and the workflows.
 - **The Windows app and CLI:** the settings switch and `ghostlink server set --asn-lookup`, `ghostlink server asn-update`. Older servers show neither (the app hides what the server does not report).
 - **`GET /live`** reports `disk_level`, `state_bytes` and `history_max_bytes` in `health`; **`GET /server`** reports `asn`; **`GET /clients`** carries `asn` and `operator` on each address when the lookup is on.
