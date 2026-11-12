@@ -341,6 +341,11 @@ const adminUsage = `Manage this Ghostlink server (run with sudo):
                                        Shadowsocks); prints the port to allow
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
+  rotate-key                           replace the management key: the old one stops working
+                                       at once, the new one is printed (clients stay connected)
+  asn on|off|update|status             show the provider (AS and operator) of the addresses clients
+                                       connect from. "on" downloads a public list from iptoasn.com
+                                       (nothing about your clients is sent); "off" deletes it
   mesh ...                             private network between your servers (mesh help)
   import-outline --dir DIR [--check]   take over the access keys of an Outline server from
                                        copies of its two files in DIR (a new server only;
@@ -535,6 +540,7 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		}
 		var result struct {
 			Clients []clientView `json:"clients"`
+			ASN     asnStatus    `json:"asn"`
 		}
 		if err := c.Do(http.MethodGet, path, nil, &result); err != nil {
 			return err
@@ -544,11 +550,28 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				fmt.Fprintln(out, "No connections recorded in the last 30 days.")
 				return
 			}
+			// The provider columns appear once the lookup has a list to look in.
+			provider := result.ASN.Enabled && result.ASN.Ready
 			var rows [][]string
 			for _, cl := range result.Clients {
-				rows = append(rows, []string{cl.Name, cl.IP, protocolTitles[cl.Protocol], time.Unix(cl.First, 0).Format("2006-01-02 15:04"), since(cl.Last)})
+				row := []string{cl.Name, cl.IP}
+				if provider {
+					as, operator := "-", "-"
+					if cl.ASN != 0 {
+						as, operator = fmt.Sprintf("AS%d", cl.ASN), cl.Operator
+					}
+					row = append(row, as, operator)
+				}
+				rows = append(rows, append(row, protocolTitles[cl.Protocol], time.Unix(cl.First, 0).Format("2006-01-02 15:04"), since(cl.Last)))
 			}
-			table("USER\tADDRESS\tPROTOCOL\tFIRST SEEN\tLAST SEEN", rows)
+			header := "USER\tADDRESS\tPROTOCOL\tFIRST SEEN\tLAST SEEN"
+			if provider {
+				header = "USER\tADDRESS\tAS\tOPERATOR\tPROTOCOL\tFIRST SEEN\tLAST SEEN"
+			}
+			table(header, rows)
+			if line := asnHint(result.ASN); line != "" {
+				fmt.Fprintln(out, "\n"+line)
+			}
 		})
 	case "top":
 		flags := flag.NewFlagSet("top", flag.ContinueOnError)
@@ -562,7 +585,17 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		if err := c.Do(http.MethodGet, "/server", nil, &info); err != nil {
 			return err
 		}
-		return print(info, func() {
+		// The storage report is best effort: settings are shown without it if it cannot be read.
+		var live liveResult
+		var storage *Health
+		if c.Do(http.MethodGet, "/live", nil, &live) == nil {
+			storage = &live.Health
+		}
+		shown := struct {
+			serverInfo
+			Storage *Health `json:"storage,omitempty"`
+		}{info, storage}
+		return print(shown, func() {
 			fmt.Fprintf(out, "%s (version %s)\nAddress in keys: %s\nREALITY site: %s\n\n", info.Name, info.Version, info.Hostname, info.VLESSHandshake)
 			var rows [][]string
 			for _, p := range Protocols {
@@ -619,6 +652,12 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 				sites = "on"
 			}
 			fmt.Fprintf(out, "\nTop sites per user: %s. History kept %d days (sites %d days), at most %d MB.\n", sites, info.HistoryDays, info.SiteDays, info.HistoryMaxMB)
+			if storage != nil {
+				for _, line := range storageLines(*storage) {
+					fmt.Fprintln(out, line)
+				}
+			}
+			fmt.Fprintln(out, asnSummary(info.ASN))
 			if info.DefaultSpeedLimitBps > 0 {
 				fmt.Fprintf(out, "Default speed limit: %s per client (download and upload alike).\n", rate(int64(info.DefaultSpeedLimitBps)))
 			} else {
@@ -645,6 +684,26 @@ func RunAdmin(dir string, args []string, out io.Writer) error {
 		})
 	case "dashboard":
 		return c.dashboardCommand(rest, out, print)
+	case "asn":
+		return c.asnCommand(rest, out, print, asJSON)
+	case "rotate-key":
+		if len(rest) > 0 {
+			return fmt.Errorf("rotate-key takes no arguments (got %q)", rest[0])
+		}
+		var rotated struct {
+			Key ManagementKey `json:"management_key"`
+		}
+		if err := c.Do(http.MethodPost, "/server/rotate-key", nil, &rotated); err != nil {
+			return err
+		}
+		return print(rotated, func() {
+			data, _ := json.Marshal(rotated.Key)
+			fmt.Fprintf(out, "The management key was replaced. The old one no longer works.\n\nNew management key:\n\n%s\n\n", data)
+			fmt.Fprintln(out, "Keep it private: it gives full control of this server. Show it again with: sudo ghostlink-server show-key")
+			fmt.Fprintln(out, "In the Ghostlink app: forget this server under Servers I run, then Add server with the new key.")
+			fmt.Fprintln(out, "Or, with the CLI: ghostlink server add --name NAME --key-file FILE --replace")
+			fmt.Fprintln(out, "Clients stay connected: only the management key changed. The dashboard link is separate (dashboard --reset-token).")
+		})
 	case "mesh":
 		return c.meshCommand(rest, out, asJSON)
 	case "import-outline":
@@ -1032,6 +1091,8 @@ func (c *AdminClient) top(out io.Writer, once bool) error {
 		}
 		if h.DetailPaused {
 			line = append(line, "DETAIL RECORDING PAUSED (disk nearly full)")
+		} else if h.DiskLevel == diskLow {
+			line = append(line, "DISK SPACE LOW")
 		}
 		if len(line) > 0 {
 			fmt.Fprintln(out, strings.Join(line, "   "))
@@ -1057,6 +1118,22 @@ func (c *AdminClient) top(out io.Writer, once bool) error {
 		fmt.Fprintln(out, "\nCtrl+C to quit")
 		time.Sleep(time.Second)
 	}
+}
+
+// storageLines describe what the server keeps on disk and how much room is left, for `settings`.
+func storageLines(h Health) []string {
+	lines := []string{fmt.Sprintf("Data kept by this server: %s in its state directory (history %s, kept under %s).",
+		dataSize(uint64(max(h.StateBytes, 0))), dataSize(uint64(max(h.HistoryBytes, 0))), dataSize(uint64(max(h.HistoryMaxBytes, 0))))}
+	if h.DiskFree != nil && h.DiskTotal != nil {
+		lines = append(lines, fmt.Sprintf("Disk: %s free of %s.", dataSize(*h.DiskFree), dataSize(*h.DiskTotal)))
+	}
+	switch {
+	case h.DetailPaused:
+		lines = append(lines, "The disk is nearly full: detailed traffic recording is paused until space is freed. Totals and live data continue. See what uses the disk: sudo ghostlink-server disk")
+	case h.DiskLevel == diskLow:
+		lines = append(lines, "Disk space is getting low (recording pauses at about half of this). See what uses the disk: sudo ghostlink-server disk")
+	}
+	return lines
 }
 
 func (c *AdminClient) setCommand(args []string, out io.Writer, print func(any, func()) error) error {
@@ -1212,4 +1289,95 @@ func (c *AdminClient) dashboardCommand(args []string, out io.Writer, print func(
 		}
 		fmt.Fprintln(out, "Keep the link private: it signs you in as the administrator. Revoke it with --reset-token.")
 	})
+}
+
+// asnHint is the line under the client list when the provider columns are not there: why not,
+// and how to get them. Empty when they are.
+func asnHint(status asnStatus) string {
+	switch {
+	case !status.Enabled:
+		return "The provider (AS and operator) of each address can be shown: sudo ghostlink-server asn on"
+	case status.Ready:
+		return ""
+	case status.Error != "":
+		return "The provider list could not be downloaded: " + status.Error
+	}
+	return "The provider list is being downloaded; the providers appear in a minute."
+}
+
+// asnSummary describes the provider lookup for `settings` and `asn status`.
+func asnSummary(status asnStatus) string {
+	switch {
+	case !status.Enabled:
+		return "Provider lookup (AS and operator of client addresses): off. Turn it on: sudo ghostlink-server asn on"
+	case status.Ready:
+		line := fmt.Sprintf("Provider lookup: on, %d address ranges from %s, downloaded %s.", status.Ranges, status.Source, since(status.UpdatedUnix))
+		if status.Error != "" {
+			line += " The last update failed: " + status.Error
+		}
+		return line
+	case status.Error != "":
+		return "Provider lookup: on, but the list could not be downloaded from " + status.Source + ": " + status.Error
+	}
+	return "Provider lookup: on, downloading the list from " + status.Source + "."
+}
+
+// asnPoll is how often `asn on` and `asn update` look at the download.
+var asnPoll = time.Second
+
+// asnCommand turns the provider lookup on or off, or downloads its list again.
+func (c *AdminClient) asnCommand(args []string, out io.Writer, print func(any, func()) error, asJSON bool) error {
+	if len(args) != 1 {
+		return errors.New("usage: asn on|off|update|status")
+	}
+	var info serverInfo
+	switch args[0] {
+	case "status":
+		if err := c.Do(http.MethodGet, "/server", nil, &info); err != nil {
+			return err
+		}
+		return print(info.ASN, func() { fmt.Fprintln(out, asnSummary(info.ASN)) })
+	case "off":
+		if err := c.Do(http.MethodPatch, "/server", map[string]any{"asn_lookup": false}, &info); err != nil {
+			return err
+		}
+		return print(info.ASN, func() { fmt.Fprintln(out, "Provider lookup is off, and the downloaded list was deleted.") })
+	case "on", "update":
+		if args[0] == "on" {
+			if err := c.Do(http.MethodPatch, "/server", map[string]any{"asn_lookup": true}, &info); err != nil {
+				return err
+			}
+		} else if err := c.Do(http.MethodPost, "/asn/update", nil, &info.ASN); err != nil {
+			return err
+		}
+		// The download runs in the server: wait for it, so the command can say how it went.
+		if !asJSON {
+			fmt.Fprintf(out, "Downloading the list of address ranges from %s (about 11 MB)...\n", ASNSource)
+		}
+		for waited := time.Duration(0); waited < 3*time.Minute; waited += asnPoll {
+			time.Sleep(asnPoll)
+			if err := c.Do(http.MethodGet, "/server", nil, &info); err != nil {
+				return err
+			}
+			if !info.ASN.Updating {
+				break
+			}
+		}
+		if info.ASN.Updating {
+			return print(info.ASN, func() {
+				fmt.Fprintln(out, "The download is still running; see how it went with: sudo ghostlink-server asn status")
+			})
+		}
+		if !info.ASN.Ready || info.ASN.Error != "" {
+			if info.ASN.Error == "" {
+				info.ASN.Error = "no list was loaded"
+			}
+			return fmt.Errorf("the provider list could not be downloaded: %s", info.ASN.Error)
+		}
+		return print(info.ASN, func() {
+			fmt.Fprintf(out, "Provider lookup is on: %d address ranges loaded. The Clients views and `sudo ghostlink-server clients` show the AS and operator of each address.\n", info.ASN.Ranges)
+			fmt.Fprintf(out, "The list is downloaded again every 30 days, from %s only; nothing about your clients is sent. Turn it off: sudo ghostlink-server asn off\n", info.ASN.Source)
+		})
+	}
+	return errors.New("usage: asn on|off|update|status")
 }

@@ -121,6 +121,20 @@ A key for a protocol that is off is refused (the message says it is turned off),
 
 In the app, **Servers I run → Manage** has the same actions. **Keys** shows a key's QR code, copies the key, saves a `.conf` (WireGuard and AmneziaWG) or an Apple profile to Downloads, saves a connection kit, or adds the key to this device with **Use on this device**.
 
+### Replace the management key
+
+If the key was seen by someone who should not have it (pasted into a chat, a ticket or a screenshot), replace it:
+
+```sh
+sudo ghostlink-server rotate-key
+```
+
+The old key stops working at once, and the new one is printed (and by `show-key`). Only the secret in the address changes: the certificate, and so the pin, stay the same. Users, keys and rules are untouched, and connected clients are not disconnected, because the VPN engine is not restarted.
+
+Then update every place the old key was saved. In the Ghostlink app, forget the server under **Servers I run** (on its card, or **Forget this server** on its page) and add it again with the new key; or run `ghostlink server add --name NAME --key-file FILE --replace`. The dashboard login link is a separate secret (`sudo ghostlink-server dashboard --reset-token`). Through the API, `POST /server/rotate-key` with the old key answers with the new one.
+
+Where the management port can be closed to everyone but your own address in the firewall, do that too: the key is only useful to someone who can reach the port.
+
 ## Manage on the server
 
 Everything the app can do also works over SSH on the server. Users can be named instead of numbered, and changes apply live:
@@ -277,7 +291,7 @@ What the server records, all of it stored only on the server in `/var/lib/ghostl
 | Traffic types | Bytes per kind: Web (HTTPS/HTTP), QUIC (video, Google), Calls (STUN/DTLS), BitTorrent, SSH, Remote desktop, Time (NTP), other TCP/UDP, and "IPsec (not inspected)" for IKEv2/IPsec. DNS is answered by the server itself and is not counted | With the daily records |
 | Protocols used | Bytes per protocol a user connected with | With the daily records |
 | Top services | **Off by default.** Bytes per service ("YouTube", "Netflix", or the site's registrable domain) per user per day; never page addresses or times. A name that is not a valid DNS name counts as "Other sites" | 30 days (`set --site-days`, 1–90), and never longer than the daily records; turning it off deletes them at once |
-| Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint | 30 days |
+| Connected from | The last 20 public addresses per user, with protocol and first/last seen. Shadowsocks/VLESS: the connecting address; WireGuard/AmneziaWG: the peer's endpoint. With the [provider lookup](#provider-as-and-operator-of-an-address) on, each is shown with its AS and operator, looked up when it is shown and never stored | 30 days |
 
 **Online and idle.** A client is online when it was seen in the last minute: it opened a connection or sent data, its WireGuard/AmneziaWG peer received anything (the keys the server issues send a keepalive every 25 s, so an idle but connected client stays online), or one of its IKEv2/IPsec sessions is up. A download to it counts only while it is substantial, because a client that has gone cannot acknowledge one. Open connections alone don't count: a client that leaves without closing them, for example by switching WireGuard off, can leave them open on the server for many minutes. A client that disconnects shows as idle within about a minute.
 
@@ -289,11 +303,59 @@ What it can't see: VPN traffic is encrypted, so the server never sees page conte
 - **Low disk:** when the disk has less than 500 MB or 5 % free, the server stops recording detail and shows that in `top`, the dashboard and the app. Live data and usage totals (needed for data limits) continue. Recording resumes on its own when space is freed. Usage that cannot be saved, for example on a full disk, is kept and saved later.
 - **Container log:** Docker caps it at 10 MB × 3, and it holds only the server's own warnings and errors, never traffic. The VPN engine's own messages are off, because they name the sites and addresses users try.
 
+### Provider (AS and operator) of an address
+
+The Clients views, the client sheet and `sudo ghostlink-server clients` can show, beside the address a client connects from, which network it belongs to: its AS number and the operator that runs it, for example `AS64496 · Example Telecom`. That tells you which service provider people use to reach the server.
+
+It is **off until you turn it on**, because turning it on makes the server download a list from a third party:
+
+```sh
+sudo ghostlink-server asn on        # downloads the list and waits for it
+sudo ghostlink-server asn status    # on or off, how many ranges, how old
+sudo ghostlink-server asn update    # download it again now
+sudo ghostlink-server asn off       # off, and the list is deleted
+```
+
+In the app and the dashboard it is a checkbox under **Server settings → Monitoring**. In the Windows CLI: `ghostlink server set --server NAME --asn-lookup on|off` and `ghostlink server asn-update --server NAME`.
+
+- **What is downloaded:** the combined IPv4 and IPv6 list of [iptoasn.com](https://iptoasn.com) (about 11 MB, 579,000 address ranges when this was written), which its maker releases to the public domain (PDDL 1.0). It comes from that one address over HTTPS, is checked before it is used (a list that is cut off, too large or not in the format is refused and the old one kept), and is downloaded again every 30 days. If a download fails, the server tries again after 6 hours and keeps using the list it has.
+- **What is sent:** only the download request. iptoasn.com sees that your server fetched the list, like any website sees a visitor. No address of a client, and nothing about a client, is sent to anyone: the lookup is a search in memory (about 17 MB, and about 40 MB at most for the half second the list takes to load).
+- **What is kept:** the list, in the state directory as `asn.tsv.gz` (about 11 MB). The AS and operator of an address are never written to the history.
+- **How far to trust it:** it names the network that announces the address. For a home or mobile connection that is the internet provider or carrier. For a client on a company network, a VPN or a cloud provider, it names that network. Names are as the registries wrote them; control characters are removed and long names are cut to 60 characters. A private or unannounced address has no provider and shows nothing.
+
+### Disk use on a small server
+
+Everything the server writes is capped, so a server with 30 GB of disk never fills from monitoring:
+
+| What | Where | Capped by |
+|---|---|---|
+| Users, keys, settings, certificates | `state.json` in `/var/lib/ghostlink-server` | At most 500 users with 16 keys each; in practice a few MB |
+| Traffic history | `history.json` | 20 MB by default (`set --history-max-mb`); oldest data trimmed first |
+| Provider list (only when on) | `asn.tsv.gz` | One file of about 11 MB, replaced, never added to |
+| Server container log | Docker | 10 MB × 3 files |
+| IPsec container log | Docker | 10 MB × 3 files |
+| Images | Docker | One version of each; older ones are removed on an upgrade |
+
+The server measures its own data every 5 minutes and watches the free space of its disk. On a 30 GB disk:
+
+| Free space | Level | What happens |
+|---|---|---|
+| Above 3 GB | ok | Nothing |
+| Below 3 GB | low | A warning on the Overview, in `settings` and in `top`. Nothing stops |
+| Below 1.5 GB (5 %) | full | Detailed recording pauses; live data and usage totals (for data limits) continue |
+
+The two limits are 10 % and 5 % of the disk, with 1 GB and 500 MB as the smallest. See where the disk goes with `sudo ghostlink-server disk` (the server's data, both container logs, the images, what Docker uses in all, and the system journal), and the server's own numbers with `sudo ghostlink-server settings` or the Overview (**History file**, **Data on disk**, **Disk free**).
+
+What the server cannot cap is the rest of the machine: the system journal, other containers, packages. `disk` shows the journal's size and how to limit it (`SystemMaxUse=` in `/etc/systemd/journald.conf`).
+
 ## Administer the container
 
 | Command | Does |
 |---|---|
 | `sudo ghostlink-server show-key` | Print the management key again |
+| `sudo ghostlink-server rotate-key` | Replace the management key; the old one stops working at once ([details](#replace-the-management-key)) |
+| `sudo ghostlink-server disk` | What Ghostlink uses on the disk: its data, the container logs, the images, free space ([details](#disk-use-on-a-small-server)) |
+| `sudo ghostlink-server asn on\|off\|update\|status` | The provider (AS and operator) of client addresses ([details](#provider-as-and-operator-of-an-address)) |
 | `sudo ghostlink-server status` | Container status, hostname and ports |
 | `sudo ghostlink-server logs [N]` | Last N log lines (warnings and errors only; no traffic logging) |
 | `sudo ghostlink-server setup [--hostname H]` | Reload the bundled image and recreate the container, keeping all data |
@@ -371,13 +433,15 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 | `GET` / `POST /users/{id}/keys`, `DELETE /users/{id}/keys/{key}` | Keys: create with `{"protocol":"amneziawg"\|"wireguard"\|"vless"\|"shadowsocks"}`, or `{"protocol":"ikev2"\|"ipsec","auth":…}` with optional `server_address`, `remote_identifier`, `local_identifier`; `400` for a protocol that is off |
 | `GET` / `PUT /rules` | Rules for everyone: `blocked_domains`, `blocked_ips`, `blocked_ports`, `block_bittorrent`, `block_smtp` |
 | `GET /metrics` | Per-user and total bytes |
-| `GET /live` | Speeds, open connections, online users, the last 2 minutes of server rates, health |
+| `GET /live` | Speeds, open connections, online users, the last 2 minutes of server rates, health (including `disk_level` ok, low or full, `state_bytes`, `history_bytes` and `history_max_bytes`) |
 | `GET /stats?range=24h\|7d\|30d\|90d[&user=ID]` | Usage over time, traffic types, protocols, top services (when on), totals per user |
-| `GET /clients[?user=ID]` | Addresses users connected from |
+| `GET /clients[?user=ID]` | Addresses users connected from; with the provider lookup on, each carries `asn` and `operator`, and the answer has an `asn` object with the lookup's state |
 | `GET /users/{id}/keys/{key}/qr?format=svg\|text&content=auto\|key\|conf` | A key's QR code |
 | `GET /users/{id}/kit` | The HTML connection kit |
 | `GET /users/{id}/keys/{key}/profile[?prompt_password=1&on_demand=1]` | An IKEv2/IPsec key's Apple profile (`application/x-apple-aspen-config`) |
 | `GET /dashboard` | Dashboard port, mode and login token |
+| `POST /server/rotate-key` | Replace the management key; the answer is `{"management_key": {"apiUrl": …, "certSha256": …}}`, and the key used for the request stops working |
+| `POST /asn/update` | Download the provider list again (the lookup must be on); answers `202` with the lookup's state, which shows `updating` until it is done |
 | `GET` / `PATCH /mesh` | Mesh settings (`enabled`, `cidr` before the first node, `name`, `ping`), counts and open invites |
 | `POST` / `GET /mesh/invites`, `DELETE /mesh/invites/{id}` | Invites: `tags`, `uses`, `expires_hours`, `relay`, `approval`, `note`; creating one returns `invite` and the join `command` once |
 | `PATCH` / `DELETE /mesh/nodes/{id}` | A node: `name`, `tags`, `status` (`active`/`disabled`), `relay`, `approved_routes`, `masquerade`; or remove it |
@@ -387,7 +451,7 @@ All paths are under the secret prefix from the management key, over TLS 1.3. Req
 
 `GET /server` also reports `address_pools`: for the WireGuard and AmneziaWG tunnel subnets, the CIDR, addresses in use, capacity and the next free address. Key summaries in `GET /users` carry a WireGuard-family key's tunnel `address`, and `GET /live` adds `minutes`, per-minute average rates for the last hour, and `health.engine_error` while the VPN engine cannot start.
 
-`PATCH /server` also takes `site_stats`, `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
+`PATCH /server` also takes `site_stats`, `asn_lookup` (on downloads the provider list, off deletes it; `GET /server` reports its state as `asn`), `history_days`, `site_days`, `history_max_mb`, `dashboard_port`, `dashboard_public`, `reset_dashboard_token`, `rotate_ipsec_psk` and `default_speed_limit_bps` (bytes per second, 0 for none, at most 1,250,000,000), which `GET /server` reports too, with `shadowsocks_extra_ports` (the ports of keys imported from Outline that kept their own).
 
 `speed_limit_bps` on a user is in bytes per second: `0` follows the server's default, `-1` means no limit, and 1 to 1,250,000,000 is the user's cap. Users also report `effective_speed_limit_bps`, the cap in force (0 for none). The speeds in `GET /live` (`up_bps`, `down_bps`, `series`, `minutes`) are bytes per second too; `GET /stats` buckets are bytes per hour or day. `protocols.ikev2` and `protocols.ipsec` take only `enabled`; turning them on needs a running IPsec component (`ipsec_component` in `GET /server`). User names are unique, ignoring case.
 

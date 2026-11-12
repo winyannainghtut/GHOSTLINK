@@ -98,6 +98,13 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
           <Note tone="warn">The disk is nearly full, so detailed traffic recording is paused until space is freed. Live data and totals continue.</Note>
         </Card>
       )}
+      {health?.disk_level === 'low' && !health.detail_paused && (
+        <Card className="border-idle/40">
+          <Note tone="warn">
+            Disk space is getting low{health.disk_total_bytes ? `: ${bytes(health.disk_free_bytes ?? 0)} free of ${bytes(health.disk_total_bytes)}` : ''}. Detailed traffic recording pauses when it falls to about half of that. On the server, <span className="mono">sudo ghostlink-server disk</span> shows what uses it.
+          </Note>
+        </Card>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Active tunnels" icon={<Activity size={17} />} detail={<span className="num">{`of ${plural(users.length, 'client')}${live ? ` · ${plural(live.active, 'open connection')}` : ''}`}</span>}>
           <BigNumber value={live?.online_users ?? '—'} unit="online" />
@@ -201,7 +208,8 @@ export function Overview({ onNewClient }: { onNewClient: () => void }) {
                 ...(health.memory_total_bytes ? [['Memory', <span className="num">{bytes(health.memory_used_bytes ?? 0)} of {bytes(health.memory_total_bytes)}</span>] as [string, ReactNode]] : []),
                 ...(health.disk_total_bytes ? [['Disk free', <span className="num">{bytes(health.disk_free_bytes ?? 0)} of {bytes(health.disk_total_bytes)}</span>] as [string, ReactNode]] : []),
                 ...(health.network_rx_bps !== undefined ? [['Host network', <span className="num">↓ {speed(health.network_rx_bps)} · ↑ {speed(health.network_tx_bps ?? 0)}</span>] as [string, ReactNode]] : []),
-                ['History file', <span className="num">{bytes(health.history_bytes)}</span>],
+                ['History file', <span className="num">{bytes(health.history_bytes)}{health.history_max_bytes ? ` of at most ${bytes(health.history_max_bytes)}` : ''}</span>],
+                ...(health.state_bytes ? [['Data on disk', <span className="num">{bytes(health.state_bytes)}</span>] as [string, ReactNode]] : []),
                 ['Engine restarts', <span className="num">{health.engine_reloads}</span>],
               ]}
             />

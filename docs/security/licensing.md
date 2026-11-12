@@ -41,6 +41,8 @@ Wintun is a separate signed binary embedded by the pinned sing-tun module. Its s
 - **Notices:** `collect-licenses.py` inventories them from `ui/package-lock.json` as `npm-*` entries, and the server image carries them with the Go notices. Type-only packages (`@types/react`, `csstype`) ship nothing.
 - **Apple fonts:** San Francisco is only named in the font stack for Apple devices. No Apple font files are distributed.
 
+The provider lookup (0.9.0) downloads the combined IPv4/IPv6 list of iptoasn.com at run time and does not ship it. Its maker states the data is "Licensed under Public Domain (PDDL v1.0)" (checked 2026-11-11), so keeping a copy on the server needs no attribution. No MaxMind or other restricted database is used.
+
 OpenVPN 2 is optional and separately installed. If bundled in future, preserve GPLv2/source obligations and its stated linking exceptions plus all driver/dependency terms. OpenVPN 3 Core was inspected but is not linked or distributed; its MPL/AGPL alternatives do not grant unrelated mobile/App Store distribution rights. Outline Apps/SDK were reference material and are not embedded components.
 
 The WebView2 Rust bindings' MIT text is preserved from their published source revision `edc2caf886175ccaebe86078c9cfe1ae2a187328`. Their static loader matched the x64 library in Microsoft's official WebView2 SDK 1.0.3800.47 package byte for byte (SHA256 `89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8`). Its separate SDK license and notices are included. The WebView2 Runtime remains an installed prerequisite; it is not bundled.

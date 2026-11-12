@@ -31,6 +31,8 @@ These actions administer [Ghostlink servers](../deployment/ghostlink-server.md).
 | `managed_server_add` | `name` (the ID), `management_key` (the JSON key text), optional `replace`, optional `label` (the name shown for it on this device: any script, up to 64 characters; replacing a key without a label keeps the old one) | `{name, endpoint, label, server_name, version, added_unix, protocols}` after the server answered with the pinned certificate |
 | `managed_server_list` | none | `{servers: [{name, endpoint, label, server_name, version, added_unix}]}` (`label` is empty for a server added without one; `server_name` is the name the server calls itself); never the key |
 | `managed_server_remove` | `name` | `{removed}`; the server itself is unchanged |
+
+Server operations added in 0.9.0 (through `server_call`): `update` takes `asn_lookup` (true downloads the provider list on the server, false deletes it); `asn_update` downloads it again and answers with the lookup's state; `clients` returns `asn` and `operator` on each address when the lookup is on, and an `asn` object with the lookup's state; `live` returns `disk_level`, `state_bytes` and `history_max_bytes` in `health`. CLI: `ghostlink server set --server NAME --asn-lookup on|off` and `ghostlink server asn-update --server NAME`. Replacing the management key is a server command (`sudo ghostlink-server rotate-key`), not an operation of the app: the app learns the new key by adding the server again.
 | `server_call` | `server`, `op` | The server's JSON answer for that operation; deletes answer `"data": null` |
 
 `op` is one of these typed operations (`{"op": "<name>", ...}`). There is no raw HTTP:

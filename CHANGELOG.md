@@ -4,6 +4,33 @@ All notable changes to Ghostlink. Versions follow [semantic versioning](https://
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
+Three additions for servers, asked for after running one: replace the management key, see which network clients connect from, and keep track of the disk on a small server. Nothing changes until you use them, except that the Overview and `settings` now show how much room the disk has left.
+
+### Added
+
+- **Replace the management key:** `sudo ghostlink-server rotate-key` (or `POST /server/rotate-key`) replaces the secret in the management key, for a key that was pasted into a chat or seen by someone else. Until now the only way was a new server.
+  - The old key stops working at once and the new one is printed (and by `show-key`). The certificate, and so the pin, stay the same.
+  - Users, keys and rules are untouched, and connected clients are not disconnected: the VPN engine is not restarted.
+  - Every place the old key was saved needs the new one. In the app, forget the server and add it again with the new key; or `ghostlink server add --name NAME --key-file FILE --replace`. The dashboard login link is separate (`dashboard --reset-token`).
+- **The provider of each client address (AS and operator), off until you turn it on:** the Clients views, the client sheet and `sudo ghostlink-server clients` can show, beside the address a client connects from, who runs it, for example `AS13335 · Cloudflare, Inc.`. Search in the Clients view also finds an operator.
+  - **Turn it on:** under Server settings → Monitoring, `sudo ghostlink-server asn on`, or `ghostlink server set --server NAME --asn-lookup on`. `asn off` turns it off and deletes the list; `asn update` downloads it again; `asn status` says how it is doing.
+  - **What it downloads:** the combined IPv4 and IPv6 list of [iptoasn.com](https://iptoasn.com) (about 11 MB; it releases the data to the public domain, PDDL 1.0), over HTTPS, and again every 30 days. It is off by default because turning it on makes the server contact that site; iptoasn.com sees the server's address, as any website does. Nothing about a client is sent: the lookup is a search in memory, about 17 MB (about 40 MB at most for the half second the list takes to load).
+  - **Safeguards:** a list that is cut off, too large, not in the format or not reached over HTTPS is refused and the one in use stays; the operator names are cleaned of control characters before they reach a terminal or a page; a private or unannounced address shows no provider; the provider is never written to the history.
+  - **Accuracy:** it names the network that announces the address, as the registries describe it. For a client on a company network, a VPN or a cloud provider, that is that network.
+- **Disk use, for a server with a small disk:** everything the server writes was already capped (history 20 MB by default, container logs 10 MB × 3, one image version), but nothing showed it. Now:
+  - the Overview shows **History file** against its limit and **Data on disk**, and warns when free space falls to twice the level at which detailed recording pauses: on a 30 GB disk, a warning below 3 GB and the pause below 1.5 GB (the larger of 5 % and 500 MB). `settings` and `top` say the same;
+  - `sudo ghostlink-server disk` shows where the disk goes: the server's data, the container logs, the images, what Docker uses in all, and the system journal, with how to cap each.
+
+### Changed
+
+- **The build of the IPsec component's source archive asks again** when a download fails (4 tries, 20 s apart): kernel.org timed out twice in one day and a release should not fail for one slow download.
+- **Go 1.26.11** (was 1.26.10) builds the server, the worker and the tests: it fixes GO-2026-6859 in the standard library's `net/http`, which the vulnerability scan of the build now reports for 1.26.10. The pin is in `go.mod` and the workflows.
+- **The Windows app and CLI:** the settings switch and `ghostlink server set --asn-lookup`, `ghostlink server asn-update`. Older servers show neither (the app hides what the server does not report).
+- **`GET /live`** reports `disk_level`, `state_bytes` and `history_max_bytes` in `health`; **`GET /server`** reports `asn`; **`GET /clients`** carries `asn` and `operator` on each address when the lookup is on.
+- **Tests:** the Linux package test now also runs `rotate-key` and `disk` on the installed package, checks that the image carries CA certificates, and downloads the real list once (it only warns if iptoasn.com cannot be reached).
+
 ## [0.8.7] - 2026-11-10
 
 Two fixes for **Servers I run** in the Windows app, found while using it. They change the Rust service and the app only: how the server and the VPN behave is unchanged (the server and its packages only carry the new version number). The Windows client gets them with the new installer.

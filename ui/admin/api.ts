@@ -87,6 +87,8 @@ export type Server = {
   // Missing on servers before 0.5.0, which the desktop app can still manage.
   ipsec_component?: { running: boolean; error?: string; connections: number; ports: string };
   address_pools?: AddressPool[];
+  // Missing on servers before 0.9.0.
+  asn?: ProviderLookup;
 };
 export type Rate = { t: number; up: number; down: number };
 export type LiveUser = { id: string; name: string; up_bps: number; down_bps: number; active: number; online: boolean; last_active_unix: number };
@@ -103,6 +105,12 @@ export type Health = {
   engine_reloads: number;
   detail_paused: boolean;
   history_bytes: number;
+  // The size the history file is kept under, the size of the server's whole state directory, and
+  // how much room the disk has left: "ok", "low" (a warning) or "full" (recording is paused).
+  // Missing on servers before 0.9.0.
+  history_max_bytes?: number;
+  state_bytes?: number;
+  disk_level?: 'ok' | 'low' | 'full';
   // Why the VPN engine is not running (another program holds one of its ports, usually). The
   // management API, the dashboard and the server commands keep working so it can be fixed;
   // the server tries the engine again every 30 s. Missing while the engine runs, and on
@@ -121,7 +129,12 @@ export type Stats = {
   site_stats: boolean;
   users?: { id: string; name: string; up: number; down: number }[];
 };
-export type Client = { user: string; name: string; ip: string; protocol: string; first_unix: number; last_unix: number };
+// asn and operator: the autonomous system an address belongs to and who runs it, when the server's
+// provider lookup is on (0.9.0) and the address is somebody's (a private address is not).
+export type Client = { user: string; name: string; ip: string; protocol: string; first_unix: number; last_unix: number; asn?: number; operator?: string };
+// The provider lookup: off until the owner turns it on, because it downloads a public list from
+// source (nothing about clients is sent).
+export type ProviderLookup = { enabled: boolean; ready: boolean; updating: boolean; ranges: number; updated_unix?: number; error?: string; source: string };
 export type Invite = { id: string; created_unix: number; expires_unix: number; uses_left: number; tags: string[]; relay: boolean; approval: boolean; note?: string };
 export type MeshInfo = { enabled: boolean; id: string; name: string; cidr: string; port: number; ping: boolean; url: string; nodes: number; pending: number; rules: number; invites: Invite[] };
 export type MeshRule = { from: string; to: string; protocol: 'tcp' | 'udp' | 'icmp' | 'any'; ports: string[] };

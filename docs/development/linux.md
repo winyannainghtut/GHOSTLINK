@@ -2,7 +2,7 @@
 
 CI builds and runs the Linux daemon, CLI and worker. Release CI runs `ghostlinkd` as a real systemd service from the `.deb` (start, status, doctor, upgrade, removal, purge). A privileged TUN session, routing and DNS inside the unit's sandbox have not been verified.
 
-On Ubuntu/Debian install Rust 1.92+, Go (the worker pins 1.26.10), a native C linker, pkg-config and OpenSSL development libraries. For GUI development also install the Tauri GTK/WebKit2GTK 4.1 development requirements. Build the root workspace with `cargo build --release --locked`; build the managed worker from `core/outline-worker` with `CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ghostlink-tunnel .`.
+On Ubuntu/Debian install Rust 1.92+, Go (the worker pins 1.26.11), a native C linker, pkg-config and OpenSSL development libraries. For GUI development also install the Tauri GTK/WebKit2GTK 4.1 development requirements. Build the root workspace with `cargo build --release --locked`; build the managed worker from `core/outline-worker` with `CGO_ENABLED=0 go build -mod=readonly -trimpath -tags with_gvisor,with_utls,with_wireguard -o ghostlink-tunnel .`.
 
 Install `ghostlink`, `ghostlinkd`, `ghostlink-mcp` in `/usr/local/bin`, worker in `/usr/local/lib/ghostlink/ghostlink-tunnel`, and the supplied unit under `/etc/systemd/system/ghostlinkd.service`, all root-owned and not writable by other users. Create a root-owned `/etc/ghostlink/ghostlinkd.env` containing `GHOSTLINK_OWNER_UID=` followed by the intended user's numeric UID. This value is mandatory so a service does not authorize an accidental default user. The daemon sets the Unix socket owner and checks peer credentials.
 

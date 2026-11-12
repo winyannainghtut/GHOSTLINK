@@ -2,7 +2,7 @@ module ghostlink.local/outline-worker
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828

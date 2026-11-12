@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Check, Field, Inner, Note, Sheet, useUI } from '@shared/glass';
 import { defaultSpeedChange, defaultSpeedText } from '../limits';
+import { lookupState } from '../provider';
 import { useApi, useStore } from '../store';
 
 export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClose: () => void; footer?: ReactNode }) {
@@ -13,6 +14,7 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
   const [hostname, setHostname] = useState(server.hostname);
   const [reality, setReality] = useState(server.vless_handshake);
   const [sites, setSites] = useState(server.site_stats);
+  const [provider, setProvider] = useState(server.asn?.enabled ?? false);
   const [historyDays, setHistoryDays] = useState(String(server.history_days));
   const [siteDays, setSiteDays] = useState(String(server.site_days));
   const [historyMB, setHistoryMB] = useState(String(server.history_max_mb));
@@ -26,6 +28,7 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
     setHostname(server.hostname);
     setReality(server.vless_handshake);
     setSites(server.site_stats);
+    setProvider(server.asn?.enabled ?? false);
     setHistoryDays(String(server.history_days));
     setSiteDays(String(server.site_days));
     setHistoryMB(String(server.history_max_mb));
@@ -40,6 +43,7 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
     if (hostname.trim() !== server.hostname) patch.hostname = hostname.trim();
     if (reality.trim() !== server.vless_handshake) patch.vless_handshake = reality.trim();
     if (sites !== server.site_stats) patch.site_stats = sites;
+    if (server.asn && provider !== server.asn.enabled) patch.asn_lookup = provider;
     for (const [key, value, current, label] of [
       ['history_days', historyDays, server.history_days, 'History'],
       ['site_days', siteDays, server.site_days, 'Sites'],
@@ -119,6 +123,17 @@ export function SettingsSheet({ open, onClose, footer }: { open: boolean; onClos
             Record top sites and services per client
           </Check>
           <Note>Off by default. When on, the server keeps per-client totals per service (for example "YouTube 4 GB"), never a list of pages, and deletes them after the retention below. Turning it off deletes every recorded site.</Note>
+          {server.asn && (
+            <>
+              <Check checked={provider} onChange={setProvider}>
+                Show the provider (AS and operator) of each client address
+              </Check>
+              <Note>
+                Off by default. When on, the server downloads a public list of address ranges (about 11 MB) from {server.asn.source} and shows, beside each address a client connects from, who runs it (for example "AS64496 · Example Telecom"). Only the list is downloaded: nothing about your clients is sent to anyone (iptoasn.com sees this server's address, as any website does when you visit it). It is downloaded again every 30 days, and turning this off deletes it.
+                {lookupState(server.asn, Date.now() / 1000) && <span className="mt-1 block text-fg-3">{lookupState(server.asn, Date.now() / 1000)}</span>}
+              </Note>
+            </>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <Field label="History" hint="days">
               <input className="field num" type="number" min={7} max={365} value={historyDays} onChange={e => setHistoryDays(e.target.value)} />

@@ -34,6 +34,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: /^\/mesh\/rules$/, op: () => ({ op: 'mesh_rules_get' }) },
   { method: 'PUT', pattern: /^\/mesh\/rules$/, op: (_m, body) => ({ op: 'mesh_rules_set', rules: body.rules }) },
   { method: 'GET', pattern: /^\/mesh\/topology$/, op: () => ({ op: 'mesh_topology' }) },
+  { method: 'POST', pattern: /^\/asn\/update$/, op: () => ({ op: 'asn_update' }) },
 ];
 
 export function toOp(method: string, path: string, body?: unknown): Op {
