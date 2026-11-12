@@ -398,6 +398,7 @@ pub fn request(op: &ServerOp) -> Result<(Method, String, Option<Value>), AdminEr
         ServerOp::RulesSet { rules } => (Method::PUT, "/rules".into(), body(rules)?),
         ServerOp::Metrics {} => (Method::GET, "/metrics".into(), None),
         ServerOp::Live {} => (Method::GET, "/live".into(), None),
+        ServerOp::AsnUpdate {} => (Method::POST, "/asn/update".into(), None),
         ServerOp::Stats { user, range } => {
             if !["24h", "7d", "30d", "90d"].contains(&range.as_str()) {
                 return Err(AdminError::Invalid(

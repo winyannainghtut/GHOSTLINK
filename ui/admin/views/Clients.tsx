@@ -6,6 +6,7 @@ import { Button, Card, Empty, IconButton, Meter, Segmented, StatusDot, Switch, c
 import { useNow, useStoredState } from '@shared/hooks';
 import { protocolName, type User } from '../api';
 import { DeviceIcon, hasConf, isApple, primaryKey, tunnelAddress, useKeyTools } from '../keys';
+import { providerText } from '../provider';
 import { speedLabel } from '../SpeedLimit';
 import { clientStatus, statusLabel, useApi, useStore } from '../store';
 import { ClientSheet } from './ClientSheet';
@@ -32,7 +33,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [users, liveById]);
-  const shown = users.filter(u => (filter === 'all' || bucket(statusOf(u)) === filter) && (!query || [u.name, tunnelAddress(u) ?? '', lastClient[u.id]?.ip ?? ''].some(v => v.toLowerCase().includes(query.toLowerCase()))));
+  const shown = users.filter(u => (filter === 'all' || bucket(statusOf(u)) === filter) && (!query || [u.name, tunnelAddress(u) ?? '', lastClient[u.id]?.ip ?? '', providerText(lastClient[u.id])].some(v => v.toLowerCase().includes(query.toLowerCase()))));
 
   const setEnabled = async (user: User, enabled: boolean) => {
     try {
@@ -51,7 +52,7 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
       <div className="flex flex-wrap items-center gap-3">
         <label className="inset-glass flex h-10 min-w-[220px] flex-1 items-center gap-2 rounded-full px-4 sm:max-w-sm">
           <Search size={16} className="text-fg-3" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, tunnel IP or endpoint" className="w-full bg-transparent text-[13.5px] outline-none placeholder:text-fg-3" aria-label="Search clients" />
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, tunnel IP, endpoint or provider" className="w-full bg-transparent text-[13.5px] outline-none placeholder:text-fg-3" aria-label="Search clients" />
         </label>
         <Segmented
           label="Status"
@@ -134,7 +135,14 @@ export function Clients({ onNewClient }: { onNewClient: () => void }) {
                       </div>
                     </td>
                     <td className="mono border-b border-line px-4 py-3 text-fg-2">{address ? `${address}/32` : '—'}</td>
-                    <td className="mono border-b border-line px-4 py-3 text-fg-2">{lastClient[u.id]?.ip ?? '—'}</td>
+                    <td className="mono border-b border-line px-4 py-3 text-fg-2">
+                      {lastClient[u.id]?.ip ?? '—'}
+                      {providerText(lastClient[u.id]) && (
+                        <div className="mt-0.5 max-w-[17rem] truncate font-sans text-[11.5px] text-fg-3" title={providerText(lastClient[u.id])}>
+                          {providerText(lastClient[u.id])}
+                        </div>
+                      )}
+                    </td>
                     <td className="num border-b border-line px-4 py-3 text-fg-2">{ago(live?.last_active_unix, now)}</td>
                     <td className="num border-b border-line px-4 py-3">
                       <span className="text-down">↓ {speed(live?.down_bps ?? 0)}</span> <span className="ml-2 text-up">↑ {speed(live?.up_bps ?? 0)}</span>
@@ -199,6 +207,7 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
       <div className="inset-glass grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-[22px] px-4 py-3 text-[12.5px]">
         <Cell label="Tunnel IP" value={address ? `${address}/32` : '—'} mono />
         <Cell label="Endpoint" value={lastClient[user.id]?.ip ?? '—'} mono />
+        {providerText(lastClient[user.id]) && <Cell label="Provider" value={providerText(lastClient[user.id])} wide />}
         <Cell label="Last seen" value={ago(live?.last_active_unix, now)} />
         <div className="grid min-w-0 gap-0.5">
           <span className="text-fg-3">Live</span>
@@ -256,9 +265,9 @@ function ClientCard({ user, status, now, onOpen, onEnabled, tools }: {
   );
 }
 
-function Cell({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Cell({ label, value, mono, wide }: { label: string; value: string; mono?: boolean; wide?: boolean }) {
   return (
-    <div className="grid min-w-0 gap-0.5">
+    <div className={cx('grid min-w-0 gap-0.5', wide && 'col-span-2')}>
       <span className="text-fg-3">{label}</span>
       <span className={cx('truncate text-fg', mono ? 'mono' : 'num')} title={value}>
         {value}

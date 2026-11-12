@@ -277,6 +277,9 @@ type MonitorSettings struct {
 	SiteDays    int `json:"site_days,omitempty"`
 	// HistoryMaxMB caps history.json; zero means the default.
 	HistoryMaxMB int `json:"history_max_mb,omitempty"`
+	// ASNLookup shows the provider (AS and operator) of the addresses clients connect from. Off
+	// until turned on, because it downloads a public list from a third party (see asn.go).
+	ASNLookup bool `json:"asn_lookup,omitempty"`
 }
 
 const (

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,7 +30,9 @@ var apiListenHost = ""
 // secret path. Anyone with the management key is the server's administrator.
 type API struct {
 	service *Service
-	secret  string
+	// secret is the path segment that makes up the management key. It changes when the key is
+	// rotated while requests are being served, so it is read through secretNow.
+	secret  atomic.Pointer[string]
 	version string
 	mux     *http.ServeMux
 	limiter *failureLimiter
@@ -39,10 +42,12 @@ var errNotFound = errors.New("not found")
 
 func NewAPI(service *Service, version string) *API {
 	a := &API{service: service, version: version, mux: http.NewServeMux(), limiter: newFailureLimiter()}
-	service.Read(func(s *State) { a.secret = s.API.Secret })
+	service.Read(func(s *State) { a.setSecret(s.API.Secret) })
 	routes := map[string]func(*http.Request) (int, any, error){
 		"GET /server":                          a.getServer,
 		"PATCH /server":                        a.patchServer,
+		"POST /server/rotate-key":              a.rotateKey,
+		"POST /asn/update":                     a.asnUpdate,
 		"GET /users":                           a.listUsers,
 		"POST /users":                          a.createUser,
 		"GET /users/{id}":                      a.getUser,
@@ -87,7 +92,8 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	segment, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if subtle.ConstantTimeCompare([]byte(segment), []byte(a.secret)) != 1 || a.secret == "" {
+	secret := a.secretNow()
+	if subtle.ConstantTimeCompare([]byte(segment), []byte(secret)) != 1 || secret == "" {
 		a.limiter.fail(host)
 		http.NotFound(w, r)
 		return
@@ -197,6 +203,8 @@ type serverInfo struct {
 	DashboardPort        uint16         `json:"dashboard_port"`
 	DashboardPublic      bool           `json:"dashboard_public"`
 	IPsecComponent       ipsecComponent `json:"ipsec_component"`
+	// ASN is the provider lookup: whether it is on, and the state of its list.
+	ASN asnStatus `json:"asn"`
 	// AddressPools are the WireGuard and AmneziaWG tunnel subnets: how full each is and the
 	// address the next key gets.
 	AddressPools []addressPool `json:"address_pools"`
@@ -224,7 +232,7 @@ func (a *API) serverInfo(s *State) serverInfo {
 			IKEv2:       {s.IPsec.IKEv2Enabled, 500},
 			IPsec:       {s.IPsec.IPsecEnabled, 500},
 		},
-		IPsecComponent: a.service.ipsecComponent(time.Now()), AddressPools: s.addressPools(),
+		IPsecComponent: a.service.ipsecComponent(time.Now()), AddressPools: s.addressPools(), ASN: a.service.asn.Status(s.Monitor.ASNLookup),
 		VLESSHandshake: s.VLESS.Handshake, ShadowsocksMethod: s.Shadowsocks.Method, Users: len(s.Users),
 		ShadowsocksExtraPorts: s.shadowsocksPorts()[1:],
 		SiteStats:             s.Monitor.SiteStats, DefaultSpeedLimitBps: s.DefaultSpeedLimitBps, HistoryDays: s.Monitor.historyDays(), SiteDays: s.Monitor.siteDays(),
@@ -238,6 +246,45 @@ func (a *API) getServer(*http.Request) (int, any, error) {
 	return http.StatusOK, info, nil
 }
 
+func (a *API) setSecret(secret string) { a.secret.Store(&secret) }
+
+func (a *API) secretNow() string {
+	if secret := a.secret.Load(); secret != nil {
+		return *secret
+	}
+	return ""
+}
+
+// rotateKey replaces the secret in the management key, for a key that was seen by someone who
+// should not have it. The old key stops working as soon as the new secret is saved; the answer
+// is the new key, shown once more by `show-key`. The certificate is not touched, and nothing in
+// the engine changes, so connected clients are not disconnected.
+func (a *API) rotateKey(*http.Request) (int, any, error) {
+	var key ManagementKey
+	secret := base64.RawURLEncoding.EncodeToString(random(16))
+	err := a.service.Change(func(s *State) error {
+		fingerprint, err := s.CertSHA256()
+		if err != nil {
+			return err
+		}
+		s.API.Secret = secret
+		key = s.ManagementKey(fingerprint)
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	a.setSecret(secret)
+	a.service.store.Lock()
+	err = a.service.store.WriteManagementKey()
+	a.service.store.Unlock()
+	if err != nil {
+		// The new secret is saved and works; the file is written again when the server starts.
+		a.service.report("management key", fmt.Errorf("the file could not be rewritten for the new key (%w); write it again with: sudo ghostlink-server setup", err))
+	}
+	return http.StatusOK, map[string]any{"management_key": key}, nil
+}
+
 type protocolPatch struct {
 	Enabled *bool   `json:"enabled"`
 	Port    *uint16 `json:"port"`
@@ -249,7 +296,9 @@ type serverPatch struct {
 	VLESSHandshake *string                  `json:"vless_handshake"`
 	Protocols      map[string]protocolPatch `json:"protocols"`
 	// Monitoring: turning site_stats off deletes every recorded site.
-	SiteStats    *bool `json:"site_stats"`
+	SiteStats *bool `json:"site_stats"`
+	// ASNLookup turns the provider lookup on (it downloads its list) or off (it deletes it).
+	ASNLookup    *bool `json:"asn_lookup"`
 	HistoryDays  *int  `json:"history_days"`
 	SiteDays     *int  `json:"site_days"`
 	HistoryMaxMB *int  `json:"history_max_mb"`
@@ -310,6 +359,9 @@ func (a *API) patchServer(r *http.Request) (int, any, error) {
 		}
 		if patch.SiteStats != nil {
 			s.Monitor.SiteStats = *patch.SiteStats
+		}
+		if patch.ASNLookup != nil {
+			s.Monitor.ASNLookup = *patch.ASNLookup
 		}
 		if patch.HistoryDays != nil {
 			if *patch.HistoryDays < 7 || *patch.HistoryDays > 365 {
@@ -898,7 +950,22 @@ func (a *API) clients(r *http.Request) (int, any, error) {
 	a.service.Record(time.Now())
 	var clients []clientView
 	a.service.Read(func(s *State) { clients = a.service.monitor.Clients(s, tag) })
-	return http.StatusOK, map[string]any{"clients": clients}, nil
+	status := a.service.annotateASN(clients)
+	return http.StatusOK, map[string]any{"clients": clients, "asn": status}, nil
+}
+
+// asnUpdate downloads the provider list again, in the background: the answer is the state of the
+// lookup, which shows "updating" until the download is done.
+func (a *API) asnUpdate(*http.Request) (int, any, error) {
+	enabled := false
+	a.service.Read(func(s *State) { enabled = s.Monitor.ASNLookup })
+	if !enabled {
+		return 0, nil, InputError{errors.New("the provider lookup is off; turn it on first (sudo ghostlink-server asn on)")}
+	}
+	a.service.RefreshASN(time.Now())
+	status := a.service.asn.Status(true)
+	status.Updating = true
+	return http.StatusAccepted, status, nil
 }
 
 func (a *API) keyQR(r *http.Request) (int, any, error) {

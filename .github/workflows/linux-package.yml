@@ -196,6 +196,50 @@ jobs:
           sudo ghostlink-server kit smoke --output kit.html
           sudo grep -q 'vless://' kit.html
           test "$(stat -c %a kit.html)" = 600
+          # rotate-key: the old key is refused at once, the new one (also in show-key) works with
+          # the same certificate, and the users and the commands through the local API carry on.
+          old=$url
+          sudo ghostlink-server rotate-key | tee rotate.txt
+          grep -q 'no longer works' rotate.txt
+          new=$(sudo ghostlink-server show-key | grep '^{')
+          url=$(echo "$new" | jq -r .apiUrl)
+          test "$url" != "$old"
+          test "$(echo "$new" | jq -r .certSha256)" = "$pin"
+          test "$(curl -sk -o /dev/null -w '%{http_code}' "$old/users")" = 404
+          curl -sk --fail "$url/users" | jq -e 'length == 2'
+          sudo ghostlink-server users | grep -q smoke
+          # What Ghostlink uses on the disk (the host command), and the storage lines of settings.
+          sudo ghostlink-server disk | tee disk.txt
+          grep -q 'What Ghostlink uses on this machine' disk.txt
+          grep -q 'Log of ghostlink-server' disk.txt
+          grep -Eq 'Server data +[0-9.]+ [KMGT]?B' disk.txt
+          sudo ghostlink-server settings | grep -q 'Data kept by this server:'
+          # The provider lookup downloads its list over HTTPS from inside the distroless image, which
+          # must therefore carry CA certificates (checked without the network) ...
+          . /usr/lib/ghostlink-server/image.env
+          cid=$(docker create "$IMAGE")
+          docker cp "$cid:/etc/ssl/certs/ca-certificates.crt" ca.crt
+          docker rm "$cid" > /dev/null
+          test "$(grep -c 'BEGIN CERTIFICATE' ca.crt)" -gt 50
+          # ... and it is off in a new server, and refuses an update while off.
+          sudo ghostlink-server asn status | grep -q ': off'
+          if sudo ghostlink-server asn update 2> asn-refused.txt; then echo "asn update ran while the lookup is off" >&2; exit 1; fi
+          grep -q 'turn it on first' asn-refused.txt
+          # The real list once, from iptoasn.com. A failure of that site must not stop a release, so this
+          # only warns; the log says how it went. When it works, it is checked and then turned off.
+          # (No pipe into tee: this step has no pipefail, so the pipe would hide the exit status.)
+          if sudo ghostlink-server asn on > asn.txt 2>&1; then
+            cat asn.txt
+            grep -q 'Provider lookup is on' asn.txt
+            test -s /var/lib/ghostlink-server/asn.tsv.gz
+            sudo ghostlink-server asn status | grep -q 'address ranges from iptoasn.com'
+            sudo ghostlink-server asn off | grep -q deleted
+            test ! -e /var/lib/ghostlink-server/asn.tsv.gz
+          else
+            cat asn.txt
+            echo "::warning::the provider list could not be downloaded from iptoasn.com in this run: $(tail -n 2 asn.txt | tr '\n' ' ')"
+            sudo ghostlink-server asn off > /dev/null || true
+          fi
           # Dashboard: its own port, loopback only, token sign-in, CSRF header required.
           sudo ghostlink-server dashboard | tee dashboard.txt
           dport=$(sed -n 's/.*-L 8080:127\.0\.0\.1:\([0-9]*\) .*/\1/p' dashboard.txt | head -n 1)

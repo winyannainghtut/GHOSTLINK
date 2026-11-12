@@ -175,6 +175,10 @@ type clientView struct {
 	Protocol string `json:"protocol"`
 	First    int64  `json:"first_unix"`
 	Last     int64  `json:"last_unix"`
+	// ASN and Operator are the autonomous system the address belongs to and who runs it. Missing
+	// when the provider lookup is off, or the address is nobody's (private, or not announced).
+	ASN      uint32 `json:"asn,omitempty"`
+	Operator string `json:"operator,omitempty"`
 }
 
 // Clients lists the addresses users connected from, most recent first.
@@ -191,7 +195,7 @@ func (m *Monitor) Clients(state *State, tag string) []clientView {
 				continue
 			}
 			for _, r := range records {
-				out = append(out, clientView{u.ID, u.Name, r.IP, r.Protocol, r.First, r.Last})
+				out = append(out, clientView{User: u.ID, Name: u.Name, IP: r.IP, Protocol: r.Protocol, First: r.First, Last: r.Last})
 			}
 		}
 	})

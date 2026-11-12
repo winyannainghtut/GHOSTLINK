@@ -22,6 +22,14 @@ type Health struct {
 	EngineReloads int64    `json:"engine_reloads"`
 	DetailPaused  bool     `json:"detail_paused"`
 	HistoryBytes  int      `json:"history_bytes"`
+	// HistoryMaxBytes is the size the history file is kept under (older data is trimmed past it).
+	HistoryMaxBytes int `json:"history_max_bytes"`
+	// StateBytes is everything in the state directory: the server's settings and keys, the
+	// history and the other files it keeps. Counted every few minutes, not on every reading.
+	StateBytes int64 `json:"state_bytes"`
+	// DiskLevel says how much room the state filesystem has left: "ok", "low" (a warning, with room
+	// to act) or "full" (detailed recording is paused). Missing when the disk cannot be read.
+	DiskLevel string `json:"disk_level,omitempty"`
 	// EngineError is why the VPN engine is not running (it is tried again every 30 s).
 	EngineError string `json:"engine_error,omitempty"`
 }
@@ -72,8 +80,11 @@ func (h *healthSampler) Snapshot(dir string) Health {
 	if used, total, ok := memory(); ok {
 		health.MemoryUsed, health.MemoryTotal = &used, &total
 	}
-	if free, total, ok := diskSpace(dir); ok {
+	if free, total, ok := diskCheck(dir); ok {
 		health.DiskFree, health.DiskTotal = &free, &total
+		if total > 0 {
+			health.DiskLevel = diskLevelOf(free, total)
+		}
 	}
 	return health
 }

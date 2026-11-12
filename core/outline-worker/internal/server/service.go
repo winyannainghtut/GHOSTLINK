@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -29,7 +30,9 @@ type Service struct {
 	hooksMu      sync.Mutex
 	hooks        []func(previous, next *State)
 	historyBytes atomic.Int64
-	report       func(string, error)
+	// stateBytes is the size of the state directory at the last count (see dirBytes).
+	stateBytes atomic.Int64
+	report     func(string, error)
 	// ipsecSeen holds the agent's last byte counters per SA child, and ipsecLast is when the
 	// last report was read (both touched by recordIPsec only: see there).
 	ipsecSeen map[string]ipsecBaseline
@@ -50,11 +53,27 @@ type Service struct {
 	engineFailed []byte
 	// meshLive is what mesh agents last reported, and which pairs are relayed.
 	meshLive *mesh.Live
+	// asn is the list behind the provider lookup; its downloads run until asnCtx ends (Close).
+	asn       *asnManager
+	asnCtx    context.Context
+	asnCancel context.CancelFunc
+	asnWG     sync.WaitGroup
 }
 
 func NewService(store *Store, engine *Engine, monitor *Monitor) *Service {
 	service := &Service{store: store, engine: engine, monitor: monitor, health: newHealthSampler(),
-		report: func(string, error) {}, ipsecSeen: map[string]ipsecBaseline{}, meshLive: mesh.NewLive()}
+		report: func(string, error) {}, ipsecSeen: map[string]ipsecBaseline{}, meshLive: mesh.NewLive(),
+		asn: newASNManager(store.Dir())}
+	service.asnCtx, service.asnCancel = context.WithCancel(context.Background())
+	// The provider lookup downloads its list when it is turned on, and forgets it when it is turned off.
+	service.OnChange(func(previous, next *State) {
+		switch {
+		case !previous.Monitor.ASNLookup && next.Monitor.ASNLookup:
+			service.RefreshASN(time.Now())
+		case previous.Monitor.ASNLookup && !next.Monitor.ASNLookup:
+			service.asn.Drop()
+		}
+	})
 	// Mesh agents waiting for a new configuration wake on every change to the mesh.
 	service.OnChange(func(previous, next *State) {
 		before, _ := json.Marshal(previous.Mesh)
@@ -110,12 +129,27 @@ func (s *Service) Start() error {
 	if err := s.monitor.LoadHistory(s.historyPath()); err != nil {
 		s.report("history", err)
 	}
+	// Until the first save, the sizes are those of the files on disk.
+	if info, err := os.Stat(s.historyPath()); err == nil {
+		s.historyBytes.Store(info.Size())
+	}
+	s.stateBytes.Store(dirBytes(s.store.Dir()))
 	s.store.Lock()
 	defer s.store.Unlock()
 	s.monitor.SetSiteStats(s.store.State.Monitor.SiteStats)
 	s.monitor.SetSpeedLimits(s.store.State.speedLimits())
 	if err := s.store.State.CheckPorts(); err != nil {
 		s.report("ports", fmt.Errorf("%w; changes are refused until a port is changed", err))
+	}
+	if s.store.State.Monitor.ASNLookup {
+		s.asnWG.Add(1)
+		go func() {
+			defer s.asnWG.Done()
+			if err := s.asn.Load(); err != nil {
+				s.report("provider lookup", err)
+			}
+			s.refreshASNIfDue(time.Now())
+		}()
 	}
 	s.startEngine(s.store.State)
 	if s.store.State.appleEnabled() {
@@ -373,6 +407,7 @@ func (s *Service) SaveHistory(now time.Time) {
 		return
 	}
 	s.historyBytes.Store(int64(size))
+	s.stateBytes.Store(dirBytes(s.store.Dir()))
 }
 
 // Health returns the host snapshot plus monitoring state.
@@ -382,6 +417,8 @@ func (s *Service) Health() Health {
 	health.EngineError = s.engineError()
 	health.DetailPaused = s.monitor.detailPaused.Load()
 	health.HistoryBytes = int(s.historyBytes.Load())
+	health.HistoryMaxBytes = s.settings().historyMaxBytes()
+	health.StateBytes = s.stateBytes.Load()
 	return health
 }
 
@@ -422,6 +459,9 @@ func (s *Service) Run(ctx context.Context) {
 			if ticks%86400 == 0 {
 				s.RenewIPsec(now)
 			}
+			if ticks%3600 == 0 {
+				s.refreshASNIfDue(now)
+			}
 			if ticks%30 == 0 {
 				s.ensureEngine()
 				if err := s.Account(); err != nil {
@@ -437,6 +477,8 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) Close() error {
+	s.asnCancel() // a list being downloaded is dropped, not waited for
+	s.asnWG.Wait()
 	s.startup.Wait() // the check of the IPsec certificate that Start began, if it is still running
 	return s.engine.Close()
 }

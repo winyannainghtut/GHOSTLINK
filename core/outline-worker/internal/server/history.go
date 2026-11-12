@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -380,6 +381,26 @@ const (
 	minFreePercent = 5
 )
 
+// The levels of free space on the state filesystem.
+const (
+	diskOK   = "ok"
+	diskLow  = "low"  // twice the room recording needs: time to free some, nothing stopped yet
+	diskFull = "full" // detailed recording is paused
+)
+
+// diskLevelOf classifies the free space of a filesystem of the given size. The room needed is the
+// larger of 500 MB and 5% of the disk, so a 30 GB disk pauses recording below 1.5 GB free and
+// warns below 3 GB.
+func diskLevelOf(free, total uint64) string {
+	switch {
+	case free < minFreeBytes || free*100/total < minFreePercent:
+		return diskFull
+	case free < 2*minFreeBytes || free*100/total < 2*minFreePercent:
+		return diskLow
+	}
+	return diskOK
+}
+
 // diskCheck reads free and total space; tests replace it.
 var diskCheck = diskSpace
 
@@ -390,6 +411,29 @@ func (m *Monitor) CheckDisk(dir string) (bool, bool) {
 	if !ok || total == 0 {
 		return m.detailPaused.Load(), false
 	}
-	low := free < minFreeBytes || free*100/total < minFreePercent
+	low := diskLevelOf(free, total) == diskFull
 	return low, m.detailPaused.Swap(low) != low
+}
+
+// dirBytes is the size of the files under dir. It looks at no more than maxDirEntries files, so a
+// directory that grew far beyond what the server keeps is measured quickly, not exactly.
+func dirBytes(dir string) int64 {
+	const maxDirEntries = 20_000
+	var total int64
+	var seen int
+	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if seen++; seen > maxDirEntries {
+			return filepath.SkipAll
+		}
+		if !entry.IsDir() {
+			if info, err := entry.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
 }

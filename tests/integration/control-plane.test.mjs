@@ -268,7 +268,7 @@ test('crash leftovers are removed at startup and do not block state writes', asy
   assert.equal((await cli(['profile', 'list'])).data.profiles[0].name, 'singapore');
 });
 test('version is local, unknown profile exit is predictable, and switch validates target first', async () => {
-  assert.equal((await cli(['version'])).data.version, '0.8.7');
+  assert.equal((await cli(['version'])).data.version, '0.9.0');
   assert.equal((await cli(['connect', '--profile', 'missing'], 2)).error.code, 'not_found');
   assert.equal((await cli(['switch', '--profile', 'missing'], 2)).error.code, 'not_found');
 });
@@ -484,7 +484,16 @@ test('a real Ghostlink server is managed through its pinned management key', asy
   assert.equal(stats.data.range, '24h'); assert.equal(stats.data.site_stats, false); assert.ok(Array.isArray(stats.data.types));
   assert.equal((await rpc({ schema_version: 1, action: { type: 'server_call', server: 'home', op: { op: 'stats', range: 'forever' } } })).error.code, 'invalid_request');
   assert.ok(Array.isArray((await cli(['server', 'clients', '--server', 'home'])).data.clients));
-  const qr = await cli(['server', 'keys', 'qr', '--server', 'home', '--user', user, '--key', keys.data[0].id]);
+  // The provider lookup (0.9.0) is off in a new server, and nothing here turns it on: that would
+  // download a list from iptoasn.com. The disk budget is in the health report.
+  assert.equal((await cli(['server', 'clients', '--server', 'home'])).data.asn.enabled, false);
+  assert.deepEqual([(await cli(['server', 'info', '--server', 'home'])).data.asn.enabled, (await cli(['server', 'info', '--server', 'home'])).data.asn.source], [false, 'iptoasn.com']);
+  assert.equal((await cli(['server', 'set', '--server', 'home', '--asn-lookup', 'off'])).data.asn.enabled, false);
+  const noList = await cli(['server', 'asn-update', '--server', 'home'], 2);
+  assert.equal(noList.error.code, 'invalid_request');
+  assert.ok(noList.error.message.includes('turn it on first'), noList.error.message);
+  assert.ok(live.data.health.history_max_bytes > 0 && live.data.health.state_bytes > 0, JSON.stringify(live.data.health));
+  const qr =await cli(['server', 'keys', 'qr', '--server', 'home', '--user', user, '--key', keys.data[0].id]);
   assert.ok(qr.data.help_text.includes('▀') || qr.data.help_text.includes('█'));
   const kitFile = path.join(temp, 'alice-kit.html');
   assert.equal((await cli(['server', 'keys', 'kit', '--server', 'home', '--user', user, '--output', kitFile])).data.saved_to, kitFile);

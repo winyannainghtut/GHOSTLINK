@@ -9,6 +9,7 @@ import { AUTH, KEY_PROTOCOLS, PROTOCOLS, PROTOCOL_HINTS, protocolName, type Clie
 import { hasConf, isApple, tunnelAddress, useKeyTools } from '../keys';
 import { dataLimitValue } from '../limits';
 import { firstKeyProtocol } from '../protocols';
+import { providerText } from '../provider';
 import { RulesEditor } from '../RulesEditor';
 import { SpeedLimitField, speedChange, speedChoice } from '../SpeedLimit';
 import { clientStatus, statusLabel, useApi, useStore } from '../store';
@@ -293,7 +294,10 @@ function UsageTab({ user }: { user: User }) {
           <ul className="grid grid-cols-1 gap-2">
             {clients.map(c => (
               <li key={c.ip + c.protocol} className="inset-glass flex items-center justify-between gap-3 rounded-[20px] px-4 py-2.5 text-[13px]">
-                <span className="mono min-w-0 truncate text-fg" title={c.ip}>{c.ip}</span>
+                <span className="min-w-0 truncate" title={providerText(c) ? `${c.ip} · ${providerText(c)}` : c.ip}>
+                  <span className="mono text-fg">{c.ip}</span>
+                  {providerText(c) && <span className="ml-2 text-[12px] text-fg-3">{providerText(c)}</span>}
+                </span>
                 <span className="shrink-0 text-fg-3">{protocolName(c.protocol)}</span>
                 <span className="num shrink-0 text-fg-2">{ago(c.last_unix)}</span>
               </li>

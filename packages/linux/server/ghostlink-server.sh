@@ -62,6 +62,12 @@ Users, keys, rules and monitoring (also available in the Ghostlink app and the d
   site-stats on|off                    record top sites per user (off deletes them)
   dashboard [--port N] [--public|--private] [--reset-token]
                                        web dashboard: prints the SSH tunnel command and login link
+  rotate-key                           replace the management key (the old one stops working at
+                                       once, clients stay connected); prints the new one
+  asn on|off|update|status             show the provider (AS and operator) of the addresses clients
+                                       connect from; "on" downloads a public list from iptoasn.com
+  disk                                 what Ghostlink uses on this disk: its data, the container logs,
+                                       images, and the free space (nothing is changed)
 
 Mesh: a private network between your Linux servers (this server coordinates it):
 
@@ -663,15 +669,84 @@ migrate_outline() {
     echo "  sudo docker rm -f$names && sudo rm -rf '$outline_dir'"
 }
 
+# human BYTES: a size in decimal units, like every size Ghostlink shows.
+human() {
+    awk -v n="$1" 'BEGIN {
+        if (n >= 1e12) printf "%.2f TB", n / 1e12
+        else if (n >= 1e9) printf "%.1f GB", n / 1e9
+        else if (n >= 1e6) printf "%.1f MB", n / 1e6
+        else if (n >= 1e3) printf "%.0f KB", n / 1e3
+        else printf "%d B", n
+    }'
+}
+
+# disk_bytes PATH...: the disk space the paths use (links are not followed, and a mount inside
+# is not entered), 0 for what does not exist. The state is the container account's to change,
+# so this only measures it; it never reads a file there.
+disk_bytes() {
+    du -skx -- "$@" 2>/dev/null | awk '{ s += $1 } END { print s * 1024 }'
+}
+
+# container_log_bytes CONTAINER: Docker's log files of a container, the current one and the
+# rotated ones.
+container_log_bytes() {
+    log=$(docker inspect --format '{{.LogPath}}' "$1" 2>/dev/null || true)
+    if [ -z "$log" ]; then
+        echo 0
+        return
+    fi
+    disk_bytes "$log" "$log".*
+}
+
+disk_report() {
+    echo "What Ghostlink uses on this machine:"
+    echo
+    if [ -d "$STATE" ]; then
+        line=$(df -Pk "$STATE" | awk 'NR == 2 { printf "%d %d", $4 * 1024, $2 * 1024 }')
+        free=${line% *}
+        total=${line#* }
+        if [ "${total:-0}" -gt 0 ]; then
+            echo "  Disk of the server's data   $(human "$free") free of $(human "$total")  ($(( (total - free) * 100 / total ))% used)"
+        fi
+        echo "  Server data                 $(human "$(disk_bytes "$STATE")")   $STATE"
+        echo "    history of traffic        $(human "$(disk_bytes "$STATE/history.json")")   kept under 20 MB unless raised: set --history-max-mb N"
+    fi
+    for name in "$CONTAINER" "$IPSEC_CONTAINER"; do
+        if docker inspect "$name" >/dev/null 2>&1; then
+            echo "  Log of $name   $(human "$(container_log_bytes "$name")")   rotated at 10 MB, 3 files"
+        fi
+    done
+    images=$(docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' 2>/dev/null | grep -E '^ghostlink-(server|ipsec):' || true)
+    if [ -n "$images" ]; then
+        echo "  Images (older ones are removed on upgrade):"
+        echo "$images" | sed 's/^/    /'
+    fi
+    echo
+    echo "Docker, all of it (images, containers, volumes and build cache of every program):"
+    docker system df 2>/dev/null | sed 's/^/  /' || true
+    if command -v journalctl >/dev/null 2>&1; then
+        echo
+        echo "The system journal (not Ghostlink's, but it shares the disk):"
+        journalctl --disk-usage 2>/dev/null | sed 's/^/  /' || true
+    fi
+    echo
+    echo "Ghostlink keeps its own data small: the history is trimmed to its limit (oldest data first),"
+    echo "the container logs rotate, and old images are removed when it is upgraded. When the disk gets"
+    echo "low it warns in the app and the dashboard, and below 5% free it pauses detailed recording."
+    echo "To free space: lower the history (set --history-days N, set --history-max-mb N), remove what"
+    echo "Docker no longer uses (sudo docker system prune: read what it lists first), and cap the"
+    echo "journal (SystemMaxUse= in /etc/systemd/journald.conf)."
+}
+
 command=${1:-}
 [ $# -gt 0 ] && shift
 case "$command" in
-    users | user | key | keys | rules | usage | stats | clients | top | settings | set | site-stats | dashboard)
+    users | user | key | keys | rules | usage | stats | clients | top | settings | set | site-stats | dashboard | rotate-key | asn)
         admin "$command" "$@" ;;
     --json) # machine-readable output: ghostlink-server --json users
         case "${1:-}" in
-            users | user | key | keys | rules | usage | stats | clients | settings | set | site-stats | dashboard | mesh) admin --json "$@" ;;
-            *) die "--json works with: users, user, key, keys, rules, usage, stats, clients, settings, set, site-stats, dashboard, mesh" ;;
+            users | user | key | keys | rules | usage | stats | clients | settings | set | site-stats | dashboard | rotate-key | asn | mesh) admin --json "$@" ;;
+            *) die "--json works with: users, user, key, keys, rules, usage, stats, clients, settings, set, site-stats, dashboard, rotate-key, asn, mesh" ;;
         esac ;;
     kit) need_root kit; kit "$@" ;;
     profile) need_root profile; profile "$@" ;;
@@ -680,6 +755,7 @@ case "$command" in
     setup) setup "$@" ;;
     migrate-outline) migrate_outline "$@" ;;
     show-key) need_root show-key; show_key ;;
+    disk) need_root disk; need_docker; disk_report ;;
     status)
         need_root status
         need_docker

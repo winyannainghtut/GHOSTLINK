@@ -168,6 +168,8 @@ pub enum ServerOp {
         #[serde(default)]
         user: Option<String>,
     },
+    /// Download the list behind the provider lookup again (the lookup must be on).
+    AsnUpdate {},
     /// A key's QR code: `format` svg or text; `content` auto, key or conf.
     KeyQr {
         user: String,
@@ -300,6 +302,11 @@ pub struct ServerPatch {
     /// Record per-user top sites; turning it off deletes them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_stats: Option<bool>,
+    /// Show the provider (AS and operator) of the addresses clients connect from. Turning it on
+    /// makes the server download a public list from iptoasn.com (nothing about clients is sent);
+    /// turning it off deletes the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asn_lookup: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -461,6 +468,7 @@ impl ServerOp {
             Self::Live {} => "server_live",
             Self::Stats { .. } => "server_stats",
             Self::Clients { .. } => "server_clients",
+            Self::AsnUpdate {} => "server_asn_update",
             Self::KeyQr { .. } => "server_key_qr",
             Self::Kit { .. } => "server_kit",
             Self::KeyProfile { .. } => "server_key_profile",
@@ -816,6 +824,10 @@ mod tests {
             Action::ServerCall {
                 server: "x".into(),
                 op: ServerOp::MeshTopology {},
+            },
+            Action::ServerCall {
+                server: "x".into(),
+                op: ServerOp::AsnUpdate {},
             },
             Action::ServerCall {
                 server: "x".into(),

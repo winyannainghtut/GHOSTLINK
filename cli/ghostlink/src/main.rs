@@ -209,6 +209,11 @@ enum ServerCommand {
         /// Record top sites per user (off deletes what was recorded).
         #[arg(long, value_parser = ["on", "off"])]
         site_stats: Option<String>,
+        /// Show the provider (AS and operator) of the addresses clients connect from. On makes
+        /// the server download a public list from iptoasn.com (nothing about clients is sent);
+        /// off deletes it.
+        #[arg(long, value_parser = ["on", "off"])]
+        asn_lookup: Option<String>,
         /// Days of traffic history to keep (7-365).
         #[arg(long)]
         history_days: Option<u32>,
@@ -225,6 +230,11 @@ enum ServerCommand {
         /// second, download and upload alike), or none.
         #[arg(long, value_name = "MB/s|none")]
         default_speed_limit: Option<String>,
+    },
+    /// Download the list behind the provider lookup again (see `set --asn-lookup`).
+    AsnUpdate {
+        #[arg(long)]
+        server: String,
     },
     /// Live speed per user, online users and server health.
     Live {
@@ -1075,6 +1085,7 @@ async fn server_action(command: &ServerCommand, timeout: u64) -> Result<Action, 
             disable,
             ports,
             site_stats,
+            asn_lookup,
             history_days,
             site_days,
             history_max_mb,
@@ -1109,6 +1120,7 @@ async fn server_action(command: &ServerCommand, timeout: u64) -> Result<Action, 
                         vless_handshake: reality_site.clone(),
                         protocols: (!protocols.is_empty()).then_some(protocols),
                         site_stats: site_stats.as_deref().map(|v| v == "on"),
+                        asn_lookup: asn_lookup.as_deref().map(|v| v == "on"),
                         history_days: *history_days,
                         site_days: *site_days,
                         history_max_mb: *history_max_mb,
@@ -1332,6 +1344,7 @@ async fn server_action(command: &ServerCommand, timeout: u64) -> Result<Action, 
         ServerCommand::Mesh { command } => mesh_action(command)?,
         ServerCommand::Usage { server } => call(server, ServerOp::Metrics {}),
         ServerCommand::Live { server } => call(server, ServerOp::Live {}),
+        ServerCommand::AsnUpdate { server } => call(server, ServerOp::AsnUpdate {}),
         ServerCommand::Stats {
             server,
             user,
