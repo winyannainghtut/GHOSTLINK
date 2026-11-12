@@ -51,7 +51,16 @@ docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work
         *) echo "$origin recipe is $want but the image has $package; rebuild both" >&2; exit 1 ;;
       esac
     done
-    (cd "$dest" && SRCDEST="$dest/upstream" abuild -F fetch </dev/null && SRCDEST="$dest/upstream" abuild -F verify </dev/null)
+    # A server that times out is asked again: kernel.org did, twice on 2026-11-13, and a release must
+    # not fail for one slow download. The checksums are verified after the fetch either way.
+    tries=0
+    until (cd "$dest" && SRCDEST="$dest/upstream" abuild -F fetch </dev/null); do
+      tries=$((tries + 1))
+      [ "$tries" -lt 4 ] || { echo "could not fetch the source of $origin after $tries tries" >&2; exit 1; }
+      echo "fetching the source of $origin failed; trying again in 20 s ($tries of 3)" >&2
+      sleep 20
+    done
+    (cd "$dest" && SRCDEST="$dest/upstream" abuild -F verify </dev/null)
   done
 '
 cat > "$work/$name/README.txt" <<EOF
