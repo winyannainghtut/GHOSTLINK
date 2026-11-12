@@ -25,6 +25,7 @@ Three additions for servers, asked for after running one: replace the management
 
 ### Changed
 
+- **Go 1.26.11** (was 1.26.10) builds the server, the worker and the tests: it fixes GO-2026-6859 in the standard library's `net/http`, which the vulnerability scan of the build now reports for 1.26.10. The pin is in `go.mod` and the workflows.
 - **The Windows app and CLI:** the settings switch and `ghostlink server set --asn-lookup`, `ghostlink server asn-update`. Older servers show neither (the app hides what the server does not report).
 - **`GET /live`** reports `disk_level`, `state_bytes` and `history_max_bytes` in `health`; **`GET /server`** reports `asn`; **`GET /clients`** carries `asn` and `operator` on each address when the lookup is on.
 - **Tests:** the Linux package test now also runs `rotate-key` and `disk` on the installed package, checks that the image carries CA certificates, and downloads the real list once (it only warns if iptoasn.com cannot be reached).
