@@ -9,6 +9,10 @@ cd "$(dirname "$0")/.."
 version=$1 arch=$2 packages=$3
 alpine="alpine:3.24.4@sha256:93b41ef40b1677fce8fcc64ff4af09daddfacf5040afde618bc46c1e2d1cc7d4"
 branch=3.24-stable
+# Alpine keeps a copy of every source file its packages are built from. abuild asks this mirror first
+# and the upstream site second, and checks every file against the recipe's checksum either way, so
+# a site that cannot be reached from the runner (kernel.org, on 2026-11-13) does not stop a release.
+mirror="https://distfiles.alpinelinux.org/distfiles/v${branch%-stable}"
 out=artifacts/source
 name="Ghostlink-$version-ipsec-component-source-$arch"
 work=$(mktemp -d)
@@ -21,7 +25,7 @@ cp "$packages" "$work/$name/packages.txt"
 # Copyleft = any GPL, LGPL or MPL license (dual-licensed packages are included too).
 # The recipes come from Alpine's official aports mirror on GitHub (a sparse, shallow checkout),
 # since gitlab.alpinelinux.org refuses automated downloads.
-docker run --rm -e BRANCH="$branch" -e OWNER="$(id -u):$(id -g)" -v "$work:/work" "$alpine" sh -euc '
+docker run --rm -e BRANCH="$branch" -e DISTFILES_MIRROR="$mirror" -e OWNER="$(id -u):$(id -g)" -v "$work:/work" "$alpine" sh -euc '
   trap "chown -R \"\$OWNER\" /work" EXIT
   apk add --no-cache abuild git >/dev/null
   grep -E "\((.*GPL.*|.*MPL.*)\)" /work/packages.txt | while read -r package _ origin _; do
@@ -72,7 +76,8 @@ files from the Alpine Linux $branch packages in packages.txt. For each of those 
 copyleft license, this archive holds a directory with:
 
   APKBUILD and patches   Alpine's build recipe, exactly as used for the installed version
-  upstream/              the upstream source files the recipe names, checksum-verified
+  upstream/              the source files the recipe names, checksum-verified (fetched from
+                         Alpine's own copy of them, or from the upstream site when Alpine has none)
 
 To rebuild a package: copy its directory into an Alpine $branch aports tree and run
 "abuild -r" there (see https://wiki.alpinelinux.org/wiki/Creating_an_Alpine_package).
